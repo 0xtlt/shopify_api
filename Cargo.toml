@@ -8,6 +8,8 @@ version = "0.1.0"
 edition = "2021"
 keywords = ["shopify", "api", "client"]
 categories = ["api-bindings", "web-programming"]
+license = "MIT"
+license-file = "LICENSE.txt" 
 authors = ["Thomas Tastet"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
