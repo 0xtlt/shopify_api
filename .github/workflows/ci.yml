@@ -7,11 +7,9 @@ on:
       - master
 
 env:
-  TEST_SHOP_NAME: '${{ secrets.TEST_SHOP_NAME }}'
-  TEST_KEY: '${{ secrets.TEST_KEY }}'
-
-env:
   RUST_BACKTRACE: 1
+  TEST_SHOP_NAME: "${{ secrets.TEST_SHOP_NAME }}"
+  TEST_KEY: "${{ secrets.TEST_KEY }}"
 
 jobs:
   ci-pass:
