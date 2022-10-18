@@ -3,9 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - '*'
-
-name: Publish
+      - "*"
 
 jobs:
   call-ci:
