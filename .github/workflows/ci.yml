@@ -59,12 +59,12 @@ jobs:
       matrix:
         name:
           - linux / stable
-          - macOS / stable
+          # - macOS / stable
 
         include:
           - name: linux / stable
-          - name: macOS / stable
-            os: macOS-latest
+          # - name: macOS / stable
+          #   os: macOS-latest
 
     steps:
       - name: Checkout
