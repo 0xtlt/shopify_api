@@ -122,6 +122,7 @@ impl Shopify {
     /// use shopify_api::utils::ReadJsonTreeSteps;
     /// use shopify_api::rest::ShopifyAPIRestType;
     /// use serde::{Deserialize};
+    /// use serde_json::json;
     ///
     /// #[derive(Deserialize, Debug)]
     /// struct Product {
@@ -134,7 +135,18 @@ impl Shopify {
     ///    let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), ShopifyAPIVersion::V2023_01, None);
     ///   let json_finder = vec![ReadJsonTreeSteps::Key("products"), ReadJsonTreeSteps::Index(0)];
     ///
-    ///  let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder)).await.unwrap();
+    ///  let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder.clone())).await.unwrap();
+    ///
+    /// // Update the product title
+    /// shopify.rest_query::<serde_json::Value>(&ShopifyAPIRestType::Put(&format!("products/{}.json", product.id), &HashMap::new(), &json!({"product": {"title": "New Title"}})), &None).await.unwrap();
+    ///
+    /// let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder.clone())).await.unwrap();
+    /// assert_eq!(product.title, "New Title");
+    ///
+    /// // Set the product title back to the original
+    /// shopify.rest_query::<serde_json::Value>(&ShopifyAPIRestType::Put(&format!("products/{}.json", product.id), &HashMap::new(), &json!({"product": {"title": "Hello world product"}})), &None).await.unwrap();
+    ///
+    /// let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder.clone())).await.unwrap();
     ///
     /// assert_eq!(product.title, String::from("Hello world product"));
     /// }
