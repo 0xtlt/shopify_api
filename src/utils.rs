@@ -37,7 +37,7 @@ where
     let mut count: u64 = 0;
     let mut result: Result<Out, ErrOut> = func(args).await;
 
-    while count < max_retries - 1 {
+    while count < max_retries - 1 && result.is_err() {
         let executed_func = func(args);
 
         result = executed_func.await;
@@ -86,7 +86,7 @@ where
     let mut count: u64 = 0;
     let mut result: Result<Out, ErrOut> = func(args);
 
-    while count < max_retries - 1 {
+    while count < max_retries - 1 && result.is_err() {
         let executed_func = func(args);
 
         result = executed_func;

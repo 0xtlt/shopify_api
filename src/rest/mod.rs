@@ -149,6 +149,14 @@ impl Shopify {
     /// let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder.clone())).await.unwrap();
     ///
     /// assert_eq!(product.title, String::from("Hello world product"));
+    ///
+    /// // Create a product
+    /// let product_to_delete: Product = shopify.rest_query(&ShopifyAPIRestType::Post("products.json", &HashMap::new(), &json!({"product": {"title": "New Product", "body_html":"<strong>Good snowboard!</strong>","vendor":"Burton","product_type":"Snowboard", "tags": vec!["hello world!"]}})), &Some(vec![ReadJsonTreeSteps::Key("product")])).await.unwrap();
+    ///
+    /// // Delete the product
+    /// let result = shopify.rest_query::<serde_json::Value>(&ShopifyAPIRestType::Delete(&format!("products/{}.json", product_to_delete.id), &HashMap::new()), &None).await.unwrap();
+    ///
+    /// assert_eq!(result, json!({}));
     /// }
     ///```
     pub async fn rest_query<ReturnType>(
