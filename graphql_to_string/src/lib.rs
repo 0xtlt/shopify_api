@@ -3,7 +3,10 @@ extern crate proc_macro;
 use std::str::FromStr;
 
 use proc_macro::TokenStream;
-use syn::{self, parse_macro_input, Data, DataEnum, DeriveInput, Field, Path, Type, TypePath};
+use syn::{
+    self, parse_macro_input, Data, DataEnum, DeriveInput, Field, Fields, FieldsNamed, Path, Type,
+    TypePath,
+};
 
 fn is_vec(field: &Field) -> bool {
     match &field.ty {
@@ -45,6 +48,25 @@ fn to_snake_case(s: &str) -> String {
     res
 }
 
+/// Function to pass the first letter to down case
+/// # Example
+/// ```
+/// let s = "HelloWorld";
+/// let s = to_first_lower(s);
+/// assert_eq!(s, "helloWorld");
+/// ```
+fn to_first_lower(s: &str) -> String {
+    let mut res = String::new();
+    for (index, c) in s.chars().enumerate() {
+        if index == 0 {
+            res.push(c.to_ascii_lowercase());
+        } else {
+            res.push(c);
+        }
+    }
+    res
+}
+
 // Input is a enum that can contains a vector on enum
 // Output is a string that can be used in a graphql query
 #[proc_macro_derive(ToGraphStringDerive)]
@@ -75,7 +97,7 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
         let variant_field = variant_fields.iter().next();
 
         if variant_field.is_some() && is_vec(variant_field.unwrap()) {
-            let variant_ident_name = to_snake_case(&variant_ident.to_string());
+            let variant_ident_name = to_first_lower(&variant_ident.to_string());
             tmp_code.push_str(&format!(
                 r#"
                 {name}::{variant_ident}(vector_var) => {{
@@ -94,8 +116,10 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
                 variant_ident = variant_ident,
                 variant_ident_name = variant_ident_name
             ));
+        } else if let Fields::Named(FieldsNamed { named, .. }) = variant_fields {
+            todo!("Transform the named fields to a string and check for connector property");
         } else {
-            let variant_ident_name = to_snake_case(&variant_ident.to_string());
+            let variant_ident_name = to_first_lower(&variant_ident.to_string());
             tmp_code.push_str(&format!(
                 r#"
                 {name}::{variant_ident} => stringify!({variant_ident_name}).to_string(),
