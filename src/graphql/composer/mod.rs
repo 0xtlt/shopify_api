@@ -1,11 +1,11 @@
-// Field returns	Cost value
-// Scalar	    0
-// Enum	      0
-// Object	    1
-// Interface	1
-// Union	    1
-// Mutation	  10
-// Connection	2 + 1 per edge (first or last argument)
+// Field returns Cost value
+// Scalar     0
+// Enum       0
+// Object     1
+// Interface  1
+// Union      1
+// Mutation   10
+// Connection 2 + 1 per edge (first or last argument)
 
 static SHOPIFY_GRAPHQL_COST_SCALAR: u8 = 0;
 static SHOPIFY_GRAPHQL_COST_ENUM: u8 = 0;
