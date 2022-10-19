@@ -67,37 +67,6 @@ impl Default for ShopifyGraphQLComposer {
     }
 }
 
-impl ShopifyGraphQLComposer {
-    /// Add a new query to the composer
-    /// # Example
-    /// ```
-    /// use shopify_api::graphql::composer::ShopifyGraphQLComposer;
-    /// use shopify_api::graphql::composer::ShopifyGraphQLComposerQuery;
-    ///
-    /// let mut composer = ShopifyGraphQLComposer::default();
-    /// let query = composer.add_query("myquery", ShopifyGraphQLComposerQuery::Query("query { shop { name } }"));
-    /// ```
-    /// # Arguments
-    /// * `name` - The query name
-    /// * `query` - The query object
-    /// # Returns
-    /// The query object
-    /// # Panics
-    /// If the query name already exists
-    pub fn add_query(
-        &mut self,
-        name: &str,
-        query: ShopifyGraphQLComposerQuery,
-    ) -> &ShopifyGraphQLComposerQuery {
-        if self.queries.contains_key(name) {
-            panic!("Query name already exists");
-        }
-
-        self.queries.insert(name.to_string(), query);
-        self.queries.get(name).unwrap()
-    }
-}
-
 /// Variable type enum
 #[derive(Clone, Debug)]
 pub enum ShopifyGraphQLComposerVariableType {
