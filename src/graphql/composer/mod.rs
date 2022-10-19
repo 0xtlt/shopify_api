@@ -7,6 +7,10 @@
 // Mutation   10
 // Connection 2 + 1 per edge (first or last argument)
 
+pub trait ToGraphString {
+    fn to_graph_string(&self) -> String;
+}
+
 #[derive(Clone, Debug)]
 pub enum ShopifyGraphQLType {
     Scalar,
@@ -18,6 +22,7 @@ pub enum ShopifyGraphQLType {
     Connection,
 }
 
+pub mod global;
 pub mod product;
 
 static SHOPIFY_GRAPHQL_COST_SCALAR: u8 = 0;
