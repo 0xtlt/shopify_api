@@ -118,6 +118,8 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
             ));
         } else if let Fields::Named(FieldsNamed { named, .. }) = variant_fields {
             let variant_ident_name = to_first_lower(&variant_ident.to_string());
+            let mut param: Vec<&str> = Vec::new();
+
             for part in named.iter() {
                 let key = part.ident.as_ref().unwrap();
                 let ident_name = key.to_string();
@@ -125,20 +127,24 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
 
 
                 if ident_name == "connector" {
-
                 } else {
-                    tmp_code.push_str(&format!(r#"
-                        {name}::{ident_name} {end}, 
-                        "#,
-                        name = name,
-                        ident_name = variant_ident_name,
-                        end = {
-                            // end must returns something like that: "{helloworld} => {...}"
-                            "{helloworld} => {}"
-                        }
-                    ));
                 }
             }
+
+            tmp_code.push_str(&format!(r#"
+                {name}::{ident_name} {end}, 
+                "#,
+                name = name,
+                ident_name = variant_ident_name,
+                end = {
+                    // end must returns something like that: "{helloworld} => {...}"
+                    println!("p{:?}", part);
+
+
+                    "{helloworld} => {}"
+                }
+            ));
+
             // todo!("Transform the named fields to a string and check for connector property");
         } else {
             let variant_ident_name = to_first_lower(&variant_ident.to_string());
