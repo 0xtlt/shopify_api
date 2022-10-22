@@ -118,16 +118,17 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
             ));
         } else if let Fields::Named(FieldsNamed { named, .. }) = variant_fields {
             let variant_ident_name = to_first_lower(&variant_ident.to_string());
-            let mut param: Vec<&str> = Vec::new();
+            let mut params: Vec<String> = Vec::new();
 
             for part in named.iter() {
                 let key = part.ident.as_ref().unwrap();
                 let ident_name = key.to_string();
                 // "connector" will be a reserved keyword here to indicate a connection
 
-
                 if ident_name == "connector" {
                 } else {
+                    println!("p:{:?}", part);
+                    params.push(ident_name);
                 }
             }
 
@@ -138,10 +139,22 @@ pub fn to_graph_string_derive(tokens: TokenStream) -> TokenStream {
                 ident_name = variant_ident_name,
                 end = {
                     // end must returns something like that: "{helloworld} => {...}"
-                    println!("p{:?}", part);
+                    //println!("p{:?}", part);
+                    let mut output_params_string: String = String::new();
+                    let mut output_inner_string: String = String::new();
 
+                    for (index, param) in params.iter().enumerate() {
+                        if index != 0 {
+                            // If not 0, add a coma ','
+                            output_params_string.push(',');
+                        }
+                        
+                        output_params_string.push_str(&format!(r#""#));
+                    }
 
-                    "{helloworld} => {}"
+                    format!(r#"{{{params}}} => {{
+                        {content}
+                    }}"#, params = output_params_string, content = output_inner_string)
                 }
             ));
 
