@@ -226,6 +226,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphql_to_string"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -849,6 +858,7 @@ name = "shopify_api"
 version = "0.3.4"
 dependencies = [
  "chrono",
+ "graphql_to_string",
  "reqwest",
  "serde",
  "serde_json",

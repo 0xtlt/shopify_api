@@ -18,6 +18,7 @@ reqwest = { version = "0.11", default-features = false, features = ["json"] }
 serde_json = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 chrono = "0.4"
+graphql_to_string = { path = "./graphql_to_string" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -1,3 +1,5 @@
+pub mod composer;
+
 use reqwest::Response;
 
 use crate::{
