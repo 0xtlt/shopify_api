@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "shopify_api"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "reqwest",
