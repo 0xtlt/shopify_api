@@ -48,6 +48,8 @@ where
     }
     let body = body.unwrap();
 
+    log::debug!("shopify response: {body}");
+
     let json: serde_json::Value = {
         match serde_json::from_str(&body) {
             Ok(v) => v,
