@@ -1,4 +1,5 @@
 use chrono::TimeZone;
+use thiserror::Error;
 
 pub mod graphql;
 pub mod rest;
@@ -35,13 +36,27 @@ pub enum ShopifyAPIVersion {
     Unstable,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Error)]
 pub enum ShopifyAPIError {
-    ConnectionFailed,
+    #[error("Connection failed")]
+    ConnectionFailed(#[from] reqwest::Error),
+
+    #[error("Response broken")]
     ResponseBroken,
-    NotJson,
+
+    #[error("Not a JSON response: {0}")]
+    NotJson(String),
+
+    #[error("Not wanted JSON format: {0}")]
     NotWantedJsonFormat(String),
+
+    #[error("Throttled")]
     Throttled,
+
+    #[error("JSON parsing error: {0}")]
+    JsonParseError(#[from] serde_json::Error),
+
+    #[error("Other error: {0}")]
     Other(String),
 }
 

@@ -61,12 +61,7 @@ where
     };
 
     // Connection Response
-    let res = match req.send().await {
-        Ok(local_response) => local_response,
-        Err(_) => {
-            return Err(ShopifyAPIError::ConnectionFailed);
-        }
-    };
+    let res = req.send().await?;
 
     // Connection data
     let body = res.text().await;
@@ -76,15 +71,8 @@ where
 
     let body = body.unwrap();
 
-    let json: serde_json::Value = {
-        match serde_json::from_str(&body) {
-            Ok(v) => v,
-            Err(_) => {
-                // The shopify response is not valid json
-                return Err(ShopifyAPIError::NotJson);
-            }
-        }
-    };
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)?;
 
     let json = match json_finder {
         Some(json_finder) => match utils::read_json_tree(&json, json_finder) {

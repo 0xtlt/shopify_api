@@ -28,18 +28,12 @@ where
     });
 
     // Connection Response
-    let res: Response = match client
+    let res: Response = client
         .post(shopify.get_query_url())
         .headers(headers)
         .body(req_body.to_string())
         .send()
-        .await
-    {
-        Ok(local_response) => local_response,
-        Err(_) => {
-            return Err(ShopifyAPIError::ConnectionFailed);
-        }
-    };
+        .await?;
 
     // Connection data
     let body = res.text().await;
@@ -54,15 +48,8 @@ where
         req_body.to_string()
     );
 
-    let json: serde_json::Value = {
-        match serde_json::from_str(&body) {
-            Ok(v) => v,
-            Err(_) => {
-                // The shopify response is not valid json
-                return Err(ShopifyAPIError::NotJson);
-            }
-        }
-    };
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)?;
 
     // Check if the query was THROTTLED
     if let Some(error) = json["errors"]["01"]["extensions"]["code"].as_str() {
