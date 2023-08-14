@@ -42,6 +42,7 @@ pub enum ShopifyAPIError {
     NotJson,
     NotWantedJsonFormat,
     Throttled,
+    Other(String),
 }
 
 /// Get the end of support date for a given API version

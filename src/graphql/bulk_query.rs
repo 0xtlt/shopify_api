@@ -12,7 +12,7 @@ pub enum ShopifyBulkErrorCode {
     Timeout,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum ShopifyBulkStatus {
     #[serde(rename = "CANCELED")]
     Canceled,
@@ -84,7 +84,7 @@ impl Shopify {
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
     ///
-    /// println!("{:?}", products_bulk);
+    ///   shopify.wait_for_bulk(&products_bulk.bulk_operation.as_ref().unwrap().id.as_ref().unwrap()).await.unwrap();
     ///
     ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
     /// }
@@ -155,5 +155,32 @@ impl Shopify {
             .await?;
 
         Ok(result)
+    }
+
+    pub async fn wait_for_bulk(&self, id: &str) -> Result<ShopifyBulk, crate::ShopifyAPIError> {
+        let mut get_bulk = self.get_bulk_by_id(id).await;
+
+        if get_bulk.is_none() {
+            return Err(crate::ShopifyAPIError::Other(
+                "Bulk operation not found".to_string(),
+            ));
+        }
+
+        let mut bulk = get_bulk.unwrap();
+
+        while bulk.status == ShopifyBulkStatus::Running {
+            get_bulk = self.get_bulk_by_id(id).await;
+
+            if get_bulk.is_none() {
+                return Err(crate::ShopifyAPIError::Other(
+                    "Bulk operation not found".to_string(),
+                ));
+            }
+
+            bulk = get_bulk.unwrap();
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+
+        Ok(bulk)
     }
 }

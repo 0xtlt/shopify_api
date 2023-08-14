@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Add: `wait_for_bulk` method added to `Shopify`
+
 ## 0.4.0
 
 - Add: `make_bulk_query` method added to `Shopify`
