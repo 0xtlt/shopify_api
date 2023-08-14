@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Add: `make_bulk_query` method added to `Shopify`
+- Add: `get_bulk_by_id` method added to `Shopify`
+
 ## 0.3.6
 
 - Updated: `ShopifyAPIVersion` enum
