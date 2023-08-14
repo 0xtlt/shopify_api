@@ -32,6 +32,7 @@ pub enum ShopifyBulkStatus {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShopifyBulk {
+    pub id: Option<String>,
     pub url: Option<String>,
     #[serde(rename = "partialDataUrl")]
     pub partial_data_url: Option<String>,
@@ -83,7 +84,7 @@ impl Shopify {
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
     ///
-    ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id).await.unwrap();
+    ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
     /// }
     ///
     ///
