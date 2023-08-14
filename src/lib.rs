@@ -76,7 +76,7 @@ pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateT
 /// ```
 /// use shopify_api::{ is_deprecated, ShopifyAPIVersion };
 /// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2021_10), true);
-/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2023_01), false);
+/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2023_10), false);
 /// ```
 pub fn is_deprecated(api_version: &ShopifyAPIVersion) -> bool {
     let max_date = get_end_of_support_date(api_version);
@@ -89,7 +89,7 @@ pub fn is_deprecated(api_version: &ShopifyAPIVersion) -> bool {
 /// ```
 /// use shopify_api::{ api_version_to_string, ShopifyAPIVersion };
 /// assert_eq!(api_version_to_string(&ShopifyAPIVersion::V2021_10), "unstable"); // Deprecated
-/// assert_eq!(api_version_to_string(&ShopifyAPIVersion::V2023_01), "2023-01");
+/// assert_eq!(api_version_to_string(&ShopifyAPIVersion::V2023_10), "2023-10");
 /// ```
 pub fn api_version_to_string(api_version: &ShopifyAPIVersion) -> String {
     if is_deprecated(api_version) {
