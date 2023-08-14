@@ -1,9 +1,9 @@
-use reqwest::Response;
-
+mod bulk_query;
 use crate::{
     utils::{self, read_json_tree, ReadJsonTreeSteps},
     Shopify, ShopifyAPIError,
 };
+use reqwest::Response;
 
 async fn shopify_graphql_query<VariablesType, ReturnType>(
     (shopify, graphql_query, variables, json_finder): &(
