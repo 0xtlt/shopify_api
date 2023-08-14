@@ -22,7 +22,7 @@ where
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
     headers.insert("X-Shopify-Access-Token", shopify.api_key.parse().unwrap());
-    let body: &serde_json::Value = &serde_json::json!({
+    let req_body: &serde_json::Value = &serde_json::json!({
         "query": graphql_query,
         "variables": variables
     });
@@ -31,7 +31,7 @@ where
     let res: Response = match client
         .post(shopify.get_query_url())
         .headers(headers)
-        .body(body.to_string())
+        .body(req_body.to_string())
         .send()
         .await
     {
@@ -48,7 +48,11 @@ where
     }
     let body = body.unwrap();
 
-    log::debug!("shopify response: {body}");
+    log::debug!(
+        "shopify (url: {}) response: {body} \n With body: {}",
+        shopify.get_query_url(),
+        req_body.to_string()
+    );
 
     let json: serde_json::Value = {
         match serde_json::from_str(&body) {
