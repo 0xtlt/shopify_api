@@ -71,7 +71,7 @@ impl Shopify {
     /// #[tokio::main]
     /// async fn main() {
     ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), ShopifyAPIVersion::V2023_01, None);
-    ///   let graphql_query = r#"
+    ///   let graphql_query = r#"{
     ///      products {
     ///         edges {
     ///          node {
@@ -80,9 +80,11 @@ impl Shopify {
     ///          }
     ///         }
     ///     }
-    ///   "#;
+    ///   }"#;
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
+    ///
+    /// println!("{:?}", products_bulk);
     ///
     ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
     /// }
@@ -145,7 +147,10 @@ impl Shopify {
             .graphql_query(
                 &bulk_query,
                 &json!({}),
-                &vec![ReadJsonTreeSteps::Key("data")],
+                &vec![
+                    ReadJsonTreeSteps::Key("data"),
+                    ReadJsonTreeSteps::Key("bulkOperationRunQuery"),
+                ],
             )
             .await?;
 
