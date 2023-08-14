@@ -199,9 +199,9 @@ impl Shopify {
     /// # Example
     /// ```
     /// use shopify_api::*;
-    /// let shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_01, Some("mysharedsecret"));
+    /// let shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_10, Some("mysharedsecret"));
     ///
-    /// assert_eq!(shopify.get_api_endpoint("products.json"), "https://myshop.myshopify.com/admin/api/2023-01/products.json");
+    /// assert_eq!(shopify.get_api_endpoint("products.json"), "https://myshop.myshopify.com/admin/api/2023-10/products.json");
     /// ```
     pub fn get_api_endpoint(&self, endpoint: &str) -> String {
         format!("{}{}", self.rest_url(), endpoint)
