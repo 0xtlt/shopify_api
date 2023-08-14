@@ -96,6 +96,7 @@ impl Shopify {
                 query($id: ID!) {
                     node(id: $id) {
                         ... on BulkOperation {
+                            id
                             url
                             partialDataUrl
                             status
