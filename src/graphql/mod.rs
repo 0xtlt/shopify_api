@@ -68,7 +68,7 @@ where
     let json = match read_json_tree(&json, json_finder) {
         Ok(v) => v,
         Err(_) => {
-            return Err(ShopifyAPIError::NotWantedJsonFormat);
+            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
         }
     };
 
@@ -76,7 +76,7 @@ where
         Ok(v) => v,
         Err(_) => {
             // The shopify response is not wanted json
-            return Err(ShopifyAPIError::NotWantedJsonFormat);
+            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
         }
     };
 

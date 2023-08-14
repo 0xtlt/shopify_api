@@ -90,7 +90,7 @@ where
         Some(json_finder) => match utils::read_json_tree(&json, json_finder) {
             Ok(v) => v,
             Err(_) => {
-                return Err(ShopifyAPIError::NotWantedJsonFormat);
+                return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
             }
         },
         None => &json,
@@ -99,14 +99,14 @@ where
     let json = match serde_json::to_string(json) {
         Ok(v) => v,
         Err(_) => {
-            return Err(ShopifyAPIError::NotWantedJsonFormat);
+            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
         }
     };
 
     let json = match serde_json::from_str(&json) {
         Ok(v) => v,
         Err(_) => {
-            return Err(ShopifyAPIError::NotWantedJsonFormat);
+            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
         }
     };
 

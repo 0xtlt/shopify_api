@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Add: The body response (string) to `NotWantedJsonFormat` error
+
 ## 0.4.1
 
 - Add: `wait_for_bulk` method added to `Shopify`

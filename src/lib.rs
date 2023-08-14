@@ -40,7 +40,7 @@ pub enum ShopifyAPIError {
     ConnectionFailed,
     ResponseBroken,
     NotJson,
-    NotWantedJsonFormat,
+    NotWantedJsonFormat(String),
     Throttled,
     Other(String),
 }
