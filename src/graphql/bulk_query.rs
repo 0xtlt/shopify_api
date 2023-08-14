@@ -32,26 +32,26 @@ pub enum ShopifyBulkStatus {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShopifyBulk {
-    url: Option<String>,
+    pub url: Option<String>,
     #[serde(rename = "partialDataUrl")]
-    partial_data_url: Option<String>,
-    status: ShopifyBulkStatus,
+    pub partial_data_url: Option<String>,
+    pub status: ShopifyBulkStatus,
     #[serde(rename = "errorCode")]
-    error_code: Option<ShopifyBulkErrorCode>,
+    pub error_code: Option<ShopifyBulkErrorCode>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShopifyUserError {
-    field: Vec<String>,
-    message: String,
+    pub field: Vec<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ShopifyBulkOperationRunQuery {
     #[serde(rename = "bulkOperation")]
-    bulk_operation: Option<ShopifyBulk>,
+    pub bulk_operation: Option<ShopifyBulk>,
     #[serde(rename = "userErrors")]
-    user_errors: Option<Vec<ShopifyUserError>>,
+    pub user_errors: Option<Vec<ShopifyUserError>>,
 }
 
 impl Shopify {
