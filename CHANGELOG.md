@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5
+
+- Add: `download_bulk` method added to `Shopify`
+
 ## 0.4.2
 
 - Add: The body response (string) to `NotWantedJsonFormat` error

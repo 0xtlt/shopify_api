@@ -183,4 +183,16 @@ impl Shopify {
 
         Ok(bulk)
     }
+
+    pub async fn download_bulk(url: &str) -> Vec<serde_json::Value> {
+        let resp = reqwest::get(url).await.unwrap();
+        let body = resp.text().await.unwrap();
+
+        body.split('\n')
+            .collect::<Vec<&str>>()
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect::<Vec<serde_json::Value>>()
+    }
 }
