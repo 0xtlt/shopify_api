@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- Updated: `ShopifyAPIVersion` enum
+
 ## 0.3.5
 
 - Updated: `ShopifyAPIVersion` enum to add the latest version `V2023_04`

@@ -19,17 +19,19 @@ pub enum ShopifyAPIVersion {
     /// Deprecated
     V2021_10,
     V2022_01,
-
-    /// Will be deprecated soon
     V2022_04,
     V2022_07,
     V2022_10,
 
-    /// Latest stable version
+    /// Will be deprecated soon
     V2023_01,
+    V2023_04,
+
+    /// Latest stable version
+    V2023_07,
 
     /// Release candidate
-    V2023_04,
+    V2023_10,
     Unstable,
 }
 
@@ -63,6 +65,8 @@ pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateT
         ShopifyAPIVersion::V2022_10 => chrono::Utc.ymd(2022, 10, 31).and_hms(23, 59, 59),
         ShopifyAPIVersion::V2023_01 => chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59),
         ShopifyAPIVersion::V2023_04 => chrono::Utc.ymd(2023, 4, 30).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_07 => chrono::Utc.ymd(2023, 7, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_10 => chrono::Utc.ymd(2023, 10, 31).and_hms(23, 59, 59),
         ShopifyAPIVersion::Unstable => chrono::Utc.ymd(9999, 12, 31).and_hms(23, 59, 59),
     }
 }
@@ -97,11 +101,13 @@ pub fn api_version_to_string(api_version: &ShopifyAPIVersion) -> String {
     match api_version {
         ShopifyAPIVersion::V2021_10 => "unstable".to_string(),
         ShopifyAPIVersion::V2022_01 => "unstable".to_string(),
-        ShopifyAPIVersion::V2022_04 => "2022-04".to_string(),
-        ShopifyAPIVersion::V2022_07 => "2022-07".to_string(),
-        ShopifyAPIVersion::V2022_10 => "2022-10".to_string(),
+        ShopifyAPIVersion::V2022_04 => "unstable".to_string(),
+        ShopifyAPIVersion::V2022_07 => "unstable".to_string(),
+        ShopifyAPIVersion::V2022_10 => "unstable".to_string(),
         ShopifyAPIVersion::V2023_01 => "2023-01".to_string(),
         ShopifyAPIVersion::V2023_04 => "2023-04".to_string(),
+        ShopifyAPIVersion::V2023_07 => "2023-07".to_string(),
+        ShopifyAPIVersion::V2023_10 => "2023-10".to_string(),
         ShopifyAPIVersion::Unstable => "unstable".to_string(),
     }
 }
