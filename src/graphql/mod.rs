@@ -1,3 +1,4 @@
+mod bulk_mutation;
 mod bulk_query;
 use crate::{
     utils::{self, read_json_tree, ReadJsonTreeSteps},

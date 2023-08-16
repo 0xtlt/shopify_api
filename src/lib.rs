@@ -74,16 +74,46 @@ pub enum ShopifyAPIError {
 /// ```
 pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateTime<chrono::Utc> {
     match api_version {
-        ShopifyAPIVersion::V2021_10 => chrono::Utc.ymd(2021, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_01 => chrono::Utc.ymd(2022, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_04 => chrono::Utc.ymd(2022, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_07 => chrono::Utc.ymd(2022, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_10 => chrono::Utc.ymd(2022, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_01 => chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_04 => chrono::Utc.ymd(2023, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_07 => chrono::Utc.ymd(2023, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_10 => chrono::Utc.ymd(2023, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::Unstable => chrono::Utc.ymd(9999, 12, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2021_10 => chrono::Utc
+            .with_ymd_and_hms(2021, 10, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2022_01 => chrono::Utc
+            .with_ymd_and_hms(2022, 1, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2022_04 => chrono::Utc
+            .with_ymd_and_hms(2022, 4, 30, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2022_07 => chrono::Utc
+            .with_ymd_and_hms(2022, 7, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2022_10 => chrono::Utc
+            .with_ymd_and_hms(2022, 10, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2023_01 => chrono::Utc
+            .with_ymd_and_hms(2023, 1, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2023_04 => chrono::Utc
+            .with_ymd_and_hms(2023, 4, 30, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2023_07 => chrono::Utc
+            .with_ymd_and_hms(2023, 7, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::V2023_10 => chrono::Utc
+            .with_ymd_and_hms(2023, 10, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
+        ShopifyAPIVersion::Unstable => chrono::Utc
+            .with_ymd_and_hms(9999, 12, 31, 23, 59, 59)
+            .earliest()
+            .unwrap(),
     }
 }
 
