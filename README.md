@@ -18,7 +18,7 @@ optional features, so your `Cargo.toml` could look like this:
 
 ```toml
 [dependencies]
-shopify_api = "0.3"
+shopify_api = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
