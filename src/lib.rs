@@ -22,9 +22,9 @@ pub enum ShopifyAPIVersion {
     V2022_01,
     V2022_04,
     V2022_07,
-    V2022_10,
 
     /// Will be deprecated soon
+    V2022_10,
     V2023_01,
     V2023_04,
 
@@ -69,20 +69,20 @@ pub enum ShopifyAPIError {
 ///
 /// assert_eq!(
 ///     get_end_of_support_date(&ShopifyAPIVersion::V2023_01),
-///     chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59)
+///     chrono::Utc.ymd(2024, 1, 31).and_hms(23, 59, 59)
 /// );
 /// ```
 pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateTime<chrono::Utc> {
     match api_version {
-        ShopifyAPIVersion::V2021_10 => chrono::Utc.ymd(2021, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_01 => chrono::Utc.ymd(2022, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_04 => chrono::Utc.ymd(2022, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_07 => chrono::Utc.ymd(2022, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_10 => chrono::Utc.ymd(2022, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_01 => chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_04 => chrono::Utc.ymd(2023, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_07 => chrono::Utc.ymd(2023, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_10 => chrono::Utc.ymd(2023, 10, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2021_10 => chrono::Utc.ymd(2022, 10, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2022_01 => chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2022_04 => chrono::Utc.ymd(2023, 4, 30).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2022_07 => chrono::Utc.ymd(2023, 7, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2022_10 => chrono::Utc.ymd(2023, 10, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_01 => chrono::Utc.ymd(2024, 1, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_04 => chrono::Utc.ymd(2024, 4, 30).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_07 => chrono::Utc.ymd(2024, 7, 31).and_hms(23, 59, 59),
+        ShopifyAPIVersion::V2023_10 => chrono::Utc.ymd(2024, 10, 31).and_hms(23, 59, 59),
         ShopifyAPIVersion::Unstable => chrono::Utc.ymd(9999, 12, 31).and_hms(23, 59, 59),
     }
 }
@@ -92,7 +92,7 @@ pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateT
 /// ```
 /// use shopify_api::{ is_deprecated, ShopifyAPIVersion };
 /// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2021_10), true);
-/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2023_10), false);
+/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2023_07), false);
 /// ```
 pub fn is_deprecated(api_version: &ShopifyAPIVersion) -> bool {
     let max_date = get_end_of_support_date(api_version);
