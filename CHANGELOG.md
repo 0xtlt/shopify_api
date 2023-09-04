@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7
+
+- Fixed: `get_end_of_support_date` enum by @davidhollenbeckx
+
 ## 0.4.5
 
 - Add: `download_bulk` method added to `Shopify`
