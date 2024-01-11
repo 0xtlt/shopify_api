@@ -1,4 +1,3 @@
-use chrono::TimeZone;
 use thiserror::Error;
 
 pub mod graphql;
@@ -7,33 +6,12 @@ pub mod utils;
 
 #[derive(Clone, Debug)]
 pub struct Shopify {
-    api_version: ShopifyAPIVersion,
+    api_version: String,
     shared_secret: Option<String>,
     api_key: String,
     query_url: String,
     rest_url: String,
     shop: String,
-}
-
-#[derive(Clone, Debug)]
-pub enum ShopifyAPIVersion {
-    /// Deprecated
-    V2021_10,
-    V2022_01,
-    V2022_04,
-    V2022_07,
-
-    /// Will be deprecated soon
-    V2022_10,
-    V2023_01,
-    V2023_04,
-
-    /// Latest stable version
-    V2023_07,
-
-    /// Release candidate
-    V2023_10,
-    Unstable,
 }
 
 #[derive(Debug, Error)]
@@ -60,87 +38,19 @@ pub enum ShopifyAPIError {
     Other(String),
 }
 
-/// Get the end of support date for a given API version
-/// # Example
-///
-/// ```
-/// use chrono::TimeZone;
-/// use shopify_api::{ get_end_of_support_date, ShopifyAPIVersion };
-///
-/// assert_eq!(
-///     get_end_of_support_date(&ShopifyAPIVersion::V2023_01),
-///     chrono::Utc.ymd(2024, 1, 31).and_hms(23, 59, 59)
-/// );
-/// ```
-pub fn get_end_of_support_date(api_version: &ShopifyAPIVersion) -> chrono::DateTime<chrono::Utc> {
-    match api_version {
-        ShopifyAPIVersion::V2021_10 => chrono::Utc.ymd(2022, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_01 => chrono::Utc.ymd(2023, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_04 => chrono::Utc.ymd(2023, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_07 => chrono::Utc.ymd(2023, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2022_10 => chrono::Utc.ymd(2023, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_01 => chrono::Utc.ymd(2024, 1, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_04 => chrono::Utc.ymd(2024, 4, 30).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_07 => chrono::Utc.ymd(2024, 7, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::V2023_10 => chrono::Utc.ymd(2024, 10, 31).and_hms(23, 59, 59),
-        ShopifyAPIVersion::Unstable => chrono::Utc.ymd(9999, 12, 31).and_hms(23, 59, 59),
-    }
-}
-
-/// Check if a given API version is deprecated because it is not supported anymore
-/// # Example
-/// ```
-/// use shopify_api::{ is_deprecated, ShopifyAPIVersion };
-/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2021_10), true);
-/// assert_eq!(is_deprecated(&ShopifyAPIVersion::V2023_07), false);
-/// ```
-pub fn is_deprecated(api_version: &ShopifyAPIVersion) -> bool {
-    let max_date = get_end_of_support_date(api_version);
-
-    chrono::Utc::now() > max_date
-}
-
-/// Transform the enum type of the API version to a string
-/// # Example
-/// ```
-/// use shopify_api::{ api_version_to_string, ShopifyAPIVersion };
-/// assert_eq!(api_version_to_string(&ShopifyAPIVersion::V2021_10), "unstable"); // Deprecated
-/// assert_eq!(api_version_to_string(&ShopifyAPIVersion::V2023_10), "2023-10");
-/// ```
-pub fn api_version_to_string(api_version: &ShopifyAPIVersion) -> String {
-    if is_deprecated(api_version) {
-        println!("Warning: You are using a deprecated API version");
-        println!("Warning: unstable API version will be used");
-        return "unstable".to_string();
-    }
-
-    match api_version {
-        ShopifyAPIVersion::V2021_10 => "unstable".to_string(),
-        ShopifyAPIVersion::V2022_01 => "unstable".to_string(),
-        ShopifyAPIVersion::V2022_04 => "unstable".to_string(),
-        ShopifyAPIVersion::V2022_07 => "unstable".to_string(),
-        ShopifyAPIVersion::V2022_10 => "unstable".to_string(),
-        ShopifyAPIVersion::V2023_01 => "2023-01".to_string(),
-        ShopifyAPIVersion::V2023_04 => "2023-04".to_string(),
-        ShopifyAPIVersion::V2023_07 => "2023-07".to_string(),
-        ShopifyAPIVersion::V2023_10 => "2023-10".to_string(),
-        ShopifyAPIVersion::Unstable => "unstable".to_string(),
-    }
-}
-
 impl Shopify {
     /// Create a new Shopify client
     /// # Example
     /// ```
     /// use shopify_api::*;
-    /// let shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_01, Some("mysharedsecret"));
+    /// let shopify = Shopify::new("myshop", "myapikey", String::from("2024-04"), Some("mysharedsecret"));
     /// // or without shared secret
-    /// let shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_01, None);
+    /// let shopify = Shopify::new("myshop", "myapikey", String::from("2024-04"), None);
     /// ```
     pub fn new(
         shop: &str,
         api_key: &str,
-        api_version: ShopifyAPIVersion,
+        api_version: String,
         shared_secret: Option<&str>,
     ) -> Shopify {
         let shop_domain = {
@@ -153,14 +63,9 @@ impl Shopify {
 
         let query_url = format!(
             "https://{}/admin/api/{}/graphql.json",
-            shop_domain,
-            api_version_to_string(&api_version)
+            shop_domain, api_version
         );
-        let rest_url = format!(
-            "https://{}/admin/api/{}/",
-            shop_domain,
-            api_version_to_string(&api_version)
-        );
+        let rest_url = format!("https://{}/admin/api/{}/", shop_domain, api_version);
 
         Shopify {
             api_version,
