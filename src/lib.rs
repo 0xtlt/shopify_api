@@ -81,7 +81,7 @@ impl Shopify {
     /// # Example
     /// ```
     /// use shopify_api::*;
-    /// let shopify = Shopify::new("my-shop", "my-api-key", ShopifyAPIVersion::V2023_01, Some("my-shared-secret"));
+    /// let shopify = Shopify::new("my-shop", "my-api-key", String::from("2024-04"), Some("my-shared-secret"));
     /// assert_eq!(shopify.get_shop(), "my-shop");
     /// ```
     pub fn get_shop(&self) -> &str {
@@ -92,7 +92,7 @@ impl Shopify {
     /// # Example
     /// ```
     /// use shopify_api::*;
-    /// let mut shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_01, Some("mysharedsecret"));
+    /// let mut shopify = Shopify::new("myshop", "myapikey", String::from("2024-04"), Some("mysharedsecret"));
     /// shopify.set_api_key("newapikey");
     /// ```
     /// # Errors

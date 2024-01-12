@@ -36,7 +36,7 @@ struct Shop {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let shopify = Shopify::new("hello", "world", ShopifyAPIVersion::V2023_01, None);
+  let shopify = Shopify::new("hello", "world", String::from("2024-04"), None);
 
   let graphql_query = r#"
     query {

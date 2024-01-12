@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Add: `stage_upload_json` method added to `Shopify`
+- Add: `generate_staged_upload_url` method added to `Shopify`
+- Add: `stage_upload_prepare` method added to `Shopify`
+- Removed: `ShopifyAPIVersion` enum replaced by a string
+
 ## 0.4.7
 
 - Fixed: `get_end_of_support_date` enum by @davidhollenbeckx
