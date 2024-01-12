@@ -120,7 +120,7 @@ impl Shopify {
     /// # Example
     /// ```
     /// use shopify_api::*;
-    /// let shopify = Shopify::new("myshop", "myapikey", ShopifyAPIVersion::V2023_10, Some("mysharedsecret"));
+    /// let shopify = Shopify::new("myshop", "myapikey", String::from("2024-04"), Some("mysharedsecret"));
     ///
     /// assert_eq!(shopify.get_api_endpoint("products.json"), "https://myshop.myshopify.com/admin/api/2023-10/products.json");
     /// ```

@@ -129,7 +129,7 @@ impl Shopify {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), ShopifyAPIVersion::V2023_10, None);
+    ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
     ///   let graphql_query = r#"{
     ///      products {
     ///         edges {
