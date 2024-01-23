@@ -185,7 +185,7 @@ impl Shopify {
     /// `Result<ShopifyBulkOperationRunQuery, ShopifyAPIError>` - A result containing the bulk operation or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let bulk_query = "{ products { edges { node { id title } } } }";
     /// let result = shopify.make_bulk_query(bulk_query).await?;
     /// ```
@@ -238,7 +238,7 @@ impl Shopify {
     /// `Result<ShopifyBulkOperationRunQuery, ShopifyAPIError>` - A result containing the bulk operation or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let mutation_string = "{ updateProducts(...) { ... } }";
     /// let staged_upload_path = "/path/to/upload";
     /// let result = shopify.make_bulk_mutation(mutation_string, staged_upload_path).await?;
@@ -293,9 +293,9 @@ impl Shopify {
     /// `Result<ShopifyBulk, ShopifyAPIError>` - The final status of the bulk operation or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let bulk_id = "123456";
-    /// let bulk_status = shopify.wait_for_bulk(bulk_id).await?;
+    /// let bulk_status = shopify.wait_for_bulk(bulk_id);
     /// ```
     pub async fn wait_for_bulk(&self, id: &str) -> Result<ShopifyBulk, crate::ShopifyAPIError> {
         let mut get_bulk = self.get_bulk_by_id(id).await;
@@ -333,7 +333,7 @@ impl Shopify {
     /// `Result<Vec<serde_json::Value>, ShopifyAPIError>` - The downloaded data or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let url = "https://shopify.com/bulk/123456";
     /// let data = Shopify::download_bulk(url).await?;
     /// ```
@@ -356,7 +356,7 @@ impl Shopify {
     /// `Result<ShopifyStagedUploadsCreateInputQuery, ShopifyAPIError>` - The result of the upload preparation or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let params = vec![StagedUploadsCreateInput { /* ... */ }];
     /// let staged_upload = shopify.stage_upload_prepare(params).await?;
     /// ```
@@ -404,7 +404,7 @@ impl Shopify {
     /// `Result<StagedMediaUploadTarget, ShopifyAPIError>` - The generated URL for the upload or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let filename = "data.json";
     /// let mime_type = "application/json";
     /// let upload_url = shopify.generate_staged_upload_url(filename, mime_type).await?;
@@ -452,7 +452,7 @@ impl Shopify {
     /// `Result<String, ShopifyAPIError>` - The key of the uploaded object or an error.
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```ts,no_run
     /// let data = vec![json!({ "key": "value" })];
     /// let key = shopify.stage_upload_json(data).await?;
     /// ```
