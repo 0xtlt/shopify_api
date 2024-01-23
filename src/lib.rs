@@ -3,10 +3,13 @@ use thiserror::Error;
 pub mod graphql;
 pub mod rest;
 pub mod utils;
+#[cfg(feature = "webhooks")]
+pub mod webhooks;
 
 #[derive(Clone, Debug)]
 pub struct Shopify {
-    api_version: String,
+    pub api_version: String,
+    #[cfg(feature = "webhooks")]
     shared_secret: Option<String>,
     api_key: String,
     query_url: String,
@@ -51,7 +54,7 @@ impl Shopify {
         shop: &str,
         api_key: &str,
         api_version: String,
-        shared_secret: Option<&str>,
+        #[cfg(feature = "webhooks")] shared_secret: Option<&str>,
     ) -> Shopify {
         let shop_domain = {
             let mut shop_domain = shop.to_string();
@@ -69,6 +72,7 @@ impl Shopify {
 
         Shopify {
             api_version,
+            #[cfg(feature = "webhooks")]
             shared_secret: shared_secret.map(|secret| secret.to_string()),
             api_key: api_key.to_string(),
             query_url,
