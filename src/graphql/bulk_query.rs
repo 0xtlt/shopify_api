@@ -333,7 +333,7 @@ impl Shopify {
     /// `Result<Vec<serde_json::Value>, ShopifyAPIError>` - The downloaded data or an error.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// let url = "https://shopify.com/bulk/123456";
     /// let data = Shopify::download_bulk(url).await?;
     /// ```
@@ -356,7 +356,7 @@ impl Shopify {
     /// `Result<ShopifyStagedUploadsCreateInputQuery, ShopifyAPIError>` - The result of the upload preparation or an error.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// let params = vec![StagedUploadsCreateInput { /* ... */ }];
     /// let staged_upload = shopify.stage_upload_prepare(params).await?;
     /// ```
@@ -404,7 +404,7 @@ impl Shopify {
     /// `Result<StagedMediaUploadTarget, ShopifyAPIError>` - The generated URL for the upload or an error.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// let filename = "data.json";
     /// let mime_type = "application/json";
     /// let upload_url = shopify.generate_staged_upload_url(filename, mime_type).await?;
@@ -452,7 +452,7 @@ impl Shopify {
     /// `Result<String, ShopifyAPIError>` - The key of the uploaded object or an error.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// let data = vec![json!({ "key": "value" })];
     /// let key = shopify.stage_upload_json(data).await?;
     /// ```
