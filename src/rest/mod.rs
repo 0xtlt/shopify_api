@@ -120,7 +120,7 @@ impl Shopify {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///    let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), ShopifyAPIVersion::V2023_01, None);
+    ///    let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
     ///   let json_finder = vec![ReadJsonTreeSteps::Key("products"), ReadJsonTreeSteps::Index(0)];
     ///
     ///  let product: Product = shopify.rest_query(&ShopifyAPIRestType::Get("products.json", &HashMap::new()), &Some(json_finder.clone())).await.unwrap();
