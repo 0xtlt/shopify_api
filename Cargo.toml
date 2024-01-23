@@ -32,7 +32,7 @@ tokio = { version = "1", features = ["full"] }
 
 [features]
 default = ["rustls"]
-full = ["webhook", "rustls", "webhook"]
+full = ["default", "webhooks"]
 rustls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
-webhook = ["hmac", "sha2", "base64"]
+webhooks = ["hmac", "sha2", "base64"]
