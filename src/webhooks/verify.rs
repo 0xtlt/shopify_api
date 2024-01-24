@@ -10,7 +10,7 @@ impl Shopify {
             let mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes());
 
             if mac.is_err() {
-                log::debug!("Failed to create hmac with {:?}", mac.err().unwrap());
+                log::info!("Failed to create hmac with {:?}", mac.err().unwrap());
                 return false;
             }
 
@@ -20,8 +20,12 @@ impl Shopify {
             let result = mac.finalize();
             let calculated_hmac = BASE64_STANDARD.encode(result.into_bytes());
 
+            log::debug!("Calculated HMAC: {}", calculated_hmac);
+
             return calculated_hmac == hmac_header;
         }
+
+        log::info!("No shared secret found");
 
         false
     }
