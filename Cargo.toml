@@ -25,13 +25,16 @@ thiserror = "1.0"
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.21", optional = true }
+warp = { version = "0.3", optional = true, default-features = false, features = [] }
+bytes = { version = "1.5", optional = true }
 
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 
 [features]
-default = ["rustls"]
+default = ["full"]
+warp-wrapper = ["warp", "bytes"]
 full = ["default", "webhooks"]
 rustls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]

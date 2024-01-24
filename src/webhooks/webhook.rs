@@ -63,14 +63,14 @@ impl Shopify {
     }
     pub async fn webhook_auto_config(
         &self,
-        desired_webhooks: Vec<(String, String, String)>,
+        desired_webhooks: Vec<(&str, &str, &str)>,
         // api_version: &str,
     ) -> Result<(), ShopifyAPIError> {
         let existing_webhooks = self.list_webhooks().await?;
 
         log::debug!("Existing webhooks: {:?}", existing_webhooks);
 
-        let mut webhooks_to_import: Vec<(String, String, String)> = Vec::new();
+        let mut webhooks_to_import: Vec<(&str, &str, &str)> = Vec::new();
         let mut webhooks_to_delete: Vec<u64> = Vec::new();
         let mut webhooks_treated: Vec<u64> = Vec::new();
 
@@ -103,7 +103,7 @@ impl Shopify {
 
         log::debug!("Webhooks to import: {:?}", webhooks_to_import);
         for (address, topic, format) in webhooks_to_import {
-            self.add_webhook(&address, &topic, &format).await?;
+            self.add_webhook(address, topic, format).await?;
         }
 
         Ok(())
