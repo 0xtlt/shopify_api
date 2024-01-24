@@ -1,7 +1,7 @@
 use crate::Shopify;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(feature = "warp_wrapper")]
+#[cfg(feature = "warp-wrapper")]
 use warp::Filter;
 
 #[derive(Debug)]
