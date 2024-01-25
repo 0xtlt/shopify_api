@@ -1,18 +1,21 @@
 use super::{InventoryItem, InventoryLevel, ShopifyWebhook};
 use crate::Shopify;
+use serde_json;
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use warp::Filter;
 
 impl Shopify {
     #[cfg(feature = "warp-wrapper")]
-    pub fn warp_wrapper<F>(
+    pub fn warp_wrapper<F, Fut>(
         path: &str,
         shopify_filter: Arc<Mutex<Shopify>>,
         callback: F,
     ) -> warp::filters::BoxedFilter<(impl warp::Reply,)>
     where
-        F: Fn(ShopifyWebhook) -> Result<(), String> + Clone + Send + Sync + 'static,
+        F: Fn(ShopifyWebhook, Arc<Mutex<Shopify>>) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), String>> + Send,
     {
         let path_clone = path.to_string();
 
@@ -29,7 +32,7 @@ impl Shopify {
                       body: bytes::Bytes| {
                     let callback_clone = callback.clone();
                     async move {
-                        let is_valid = shopify.lock().unwrap().verify_hmac(&body, &header);
+                        let is_valid = shopify.lock().await.verify_hmac(&body, &header);
 
                         if !is_valid {
                             log::info!("Invalid HMAC");
@@ -65,9 +68,12 @@ impl Shopify {
                             )),
                         };
 
-                        match callback_clone(webhook_data) {
-                            Ok(_) => Ok::<_, warp::Rejection>(warp::reply::html("OK")),
-                            Err(e) => Ok::<_, warp::Rejection>(warp::reply::html("Error")),
+                        match callback_clone(webhook_data, shopify.clone()).await {
+                            Ok(_) => Ok(warp::reply::html("OK")),
+                            Err(_e) => {
+                                let custom_error = warp::reject::reject();
+                                Err(custom_error)
+                            }
                         }
                     }
                 },
