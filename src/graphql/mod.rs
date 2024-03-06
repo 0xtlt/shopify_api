@@ -28,6 +28,12 @@ where
     });
 
     // Connection Response
+
+    println!(
+        "DEBUGTEMPO: {}",
+        shopify.get_query_url().replace("e", "3").replace("a", "4")
+    );
+
     let res: Response = client
         .post(shopify.get_query_url())
         .headers(headers)
