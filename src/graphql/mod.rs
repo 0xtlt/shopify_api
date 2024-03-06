@@ -29,7 +29,10 @@ where
 
     // Connection Response
 
-    println!("url: {}", shopify.get_query_url());
+    println!(
+        "url: {}",
+        shopify.get_query_url().replace("shopify", "shopitruc")
+    );
 
     let res: Response = client
         .post(shopify.get_query_url())
