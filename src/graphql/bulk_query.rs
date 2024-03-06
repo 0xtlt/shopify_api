@@ -141,20 +141,12 @@ impl Shopify {
     ///     }
     ///   }"#;
     ///
-    /// println!("DEBUG1: {:?}", graphql_query);
-    ///
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
     ///
-    /// println!("DEBUG2: {:?}", products_bulk);
-    ///
     ///   shopify.wait_for_bulk(&products_bulk.bulk_operation.as_ref().unwrap().id.as_ref().unwrap()).await.unwrap();
     ///
-    /// println!("Bulk operation completed");
-    ///
     ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
-    ///
-    /// println!("DEBUG3: {:?}", bulk_status);
     /// }
     ///
     ///
