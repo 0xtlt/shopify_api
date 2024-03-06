@@ -43,6 +43,9 @@ where
 
     // Connection data
     let body = res.text().await;
+
+    println!("body: {:?}", body);
+
     if body.is_err() {
         return Err(ShopifyAPIError::ResponseBroken);
     }
