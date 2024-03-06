@@ -29,6 +29,8 @@ where
 
     // Connection Response
 
+    println!("url: {}", shopify.get_query_url());
+
     let res: Response = client
         .post(shopify.get_query_url())
         .headers(headers)
