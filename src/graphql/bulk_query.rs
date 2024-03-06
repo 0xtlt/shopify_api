@@ -129,7 +129,6 @@ impl Shopify {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    /// // print env!("TEST_SHOP_NAME") but replace e with 3 and a with 4
     ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
     ///   let graphql_query = r#"{
     ///      products {
@@ -141,12 +140,21 @@ impl Shopify {
     ///         }
     ///     }
     ///   }"#;
+    ///
+    /// println!("DEBUG1: {:?}", graphql_query);
+    ///
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
     ///
+    /// println!("DEBUG2: {:?}", products_bulk);
+    ///
     ///   shopify.wait_for_bulk(&products_bulk.bulk_operation.as_ref().unwrap().id.as_ref().unwrap()).await.unwrap();
     ///
+    /// println!("Bulk operation completed");
+    ///
     ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
+    ///
+    /// println!("DEBUG3: {:?}", bulk_status);
     /// }
     ///
     ///
