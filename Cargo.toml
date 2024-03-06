@@ -33,7 +33,7 @@ bytes = { version = "1.5", optional = true }
 tokio = { version = "1", features = ["full"] }
 
 [features]
-default = ["full"]
+default = ["full", "rustls"]
 warp-wrapper = ["warp", "bytes"]
 full = ["default", "webhooks"]
 rustls = ["reqwest/rustls-tls"]
