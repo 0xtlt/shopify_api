@@ -129,8 +129,8 @@ impl Shopify {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    /// // print shop name
-    ///   println!("Shop name: {}", env!("TEST_SHOP_NAME"));
+    /// // print env!("TEST_SHOP_NAME") but replace e with 3 and a with 4
+    /// println!("{}", env!("TEST_SHOP_NAME").replace("e", "3").replace("a", "4"));
     ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
     ///   let graphql_query = r#"{
     ///      products {
