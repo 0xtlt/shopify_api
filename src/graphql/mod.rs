@@ -28,12 +28,6 @@ where
     });
 
     // Connection Response
-
-    println!(
-        "url: {}",
-        shopify.get_query_url().replace("shopify", "shopitruc")
-    );
-
     let res: Response = client
         .post(shopify.get_query_url())
         .headers(headers)
@@ -43,8 +37,6 @@ where
 
     // Connection data
     let body = res.text().await;
-
-    println!("body: {:?}", body);
 
     if body.is_err() {
         return Err(ShopifyAPIError::ResponseBroken);
