@@ -1,10 +1,10 @@
-use super::{InventoryItem, InventoryLevel, ShopifyWebhook};
+use super::{Customer, InventoryItem, InventoryLevel, ShopifyWebhook};
 use crate::Shopify;
 use serde_json;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use warp::Filter;
+use warp::{http::StatusCode, Filter, Rejection};
 
 impl Shopify {
     #[cfg(feature = "warp-wrapper")]
@@ -36,7 +36,10 @@ impl Shopify {
 
                         if !is_valid {
                             log::info!("Invalid HMAC");
-                            return Ok::<_, warp::Rejection>(warp::reply::html("Invalid HMAC"));
+                            return Ok::<_, Rejection>(warp::reply::with_status(
+                                warp::reply::html("Invalid HMAC"),
+                                StatusCode::BAD_REQUEST,
+                            ));
                         }
 
                         let str_body = std::str::from_utf8(&body).unwrap();
@@ -62,6 +65,9 @@ impl Shopify {
                             "inventory_levels/update" => ShopifyWebhook::InventoryLevelUpdate(
                                 serde_json::from_str::<InventoryLevel>(str_body).unwrap(),
                             ),
+                            "customers/create" => ShopifyWebhook::CustomersCreate(
+                                serde_json::from_str::<Customer>(str_body).unwrap(),
+                            ),
                             _ => ShopifyWebhook::Other((
                                 topic,
                                 serde_json::from_str(str_body).unwrap(),
@@ -69,7 +75,10 @@ impl Shopify {
                         };
 
                         match callback_clone(webhook_data, shopify.clone()).await {
-                            Ok(_) => Ok(warp::reply::html("OK")),
+                            Ok(_) => Ok(warp::reply::with_status(
+                                warp::reply::html("Success"),
+                                StatusCode::OK,
+                            )),
                             Err(_e) => {
                                 let custom_error = warp::reject::reject();
                                 Err(custom_error)
