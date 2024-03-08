@@ -60,6 +60,8 @@ where
             .query(params),
     };
 
+    log::debug!("Request: {:?}", req);
+
     // Connection Response
     let res = req.send().await?;
 
@@ -73,6 +75,8 @@ where
 
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)?;
+
+    log::debug!("Response: {:?}", json);
 
     let json = match json_finder {
         Some(json_finder) => match utils::read_json_tree(&json, json_finder) {

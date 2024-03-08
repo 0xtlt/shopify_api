@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: 1
   TEST_SHOP_NAME: "${{ secrets.TEST_SHOP_NAME }}"
   TEST_KEY: "${{ secrets.TEST_KEY }}"
+  RUST_LOG: "debug"
 
 jobs:
   ci-pass:

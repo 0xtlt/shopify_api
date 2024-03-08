@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- Add: `verify_hmac` method added to `Shopify`
+- Add: `ShopifyWebhook` struct
+- Add: `list_webhooks` method added to `Shopify`
+- Add: `add_webhook` method added to `Shopify`
+- Add: `edit_webhook` method added to `Shopify`
+- Add: `delete_webhook` method added to `Shopify`
+- Add: `webhook_auto_config` method added to `Shopify`
+
 ## 0.5.0
 
 - Add: `stage_upload_json` method added to `Shopify`

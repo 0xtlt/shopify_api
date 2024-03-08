@@ -140,6 +140,7 @@ impl Shopify {
     ///         }
     ///     }
     ///   }"#;
+    ///
     ///   let variables = serde_json::json!({});
     ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
     ///
