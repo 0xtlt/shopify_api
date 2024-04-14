@@ -3,7 +3,8 @@ use crate::{
     utils::{self, read_json_tree, ReadJsonTreeSteps},
     Shopify, ShopifyAPIError,
 };
-use reqwest::Response;
+use graphql_client::{GraphQLQuery, Response as GraphQLResponse};
+use reqwest::{Client, Response};
 
 async fn shopify_graphql_query<VariablesType, ReturnType>(
     (shopify, graphql_query, variables, json_finder): &(
@@ -128,5 +129,26 @@ impl Shopify {
         .await?;
 
         Ok(response_json)
+    }
+
+    // V2 Query using graphql_client
+    pub async fn post_graphql<Q: GraphQLQuery>(
+        &self,
+        variables: Q::Variables,
+    ) -> Result<GraphQLResponse<Q::ResponseData>, reqwest::Error> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert("X-Shopify-Access-Token", self.api_key.parse().unwrap());
+
+        // TODO: put the client in the struct
+        let client = Client::builder()
+            .user_agent(crate::VERSION)
+            .default_headers(headers)
+            .build()?;
+
+        let body = Q::build_query(variables);
+        let reqwest_response = client.post(self.get_query_url()).json(&body).send().await?;
+
+        reqwest_response.json().await
     }
 }

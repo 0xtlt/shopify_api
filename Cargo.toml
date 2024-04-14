@@ -4,7 +4,7 @@ description = "Shopify API client"
 documentation = "https://docs.rs/shopify_api"
 readme = "README.md"
 repository = "https://github.com/0xtlt/shopify_api"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 keywords = ["shopify", "api", "client"]
 categories = ["api-bindings", "web-programming"]
@@ -14,7 +14,7 @@ authors = ["Thomas Tastet"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.11", default-features = false, features = ["json", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 serde_json = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 chrono = "0.4"
@@ -24,9 +24,10 @@ simple_logger = "4.3"
 thiserror = "1.0"
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
-base64 = { version = "0.21", optional = true }
+base64 = { version = "0.22", optional = true }
 warp = { version = "0.3", optional = true, default-features = false, features = [] }
-bytes = { version = "1.5", optional = true }
+bytes = { version = "1.6", optional = true }
+graphql_client = { version = "0.14", features = ["reqwest"] }
 
 
 [dev-dependencies]
