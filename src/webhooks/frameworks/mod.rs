@@ -13,6 +13,7 @@ pub enum ShopifyWebhook {
     InventoryLevelDisconnect(InventoryLevel),
     InventoryLevelUpdate(InventoryLevel),
     CustomersCreate(Customer),
+    CustomersUpdate(Customer),
     Other((String, Value)),
 }
 

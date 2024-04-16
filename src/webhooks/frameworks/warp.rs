@@ -68,6 +68,9 @@ impl Shopify {
                             "customers/create" => ShopifyWebhook::CustomersCreate(
                                 serde_json::from_str::<Customer>(str_body).unwrap(),
                             ),
+                            "customers/update" => ShopifyWebhook::CustomersUpdate(
+                                serde_json::from_str::<Customer>(str_body).unwrap(),
+                            ),
                             _ => ShopifyWebhook::Other((
                                 topic,
                                 serde_json::from_str(str_body).unwrap(),
