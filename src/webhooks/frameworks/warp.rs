@@ -1,16 +1,11 @@
 use super::{Customer, InventoryItem, InventoryLevel, ShopifyWebhook};
 use crate::Shopify;
-use serde::{Deserialize, Serialize};
 use serde_json;
 use std::future::Future;
-use std::future::Future;
 use std::sync::Arc;
-use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex;
-use tokio::task;
 use warp::http::StatusCode;
-use warp::{http::StatusCode, Filter, Rejection};
-use warp::{Filter, Rejection, Reply};
+use warp::{Filter, Rejection};
 
 impl Shopify {
     #[cfg(feature = "warp-wrapper")]
@@ -88,7 +83,7 @@ impl Shopify {
                             )),
                         };
 
-                        match callback_clone(webhook_data, shopify.clone()).await {
+                        match callback_clone(webhook_data, shopify.clone(), extra.clone()).await {
                             Ok(_) => Ok(warp::reply::with_status(
                                 warp::reply::html("Success"),
                                 StatusCode::OK,
