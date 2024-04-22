@@ -1,20 +1,28 @@
 use super::{Customer, InventoryItem, InventoryLevel, ShopifyWebhook};
 use crate::Shopify;
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::future::Future;
+use std::future::Future;
 use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex;
+use tokio::task;
+use warp::http::StatusCode;
 use warp::{http::StatusCode, Filter, Rejection};
+use warp::{Filter, Rejection, Reply};
 
 impl Shopify {
     #[cfg(feature = "warp-wrapper")]
-    pub fn warp_wrapper<F, Fut>(
+    pub fn warp_wrapper<F, Fut, T>(
         path: &str,
         shopify_filter: Arc<Mutex<Shopify>>,
+        extra_data: T,
         callback: F,
     ) -> warp::filters::BoxedFilter<(impl warp::Reply,)>
     where
-        F: Fn(ShopifyWebhook, Arc<Mutex<Shopify>>) -> Fut + Clone + Send + Sync + 'static,
+        T: Clone + Send + Sync + 'static,
+        F: Fn(ShopifyWebhook, Arc<Mutex<Shopify>>, T) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Result<(), String>> + Send,
     {
         let path_clone = path.to_string();
@@ -22,11 +30,13 @@ impl Shopify {
         warp::path(path_clone)
             .and(warp::post())
             .and(warp::any().map(move || shopify_filter.clone()))
+            .and(warp::any().map(move || extra_data.clone()))
             .and(warp::header::<String>("x-shopify-hmac-sha256"))
             .and(warp::header::<String>("X-Shopify-Topic"))
             .and(warp::body::bytes())
             .and_then(
                 move |shopify: Arc<Mutex<Shopify>>,
+                      extra: T,
                       header: String,
                       topic: String,
                       body: bytes::Bytes| {
@@ -35,7 +45,6 @@ impl Shopify {
                         let is_valid = shopify.lock().await.verify_hmac(&body, &header);
 
                         if !is_valid {
-                            log::info!("Invalid HMAC");
                             return Ok::<_, Rejection>(warp::reply::with_status(
                                 warp::reply::html("Invalid HMAC"),
                                 StatusCode::BAD_REQUEST,
@@ -43,7 +52,6 @@ impl Shopify {
                         }
 
                         let str_body = std::str::from_utf8(&body).unwrap();
-
                         let webhook_data: ShopifyWebhook = match topic.as_str() {
                             "inventory_items/create" => ShopifyWebhook::InventoryItemCreate(
                                 serde_json::from_str::<InventoryItem>(str_body).unwrap(),
