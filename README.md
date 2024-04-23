@@ -103,9 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #### Or download it from the Shopify Graphql API with [the following command](./schema_dl.graphql)
 
-:::warning
-Sometimes you'll get an error with the GraphQLQuery derive caused my a missing struct, most of the time, you can fix it by adding the missing struct by importing it from [the types import](./src/graphql/types.rs) or you can create a new struct with the same name as the missing one, and the derive will work.
-:::
+> [!WARNING]
+> Sometimes you'll get an error with the GraphQLQuery derive caused my a missing struct, most of the time, you can fix it by adding the missing struct by importing it from [the types import](./src/graphql/types.rs) or you can create a new struct with the same name as the missing one, and the derive will work.
 
 ## License
 
