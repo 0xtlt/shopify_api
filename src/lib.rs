@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-#[cfg(feature = "graphql-client")]
 pub mod graphql;
 pub mod rest;
 pub mod utils;

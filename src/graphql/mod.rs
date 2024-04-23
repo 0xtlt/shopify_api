@@ -1,8 +1,10 @@
 mod bulk_query;
+pub mod types;
 use crate::{
     utils::{self, read_json_tree, ReadJsonTreeSteps},
     Shopify, ShopifyAPIError,
 };
+#[cfg(feature = "graphql-client")]
 use graphql_client::{GraphQLQuery, Response as GraphQLResponse};
 use reqwest::{Client, Response};
 
@@ -132,6 +134,7 @@ impl Shopify {
     }
 
     // V2 Query using graphql_client
+    #[cfg(feature = "graphql-client")]
     pub async fn post_graphql<Q: GraphQLQuery>(
         &self,
         variables: Q::Variables,

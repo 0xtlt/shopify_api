@@ -18,7 +18,7 @@ optional features, so your `Cargo.toml` could look like this:
 
 ```toml
 [dependencies]
-shopify_api = "0.6.1"
+shopify_api = "0.7.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -52,6 +52,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 ```
+
+### Or with the `new` GraphQl Client!
+
+```toml
+[dependencies]
+shopify_api = "0.7.0"
+tokio = { version = "1", features = ["full"] }
+graphql_client = "0.14.0"
+```
+
+```graphql
+query GetShop {
+  shop {
+    name
+  }
+}
+```
+
+```rust,no_run
+use shopify_api::*;
+use graphql_client::GraphQLQuery;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "./graphql.schema.json",
+    query_path = "graphql/getShop.graphql",
+    response_derives = "Debug"
+)]
+struct GetShop;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let shopify = Shopify::new("hello", "world", String::from("2024-04"), None);
+
+  let shop_info = connector
+        .shopify
+        .post_graphql::<GetShop>(get_shop::Variables {})
+        .await;
+
+  Ok(())
+}
+```
+
+### Download the graphql schema
+
+#### You can download one from this repository
+
+- [2024-04](./schemas/2024-04.json)
+
+#### Or download it from the Shopify Graphql API with [the following command](./schema_dl.graphql)
+
+::: warning
+Sometimes you'll get an error with the GraphQLQuery derive caused my a missing struct, most of the time, you can fix it by adding the missing struct by importing it from [the types import](./src/graphql/types.rs) or you can create a new struct with the same name as the missing one, and the derive will work.
+:::
 
 ## License
 

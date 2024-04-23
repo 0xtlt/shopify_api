@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Add: `graphql_client` feature
+- Add: `post_graphql` method to `Shopify` with `graphql_client` feature on
+- Edited: `warp_wrapper` method takes one more argument
+
 ## 0.6.0
 
 - Add: `verify_hmac` method added to `Shopify`
