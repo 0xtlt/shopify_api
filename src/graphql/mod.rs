@@ -140,7 +140,7 @@ impl Shopify {
         headers.insert("Content-Type", "application/json".parse().unwrap());
         headers.insert("X-Shopify-Access-Token", self.api_key.parse().unwrap());
 
-        // TODO: put the client in the struct
+        // TODO: put the client in the struct to avoid creating it every time
         let client = Client::builder()
             .user_agent(crate::VERSION)
             .default_headers(headers)
