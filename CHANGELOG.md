@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2
+
+- Fixed: Webhook Customer Struct
+
 ## 0.7.0
 
 - Add: `graphql_client` feature
