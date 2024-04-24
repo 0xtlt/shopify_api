@@ -47,6 +47,9 @@ impl Shopify {
                         }
 
                         let str_body = std::str::from_utf8(&body).unwrap();
+
+                        log::debug!("Received webhook topic: {} with body {}", topic, str_body);
+
                         let webhook_data: ShopifyWebhook = match topic.as_str() {
                             "inventory_items/create" => ShopifyWebhook::InventoryItemCreate(
                                 serde_json::from_str::<InventoryItem>(str_body).unwrap(),
