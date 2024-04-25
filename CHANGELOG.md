@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.7.2
+## 0.8.0
+
+- Add: `debug` feature added, enabled by default
+
+## 0.8.0
 
 - Fixed: Webhook Customer Struct
 

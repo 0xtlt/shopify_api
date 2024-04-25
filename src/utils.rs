@@ -173,3 +173,59 @@ pub fn read_json_tree<'a>(
 
     Ok(actual_value)
 }
+
+#[cfg(feature = "debug")]
+pub fn deserialize_from_value<T>(value: serde_json::Value) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let json_string = serde_json::to_string(&value).unwrap();
+    let jd = &mut serde_json::Deserializer::from_str(&json_string);
+
+    let result: Result<T, _> = serde_path_to_error::deserialize(jd);
+    match result {
+        Ok(customer) => Ok(customer),
+        Err(err) => Err(format!(
+            "Error parsing JSON at {}: {}",
+            err.path(),
+            err.inner()
+        )),
+    }
+}
+
+#[cfg(not(feature = "debug"))]
+pub fn deserialize_from_value<T>(value: serde_json::Value) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let result: Result<T, _> = serde_json::from_value(value);
+    match result {
+        Ok(customer) => Ok(customer),
+        Err(err) => Err(format!("Error parsing JSON: {}", err)),
+    }
+}
+
+#[cfg(feature = "debug")]
+pub fn deserialize_from_str<T>(json_string: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let value: serde_json::Value = serde_json::from_str(json_string).unwrap();
+    deserialize_from_value(value)
+}
+
+#[cfg(not(feature = "debug"))]
+pub fn deserialize_from_str<T>(json_string: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    use serde_json::Error;
+
+    let value: serde_json::Value = serde_json::from_str(json_string).unwrap();
+    let result: Result<T, Error> = serde_json::from_value(value);
+
+    match result {
+        Ok(customer) => Ok(customer),
+        Err(err) => Err(format!("Error parsing JSON: {}", err)),
+    }
+}

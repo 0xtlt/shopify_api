@@ -4,7 +4,7 @@ description = "Shopify API client"
 documentation = "https://docs.rs/shopify_api"
 readme = "README.md"
 repository = "https://github.com/0xtlt/shopify_api"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 keywords = ["shopify", "api", "client"]
 categories = ["api-bindings", "web-programming"]
@@ -28,6 +28,7 @@ base64 = { version = "0.22", optional = true }
 warp = { version = "0.3", optional = true, default-features = false, features = [] }
 bytes = { version = "1.6", optional = true }
 graphql_client = { version = "0.14", optional = true }
+serde_path_to_error = { version = "0.1", optional = true }
 
 
 [dev-dependencies]
@@ -37,7 +38,8 @@ tokio = { version = "1", features = ["full"] }
 default = ["full", "rustls"]
 warp-wrapper = ["warp", "bytes"]
 graphql-client = ["graphql_client"]
-full = ["default", "webhooks", "graphql-client"]
+full = ["default", "webhooks", "graphql-client", "debug"]
 rustls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
 webhooks = ["hmac", "sha2", "base64"]
+debug = ["serde_path_to_error"]

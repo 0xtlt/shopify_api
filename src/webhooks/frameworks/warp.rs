@@ -52,33 +52,39 @@ impl Shopify {
 
                         let webhook_data: ShopifyWebhook = match topic.as_str() {
                             "inventory_items/create" => ShopifyWebhook::InventoryItemCreate(
-                                serde_json::from_str::<InventoryItem>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .unwrap(),
                             ),
                             "inventory_items/update" => ShopifyWebhook::InventoryItemUpdate(
-                                serde_json::from_str::<InventoryItem>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .unwrap(),
                             ),
                             "inventory_items/delete" => ShopifyWebhook::InventoryItemDelete(
-                                serde_json::from_str::<InventoryItem>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .unwrap(),
                             ),
                             "inventory_levels/connect" => ShopifyWebhook::InventoryLevelConnect(
-                                serde_json::from_str::<InventoryLevel>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
+                                    .unwrap(),
                             ),
                             "inventory_levels/disconnect" => {
                                 ShopifyWebhook::InventoryLevelDisconnect(
-                                    serde_json::from_str::<InventoryLevel>(str_body).unwrap(),
+                                    crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
+                                        .unwrap(),
                                 )
                             }
                             "inventory_levels/update" => ShopifyWebhook::InventoryLevelUpdate(
-                                serde_json::from_str::<InventoryLevel>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
+                                    .unwrap(),
                             ),
                             "customers/create" => ShopifyWebhook::CustomersCreate(
-                                serde_json::from_str::<Customer>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<Customer>(str_body).unwrap(),
                             ),
                             "customers/update" => ShopifyWebhook::CustomersUpdate(
-                                serde_json::from_str::<Customer>(str_body).unwrap(),
+                                crate::utils::deserialize_from_str::<Customer>(str_body).unwrap(),
                             ),
                             "orders/create" => ShopifyWebhook::OrdersCreate(
-                                serde_json::from_str(str_body).unwrap(),
+                                crate::utils::deserialize_from_str(str_body).unwrap(),
                             ),
                             _ => ShopifyWebhook::Other((
                                 topic,
