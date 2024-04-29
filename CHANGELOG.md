@@ -2,6 +2,10 @@
 
 - Add: `debug` feature added, enabled by default
 
+## 0.8.4
+
+- Fixed: `UnsignedInt64` types to String
+
 ## 0.8.3
 
 - Fixed: `confirmation_number` in `order` struct

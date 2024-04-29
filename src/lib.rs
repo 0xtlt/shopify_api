@@ -41,7 +41,7 @@ pub enum ShopifyAPIError {
     Other(String),
 }
 
-pub static VERSION: &str = "shopify_api/0.8.2";
+pub static VERSION: &str = "shopify_api/0.8.4";
 
 impl Shopify {
     /// Create a new Shopify client

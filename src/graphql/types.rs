@@ -6,4 +6,4 @@ pub type Decimal = String;
 pub type JSON = String;
 
 #[allow(clippy::upper_case_acronyms)]
-pub type UnsignedInt64 = u64;
+pub type UnsignedInt64 = String;
