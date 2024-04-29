@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.8.0
-
 - Add: `debug` feature added, enabled by default
 
-## 0.8.0
+## 0.8.3
+
+- Fixed: `confirmation_number` in `order` struct
+
+## 0.8.2
 
 - Fixed: Webhook Customer Struct
 

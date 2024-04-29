@@ -108,7 +108,7 @@ pub struct Order {
     pub checkout_token: Option<String>,
     pub client_details: Option<OrderClientDetails>,
     pub closed_at: Option<String>,
-    pub confirmation_number: Option<u64>,
+    pub confirmation_number: Option<String>,
     pub confirmed: bool,
     pub contact_email: String,
     pub created_at: String,
