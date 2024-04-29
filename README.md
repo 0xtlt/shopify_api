@@ -18,7 +18,7 @@ optional features, so your `Cargo.toml` could look like this:
 
 ```toml
 [dependencies]
-shopify_api = "0.7"
+shopify_api = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```toml
 [dependencies]
-shopify_api = "0.7"
+shopify_api = "0.8"
 tokio = { version = "1", features = ["full"] }
 graphql_client = "0.14.0"
 ```
