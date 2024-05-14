@@ -2,6 +2,10 @@
 
 - Add: `debug` feature added, enabled by default
 
+## 0.8.5
+
+- Fixed: `wait_for_bulk` method condition
+
 ## 0.8.4
 
 - Fixed: `UnsignedInt64` types to String

@@ -318,6 +318,12 @@ impl Shopify {
                 ));
             }
 
+            if get_bulk.as_ref().unwrap().status != ShopifyBulkStatus::Running
+                && get_bulk.as_ref().unwrap().status != ShopifyBulkStatus::Canceling
+            {
+                break;
+            }
+
             bulk = get_bulk.unwrap();
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
