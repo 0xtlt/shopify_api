@@ -2,7 +2,7 @@
 
 - Add: `debug` feature added, enabled by default
 
-## 0.8.6
+## 0.8.7
 
 - Fixed: `wait_for_bulk` method condition
 

@@ -322,13 +322,16 @@ impl Shopify {
                 ShopifyBulkStatus::Canceled
                 | ShopifyBulkStatus::Completed
                 | ShopifyBulkStatus::Expired
-                | ShopifyBulkStatus::Failed => break,
+                | ShopifyBulkStatus::Failed => {
+                    bulk = get_bulk.unwrap();
+
+                    break;
+                }
                 ShopifyBulkStatus::Canceling
                 | ShopifyBulkStatus::Created
                 | ShopifyBulkStatus::Running => {}
             }
 
-            bulk = get_bulk.unwrap();
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
 
