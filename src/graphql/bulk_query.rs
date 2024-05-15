@@ -318,10 +318,14 @@ impl Shopify {
                 ));
             }
 
-            if get_bulk.as_ref().unwrap().status != ShopifyBulkStatus::Running
-                && get_bulk.as_ref().unwrap().status != ShopifyBulkStatus::Canceling
-            {
-                break;
+            match get_bulk.as_ref().unwrap().status {
+                ShopifyBulkStatus::Canceled
+                | ShopifyBulkStatus::Completed
+                | ShopifyBulkStatus::Expired
+                | ShopifyBulkStatus::Failed => break,
+                ShopifyBulkStatus::Canceling
+                | ShopifyBulkStatus::Created
+                | ShopifyBulkStatus::Running => {}
             }
 
             bulk = get_bulk.unwrap();
