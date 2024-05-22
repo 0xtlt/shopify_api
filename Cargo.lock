@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "shopify_api"
-version = "0.8.7"
+version = "0.8.8"
 dependencies = [
  "base64 0.22.0",
  "bytes",
