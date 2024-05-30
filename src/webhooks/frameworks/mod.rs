@@ -17,6 +17,7 @@ pub enum ShopifyWebhook {
     CustomersCreate(Customer),
     CustomersUpdate(Customer),
     OrdersCreate(Order),
+    OrdersUpdate(Order),
     Other((String, Value)),
 }
 
