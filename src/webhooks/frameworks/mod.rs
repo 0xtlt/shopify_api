@@ -175,14 +175,14 @@ pub struct Order {
     pub total_weight: u64,
     pub updated_at: String,
     pub user_id: Option<u64>,
-    pub billing_address: OrderAddress,
+    pub billing_address: Option<OrderAddress>,
     pub customer: OrderCustomer,
     pub discount_applications: Vec<OrderDiscountApplication>,
     pub fulfillments: Vec<OrderFulfillment>,
     pub line_items: Vec<OrderLineItem>,
     pub payment_terms: Option<OrderPaymentTerms>,
     pub refunds: Vec<OrderRefund>,
-    pub shipping_address: OrderAddress,
+    pub shipping_address: Option<OrderAddress>,
     pub shipping_lines: Vec<OrderShippingLine>,
 }
 
@@ -267,7 +267,7 @@ pub struct OrderCustomer {
     pub currency: String,
     pub tax_exemptions: Vec<String>,
     pub admin_graphql_api_id: String,
-    pub default_address: OrderAddress,
+    pub default_address: Option<OrderAddress>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

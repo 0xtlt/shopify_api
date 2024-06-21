@@ -2,6 +2,10 @@
 
 - Add: `debug` feature added, enabled by default
 
+## 0.8.10
+
+- Fixed: `OrderCustomer` & `Order` struct fixed
+
 ## 0.8.9
 
 - Added: `ShopifyWebhook::OrdersUpdate` type added
