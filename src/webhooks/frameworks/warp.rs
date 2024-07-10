@@ -86,7 +86,7 @@ impl Shopify {
                             "orders/create" => ShopifyWebhook::OrdersCreate(
                                 crate::utils::deserialize_from_str(str_body).unwrap(),
                             ),
-                            "orders/update" => ShopifyWebhook::OrdersUpdate(
+                            "orders/updated" => ShopifyWebhook::OrdersUpdated(
                                 crate::utils::deserialize_from_str(str_body).unwrap(),
                             ),
                             _ => ShopifyWebhook::Other((
