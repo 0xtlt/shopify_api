@@ -296,7 +296,7 @@ pub struct OrderLineItem {
     pub variant_title: Option<String>,
     pub sku: Option<String>,
     pub variant_inventory_management: Option<String>,
-    pub product_id: u64,
+    pub product_id: Option<u64>,
     pub fulfillment_service: String,
     pub product_exists: bool,
     pub taxable: bool,

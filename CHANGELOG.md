@@ -2,6 +2,10 @@
 
 - Add: `debug` feature added, enabled by default
 
+## 0.9.1
+
+- Fixed: `OrderLineItem` type fixed
+
 ## 0.9.0
 
 - Fixed: `ShopifyWebhook::OrdersUpdated` type fixed
