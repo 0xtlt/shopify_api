@@ -74,7 +74,7 @@ pub struct Customer {
     pub updated_at: String,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
-    pub orders_count: u64,
+    pub orders_count: Option<u64>,
     pub state: String,
     pub total_spent: String,
     pub last_order_id: Option<u64>,
