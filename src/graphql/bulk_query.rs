@@ -1,26 +1,21 @@
-use crate::{utils::ReadJsonTreeSteps, Shopify, ShopifyAPIError};
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
+
+use crate::{Shopify, ShopifyAPIError};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum StagedUploadTargetGenerateUploadResourceInput {
-    #[serde(rename = "BULK_MUTATION_VARIABLES")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum StagedUploadResource {
     BulkMutationVariables,
-    #[serde(rename = "COLLECTION_IMAGE")]
     CollectionImage,
-    #[serde(rename = "FILE")]
     File,
-    #[serde(rename = "IMAGE")]
     Image,
-    #[serde(rename = "MODEL_3D")]
     Model3D,
-    #[serde(rename = "PRODUCT_IMAGE")]
     ProductImage,
-    #[serde(rename = "RETURN_LABEL")]
     ReturnLabel,
-    #[serde(rename = "URL_REDIRECT_IMPORT")]
     UrlRedirectImport,
-    #[serde(rename = "VIDEO")]
     Video,
 }
 
@@ -39,475 +34,529 @@ pub struct StagedMediaUploadTarget {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ShopifyStagedUploadsCreateInputQuery {
-    #[serde(rename = "stagedTargets")]
-    pub staged_targets: Option<Vec<StagedMediaUploadTarget>>,
-    #[serde(rename = "userErrors")]
-    pub user_errors: Option<Vec<ShopifyUserError>>,
+#[serde(rename_all = "camelCase")]
+pub struct StagedUploadsCreateInput {
+    pub filename: String,
+    pub mime_type: String,
+    pub resource: StagedUploadResource,
+    pub http_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct StagedUploadsCreateInput {
-    #[serde(rename = "fileSize")]
-    pub file_size: Option<u64>,
-    pub filename: String,
-
-    #[serde(rename = "httpMethod")]
-    pub http_method: Option<String>, // POST OR PUT
-
-    #[serde(rename = "mimeType")]
-    pub mime_type: String,
-
-    pub resource: StagedUploadTargetGenerateUploadResourceInput,
+pub struct ShopifyUserError {
+    pub field: Option<Vec<String>>,
+    pub message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ShopifyBulkErrorCode {
-    #[serde(rename = "ACCESS_DENIED")]
     AccessDenied,
-    #[serde(rename = "INTERNAL_SERVER_ERROR")]
     InternalServerError,
-    #[serde(rename = "TIMEOUT")]
     Timeout,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ShopifyBulkStatus {
-    #[serde(rename = "CANCELED")]
     Canceled,
-    #[serde(rename = "CANCELING")]
     Canceling,
-    #[serde(rename = "COMPLETED")]
     Completed,
-    #[serde(rename = "CREATED")]
     Created,
-    #[serde(rename = "EXPIRED")]
     Expired,
-    #[serde(rename = "FAILED")]
     Failed,
-    #[serde(rename = "RUNNING")]
     Running,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ShopifyBulk {
-    pub id: Option<String>,
+impl ShopifyBulkStatus {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            ShopifyBulkStatus::Canceled
+                | ShopifyBulkStatus::Completed
+                | ShopifyBulkStatus::Expired
+                | ShopifyBulkStatus::Failed
+        )
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ShopifyBulkOperation {
+    pub id: String,
     pub url: Option<String>,
     #[serde(rename = "partialDataUrl")]
     pub partial_data_url: Option<String>,
     pub status: ShopifyBulkStatus,
     #[serde(rename = "errorCode")]
     pub error_code: Option<ShopifyBulkErrorCode>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "completedAt")]
+    pub completed_at: Option<String>,
+    #[serde(rename = "objectCount")]
+    pub object_count: Option<String>,
+    #[serde(rename = "fileSize")]
+    pub file_size: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ShopifyUserError {
-    pub field: Vec<String>,
-    pub message: String,
+pub struct BulkOperationPayload {
+    #[serde(rename = "bulkOperation")]
+    pub bulk_operation: Option<ShopifyBulkOperation>,
+    #[serde(rename = "userErrors")]
+    pub user_errors: Vec<ShopifyUserError>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ShopifyBulkOperationRunQuery {
+#[derive(Debug, Clone)]
+pub struct BulkWaitOptions {
+    pub poll_interval: Duration,
+    pub timeout: Option<Duration>,
+}
+
+impl Default for BulkWaitOptions {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(10),
+            timeout: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BulkOperationsFilter {
+    pub first: u32,
+    pub query: Option<String>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BulkConcurrencyOptions {
+    pub max_concurrent: usize,
+}
+
+impl Default for BulkConcurrencyOptions {
+    fn default() -> Self {
+        Self { max_concurrent: 5 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RunBulkQueryData {
+    #[serde(rename = "bulkOperationRunQuery")]
+    payload: BulkOperationPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunBulkMutationData {
+    #[serde(rename = "bulkOperationRunMutation")]
+    payload: BulkOperationPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct BulkOperationData {
     #[serde(rename = "bulkOperation")]
-    pub bulk_operation: Option<ShopifyBulk>,
+    bulk_operation: Option<ShopifyBulkOperation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BulkOperationsData {
+    #[serde(rename = "bulkOperations")]
+    bulk_operations: BulkOperationConnection,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BulkOperationConnection {
+    pub edges: Vec<BulkOperationEdge>,
+    #[serde(rename = "pageInfo")]
+    pub page_info: PageInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BulkOperationEdge {
+    pub cursor: String,
+    pub node: ShopifyBulkOperation,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PageInfo {
+    #[serde(rename = "hasNextPage")]
+    pub has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    pub end_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StagedUploadsData {
+    #[serde(rename = "stagedUploadsCreate")]
+    staged_uploads_create: StagedUploadsCreatePayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct StagedUploadsCreatePayload {
+    #[serde(rename = "stagedTargets")]
+    staged_targets: Vec<StagedMediaUploadTarget>,
     #[serde(rename = "userErrors")]
-    pub user_errors: Option<Vec<ShopifyUserError>>,
+    user_errors: Vec<ShopifyUserError>,
 }
 
 impl Shopify {
-    /// Query graphql shopify api
-    /// # Example
-    /// ```
-    /// use shopify_api::*;
-    /// use shopify_api::utils::ReadJsonTreeSteps;
-    /// use serde::{Deserialize};
-    ///
-    /// #[derive(Deserialize)]
-    /// struct Shop {
-    ///    name: String,
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
-    ///   let graphql_query = r#"{
-    ///      products {
-    ///         edges {
-    ///          node {
-    ///             id
-    ///             title
-    ///          }
-    ///         }
-    ///     }
-    ///   }"#;
-    ///
-    ///   let variables = serde_json::json!({});
-    ///   let products_bulk = shopify.make_bulk_query(graphql_query).await.unwrap();
-    ///
-    ///   shopify.wait_for_bulk(&products_bulk.bulk_operation.as_ref().unwrap().id.as_ref().unwrap()).await.unwrap();
-    ///
-    ///   let bulk_status = shopify.get_bulk_by_id(&products_bulk.bulk_operation.unwrap().id.unwrap()).await.unwrap();
-    /// }
-    ///
-    ///
-    /// ```
-    pub async fn get_bulk_by_id(&self, id: &str) -> Option<ShopifyBulk> {
-        let json: ShopifyBulk = self
-            .graphql_query(
+    pub async fn run_bulk_queries<I, S>(
+        &self,
+        queries: I,
+        options: BulkConcurrencyOptions,
+    ) -> Result<Vec<BulkOperationPayload>, ShopifyAPIError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let queries = queries.into_iter().collect::<Vec<_>>();
+        if queries.len() > options.max_concurrent {
+            return Err(ShopifyAPIError::Other(format!(
+                "received {} bulk queries but max_concurrent is {}",
+                queries.len(),
+                options.max_concurrent
+            )));
+        }
+
+        let mut operations = Vec::with_capacity(queries.len());
+        for query in queries {
+            operations.push(self.run_bulk_query(query.as_ref()).await?);
+        }
+
+        Ok(operations)
+    }
+
+    pub async fn run_bulk_mutations<I, M, P>(
+        &self,
+        mutations: I,
+        options: BulkConcurrencyOptions,
+    ) -> Result<Vec<BulkOperationPayload>, ShopifyAPIError>
+    where
+        I: IntoIterator<Item = (M, P)>,
+        M: AsRef<str>,
+        P: AsRef<str>,
+    {
+        let mutations = mutations.into_iter().collect::<Vec<_>>();
+        if mutations.len() > options.max_concurrent {
+            return Err(ShopifyAPIError::Other(format!(
+                "received {} bulk mutations but max_concurrent is {}",
+                mutations.len(),
+                options.max_concurrent
+            )));
+        }
+
+        let mut operations = Vec::with_capacity(mutations.len());
+        for (mutation, staged_upload_path) in mutations {
+            operations.push(
+                self.run_bulk_mutation(mutation.as_ref(), staged_upload_path.as_ref())
+                    .await?,
+            );
+        }
+
+        Ok(operations)
+    }
+
+    pub async fn run_bulk_query(
+        &self,
+        query: &str,
+    ) -> Result<BulkOperationPayload, ShopifyAPIError> {
+        self.run_bulk_query_with_grouping(query, false).await
+    }
+
+    pub async fn run_bulk_query_with_grouping(
+        &self,
+        query: &str,
+        group_objects: bool,
+    ) -> Result<BulkOperationPayload, ShopifyAPIError> {
+        let data: RunBulkQueryData = self
+            .graphql(
                 r#"
-                query($id: ID!) {
-                    node(id: $id) {
-                        ... on BulkOperation {
+                mutation bulkOperationRunQuery($query: String!, $groupObjects: Boolean!) {
+                    bulkOperationRunQuery(query: $query, groupObjects: $groupObjects) {
+                        bulkOperation {
                             id
+                            status
                             url
                             partialDataUrl
-                            status
+                        }
+                        userErrors {
+                            field
+                            message
                         }
                     }
                 }
-            "#,
-                &json!({ "id": id }),
-                &vec![
-                    ReadJsonTreeSteps::Key("data"),
-                    ReadJsonTreeSteps::Key("node"),
-                ],
-            )
-            .await
-            .unwrap();
-
-        Some(json)
-    }
-    /// Executes a GraphQL bulk query on the Shopify API.
-    ///
-    /// # Arguments
-    /// * `query` - The GraphQL query to execute in bulk.
-    ///
-    /// # Returns
-    /// `Result<ShopifyBulkOperationRunQuery, ShopifyAPIError>` - A result containing the bulk operation or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let bulk_query = "{ products { edges { node { id title } } } }";
-    /// let result = shopify.make_bulk_query(bulk_query).await?;
-    /// ```
-    pub async fn make_bulk_query(
-        &self,
-        query: &str,
-    ) -> Result<ShopifyBulkOperationRunQuery, crate::ShopifyAPIError> {
-        let bulk_query = format!(
-            r#"
-            mutation {{
-                bulkOperationRunQuery(
-                    query: """
-                    {query}
-                    """
-                ) {{
-                    bulkOperation {{
-                        id
-                        url
-                        partialDataUrl
-                        status
-                    }}
-                    userErrors {{
-                        field
-                        message
-                    }}
-                }}
-            }}"#
-        );
-
-        let result: ShopifyBulkOperationRunQuery = self
-            .graphql_query(
-                &bulk_query,
-                &json!({}),
-                &vec![
-                    ReadJsonTreeSteps::Key("data"),
-                    ReadJsonTreeSteps::Key("bulkOperationRunQuery"),
-                ],
+                "#,
+                &json!({
+                    "query": query,
+                    "groupObjects": group_objects,
+                }),
             )
             .await?;
 
-        Ok(result)
+        Ok(data.payload)
     }
-    /// Executes a bulk mutation on the Shopify API.
-    ///
-    /// # Arguments
-    /// * `mutation_string` - The string representing the mutation.
-    /// * `staged_upload_path` - The path for the staged upload.
-    ///
-    /// # Returns
-    /// `Result<ShopifyBulkOperationRunQuery, ShopifyAPIError>` - A result containing the bulk operation or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let mutation_string = "{ updateProducts(...) { ... } }";
-    /// let staged_upload_path = "/path/to/upload";
-    /// let result = shopify.make_bulk_mutation(mutation_string, staged_upload_path).await?;
-    /// ```
-    pub async fn make_bulk_mutation(
+
+    pub async fn run_bulk_mutation(
         &self,
-        mutation_string: &str,
+        mutation: &str,
         staged_upload_path: &str,
-    ) -> Result<ShopifyBulkOperationRunQuery, crate::ShopifyAPIError> {
-        let bulk_mutation = r#"
-            mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
-                bulkOperationRunMutation(
-                    mutation: $mutation,
-                    stagedUploadPath: $stagedUploadPath,
-                ) {
-                    bulkOperation {
-                        id
-                        url
-                        partialDataUrl
-                        status
-                    }
-                    userErrors {
-                        field
-                        message
+    ) -> Result<BulkOperationPayload, ShopifyAPIError> {
+        let data: RunBulkMutationData = self
+            .graphql(
+                r#"
+                mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
+                    bulkOperationRunMutation(
+                        mutation: $mutation,
+                        stagedUploadPath: $stagedUploadPath
+                    ) {
+                        bulkOperation {
+                            id
+                            status
+                            url
+                            partialDataUrl
+                        }
+                        userErrors {
+                            field
+                            message
+                        }
                     }
                 }
-            }"#;
-
-        let result: ShopifyBulkOperationRunQuery = self
-            .graphql_query(
-                bulk_mutation,
+                "#,
                 &json!({
-                    "mutation": mutation_string,
+                    "mutation": mutation,
                     "stagedUploadPath": staged_upload_path,
                 }),
-                &vec![
-                    ReadJsonTreeSteps::Key("data"),
-                    ReadJsonTreeSteps::Key("bulkOperationRunMutation"),
-                ],
             )
             .await?;
 
-        Ok(result)
+        Ok(data.payload)
     }
 
-    /// Waits for the specified bulk operation to complete.
-    ///
-    /// # Arguments
-    /// * `id` - The identifier of the bulk operation.
-    ///
-    /// # Returns
-    /// `Result<ShopifyBulk, ShopifyAPIError>` - The final status of the bulk operation or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let bulk_id = "123456";
-    /// let bulk_status = shopify.wait_for_bulk(bulk_id);
-    /// ```
-    pub async fn wait_for_bulk(&self, id: &str) -> Result<ShopifyBulk, crate::ShopifyAPIError> {
-        let mut get_bulk = self.get_bulk_by_id(id).await;
-
-        if get_bulk.is_none() {
-            return Err(crate::ShopifyAPIError::Other(
-                "Bulk operation not found".to_string(),
-            ));
-        }
-
-        let mut bulk = get_bulk.unwrap();
-
-        while bulk.status == ShopifyBulkStatus::Running {
-            get_bulk = self.get_bulk_by_id(id).await;
-
-            if get_bulk.is_none() {
-                return Err(crate::ShopifyAPIError::Other(
-                    "Bulk operation not found".to_string(),
-                ));
-            }
-
-            match get_bulk.as_ref().unwrap().status {
-                ShopifyBulkStatus::Canceled
-                | ShopifyBulkStatus::Completed
-                | ShopifyBulkStatus::Expired
-                | ShopifyBulkStatus::Failed => {
-                    bulk = get_bulk.unwrap();
-
-                    break;
-                }
-                ShopifyBulkStatus::Canceling
-                | ShopifyBulkStatus::Created
-                | ShopifyBulkStatus::Running => {}
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
-
-        Ok(bulk)
-    }
-
-    /// Downloads data from a Shopify bulk operation.
-    ///
-    /// # Arguments
-    /// * `url` - The URL to download the bulk operation data.
-    ///
-    /// # Returns
-    /// `Result<Vec<serde_json::Value>, ShopifyAPIError>` - The downloaded data or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let url = "https://shopify.com/bulk/123456";
-    /// let data = Shopify::download_bulk(url).await?;
-    /// ```
-    pub async fn download_bulk(url: &str) -> Result<Vec<serde_json::Value>, ShopifyAPIError> {
-        let resp = reqwest::get(url).await?;
-        let body = resp.text().await?;
-
-        body.split('\n')
-            .filter(|line| !line.is_empty())
-            .map(|s| serde_json::from_str(s).map_err(ShopifyAPIError::JsonParseError))
-            .collect::<Result<Vec<serde_json::Value>, _>>()
-    }
-
-    /// Prepares a staged upload for a bulk operation.
-    ///
-    /// # Arguments
-    /// * `params` - Parameters for the staged upload.
-    ///
-    /// # Returns
-    /// `Result<ShopifyStagedUploadsCreateInputQuery, ShopifyAPIError>` - The result of the upload preparation or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let params = vec![StagedUploadsCreateInput { /* ... */ }];
-    /// let staged_upload = shopify.stage_upload_prepare(params).await?;
-    /// ```
-    pub async fn stage_upload_prepare(
+    pub async fn get_bulk_operation(
         &self,
-        params: Vec<StagedUploadsCreateInput>,
-    ) -> Result<ShopifyStagedUploadsCreateInputQuery, ShopifyAPIError> {
-        self.graphql_query(
-            r#"
-        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-            stagedUploadsCreate(input: $input) {
-              stagedTargets {
-                url
-                resourceUrl
-                parameters {
-                  name
-                  value
+        id: &str,
+    ) -> Result<Option<ShopifyBulkOperation>, ShopifyAPIError> {
+        let data: BulkOperationData = self
+            .graphql(
+                r#"
+                query bulkOperation($id: ID!) {
+                    bulkOperation(id: $id) {
+                        id
+                        status
+                        errorCode
+                        createdAt
+                        completedAt
+                        objectCount
+                        fileSize
+                        url
+                        partialDataUrl
+                    }
                 }
-              }
-              userErrors {
-                field
-                message
-              }
-            }
-          }
-          "#,
-            &json!({
-                "input": params
-            }),
-            &vec![
-                ReadJsonTreeSteps::Key("data"),
-                ReadJsonTreeSteps::Key("stagedUploadsCreate"),
-            ],
-        )
-        .await
-    }
-
-    /// Generates a URL for a staged upload.
-    ///
-    /// # Arguments
-    /// * `filename` - The name of the file to upload.
-    /// * `mime_type` - The MIME type of the file.
-    ///
-    /// # Returns
-    /// `Result<StagedMediaUploadTarget, ShopifyAPIError>` - The generated URL for the upload or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let filename = "data.json";
-    /// let mime_type = "application/json";
-    /// let upload_url = shopify.generate_staged_upload_url(filename, mime_type).await?;
-    /// ```
-    pub async fn generate_staged_upload_url(
-        &self,
-        filename: &str,
-        mime_type: &str,
-    ) -> Result<StagedMediaUploadTarget, ShopifyAPIError> {
-        let staged_upload_input = StagedUploadsCreateInput {
-            file_size: None,
-            filename: filename.to_string(),
-            http_method: Some("POST".to_string()),
-            mime_type: mime_type.to_string(),
-            resource: StagedUploadTargetGenerateUploadResourceInput::BulkMutationVariables,
-        };
-
-        let response = self.stage_upload_prepare(vec![staged_upload_input]).await?;
-
-        if let Some(errors) = response.user_errors {
-            if !errors.is_empty() {
-                return Err(ShopifyAPIError::Other(
-                    "Error while creating staged upload URL".to_string(),
-                ));
-            }
-        }
-
-        if let Some(staged_targets) = response.staged_targets {
-            if let Some(target) = staged_targets.first() {
-                return Ok(target.clone());
-            }
-        }
-
-        Err(ShopifyAPIError::Other(
-            "Unable to generate staged upload URL".to_string(),
-        ))
-    }
-
-    /// Uploads a JSON file for a bulk operation.
-    ///
-    /// # Arguments
-    /// * `data` - The JSON data to upload.
-    ///
-    /// # Returns
-    /// `Result<String, ShopifyAPIError>` - The key of the uploaded object or an error.
-    ///
-    /// # Example
-    /// ```ts,no_run
-    /// let data = vec![json!({ "key": "value" })];
-    /// let key = shopify.stage_upload_json(data).await?;
-    /// ```
-    pub async fn stage_upload_json(&self, data: Vec<Value>) -> Result<String, ShopifyAPIError> {
-        let jsonl_data = data
-            .into_iter()
-            .map(|item| serde_json::to_string(&item).unwrap())
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        let upload_url = self
-            .generate_staged_upload_url("bulk_op_vars", "application/jsonl")
+                "#,
+                &json!({ "id": id }),
+            )
             .await?;
 
-        let mut form = reqwest::multipart::Form::new();
+        Ok(data.bulk_operation)
+    }
 
-        let mut key = String::from("");
+    pub async fn list_bulk_operations(
+        &self,
+        filter: BulkOperationsFilter,
+    ) -> Result<BulkOperationConnection, ShopifyAPIError> {
+        let first = if filter.first == 0 { 10 } else { filter.first };
+        let data: BulkOperationsData = self
+            .graphql(
+                r#"
+                query bulkOperations($first: Int!, $query: String, $after: String) {
+                    bulkOperations(first: $first, query: $query, after: $after) {
+                        edges {
+                            cursor
+                            node {
+                                id
+                                status
+                                errorCode
+                                createdAt
+                                completedAt
+                                objectCount
+                                fileSize
+                                url
+                                partialDataUrl
+                            }
+                        }
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                    }
+                }
+                "#,
+                &json!({
+                    "first": first,
+                    "query": filter.query,
+                    "after": filter.after,
+                }),
+            )
+            .await?;
 
-        for param in upload_url.parameters {
-            if param.name == "key" {
-                key = param.value.clone();
+        Ok(data.bulk_operations)
+    }
+
+    pub async fn wait_for_bulk(
+        &self,
+        id: &str,
+        options: BulkWaitOptions,
+    ) -> Result<ShopifyBulkOperation, ShopifyAPIError> {
+        let started_at = Instant::now();
+
+        loop {
+            let operation = self.get_bulk_operation(id).await?.ok_or_else(|| {
+                ShopifyAPIError::Other(format!("bulk operation `{id}` was not found"))
+            })?;
+
+            if operation.status.is_terminal() {
+                return Ok(operation);
             }
 
-            form = form.text(param.name, param.value);
+            if let Some(timeout) = options.timeout {
+                if started_at.elapsed() >= timeout {
+                    return Err(ShopifyAPIError::Timeout(format!(
+                        "bulk operation `{id}` did not finish within {timeout:?}"
+                    )));
+                }
+            }
+
+            tokio::time::sleep(options.poll_interval).await;
+        }
+    }
+
+    pub async fn stage_upload_jsonl<T>(&self, data: &[T]) -> Result<String, ShopifyAPIError>
+    where
+        T: Serialize,
+    {
+        let jsonl_data = data
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<String>, _>>()?
+            .join("\n");
+
+        let target = self
+            .create_staged_upload("bulk_op_vars", "text/jsonl")
+            .await?;
+
+        let mut staged_upload_path = String::new();
+        let mut form = reqwest::multipart::Form::new();
+
+        for parameter in target.parameters {
+            if parameter.name == "key" {
+                staged_upload_path = parameter.value.clone();
+            }
+            form = form.text(parameter.name, parameter.value);
         }
 
-        let file_part = reqwest::multipart::Part::bytes(jsonl_data.as_bytes().to_vec())
+        let file_part = reqwest::multipart::Part::bytes(jsonl_data.into_bytes())
             .file_name("bulk_op_vars")
-            .mime_str("application/jsonl")
-            .unwrap();
+            .mime_str("text/jsonl")
+            .map_err(|err| ShopifyAPIError::Other(err.to_string()))?;
 
         form = form.part("file", file_part);
-
-        let client = reqwest::Client::new();
-        client
-            .post(&upload_url.url)
+        self.client()
+            .post(&target.url)
             .multipart(form)
             .send()
             .await?
             .error_for_status()?;
 
-        Ok(key)
+        if staged_upload_path.is_empty() {
+            return Err(ShopifyAPIError::Other(
+                "staged upload did not return a key parameter".to_string(),
+            ));
+        }
+
+        Ok(staged_upload_path)
+    }
+
+    pub async fn download_bulk_jsonl<T>(url: &str) -> Result<Vec<T>, ShopifyAPIError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let body = reqwest::get(url).await?.error_for_status()?.text().await?;
+        parse_jsonl(&body)
+    }
+
+    async fn create_staged_upload(
+        &self,
+        filename: &str,
+        mime_type: &str,
+    ) -> Result<StagedMediaUploadTarget, ShopifyAPIError> {
+        let input = StagedUploadsCreateInput {
+            filename: filename.to_string(),
+            mime_type: mime_type.to_string(),
+            resource: StagedUploadResource::BulkMutationVariables,
+            http_method: "POST".to_string(),
+            file_size: None,
+        };
+
+        let data: StagedUploadsData = self
+            .graphql(
+                r#"
+                mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+                    stagedUploadsCreate(input: $input) {
+                        stagedTargets {
+                            url
+                            resourceUrl
+                            parameters {
+                                name
+                                value
+                            }
+                        }
+                        userErrors {
+                            field
+                            message
+                        }
+                    }
+                }
+                "#,
+                &json!({ "input": [input] }),
+            )
+            .await?;
+
+        if !data.staged_uploads_create.user_errors.is_empty() {
+            return Err(ShopifyAPIError::Other(format!(
+                "stagedUploadsCreate returned errors: {:?}",
+                data.staged_uploads_create.user_errors
+            )));
+        }
+
+        data.staged_uploads_create
+            .staged_targets
+            .into_iter()
+            .next()
+            .ok_or_else(|| ShopifyAPIError::Other("no staged upload target returned".to_string()))
+    }
+}
+
+pub fn parse_jsonl<T>(body: &str) -> Result<Vec<T>, ShopifyAPIError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    body.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(ShopifyAPIError::JsonParseError))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_jsonl_bulk_results() {
+        let parsed: Vec<serde_json::Value> = parse_jsonl("{\"id\":1}\n{\"id\":2}\n\n").unwrap();
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["id"], 1);
     }
 }

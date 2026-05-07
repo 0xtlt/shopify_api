@@ -152,7 +152,7 @@ pub enum ReadJsonTreeSteps<'a> {
 /// This function returns an error if the json tree is not found
 pub fn read_json_tree<'a>(
     json_value: &'a serde_json::Value,
-    path: &Vec<ReadJsonTreeSteps>,
+    path: &[ReadJsonTreeSteps],
 ) -> Result<&'a serde_json::Value, ReadJsonTreeError> {
     let mut actual_value: &serde_json::Value = json_value;
 

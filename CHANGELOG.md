@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+- Breaking: refactor the client around Shopify Admin GraphQL API `2026-04` and newer.
+- Breaking: remove the public REST module and built-in Shopify schema JSON files.
+- Add: `ShopifyAuth` for static access tokens, client credentials, and expiring offline token refresh.
+- Add: structured GraphQL responses through `graphql_raw` and typed data extraction through `graphql`.
+- Add: dynamic Admin schema download at runtime and through the `shopify-api` CLI behind the `cli` feature.
+- Updated: bulk operations now use `bulkOperation(id:)`, `bulkOperations`, `text/jsonl` staged uploads, and configurable polling.
+
 ## 0.9.6
 
 - Security: update `openssl` to `0.10.79` in `Cargo.lock` to resolve Dependabot alerts affecting the optional `native-tls` feature path.
