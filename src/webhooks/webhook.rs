@@ -1,108 +1,214 @@
-use super::ShopifyWebhook;
-use crate::{rest::ShopifyAPIRestType, utils::ReadJsonTreeSteps, Shopify, ShopifyAPIError};
+use super::WebhookSubscription;
+use crate::{Shopify, ShopifyAPIError};
+use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+struct WebhookSubscriptionsData {
+    #[serde(rename = "webhookSubscriptions")]
+    webhook_subscriptions: WebhookSubscriptionConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookSubscriptionConnection {
+    edges: Vec<WebhookSubscriptionEdge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookSubscriptionEdge {
+    node: WebhookSubscriptionNode,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookSubscriptionNode {
+    id: String,
+    topic: String,
+    format: String,
+    uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookCreateData {
+    #[serde(rename = "webhookSubscriptionCreate")]
+    webhook_subscription_create: WebhookMutationPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookDeleteData {
+    #[serde(rename = "webhookSubscriptionDelete")]
+    webhook_subscription_delete: WebhookDeletePayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookMutationPayload {
+    #[serde(rename = "webhookSubscription")]
+    webhook_subscription: Option<WebhookSubscriptionNode>,
+    #[serde(rename = "userErrors")]
+    user_errors: Vec<WebhookUserError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookDeletePayload {
+    #[serde(rename = "deletedWebhookSubscriptionId")]
+    deleted_webhook_subscription_id: Option<String>,
+    #[serde(rename = "userErrors")]
+    user_errors: Vec<WebhookUserError>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct WebhookUserError {
+    field: Option<Vec<String>>,
+    message: String,
+}
+
+impl From<WebhookSubscriptionNode> for WebhookSubscription {
+    fn from(node: WebhookSubscriptionNode) -> Self {
+        Self {
+            id: node.id,
+            topic: node.topic,
+            format: node.format,
+            uri: node.uri,
+        }
+    }
+}
 
 impl Shopify {
-    pub async fn list_webhooks(&self) -> Result<Vec<ShopifyWebhook>, ShopifyAPIError> {
-        self.rest_query::<Vec<ShopifyWebhook>>(
-            &ShopifyAPIRestType::Get("webhooks.json", &HashMap::new()),
-            &Some(vec![ReadJsonTreeSteps::Key("webhooks")]),
-        )
-        .await
+    pub async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, ShopifyAPIError> {
+        let data: WebhookSubscriptionsData = self
+            .graphql(
+                r#"
+                query webhookSubscriptions {
+                    webhookSubscriptions(first: 250) {
+                        edges {
+                            node {
+                                id
+                                topic
+                                format
+                                uri
+                            }
+                        }
+                    }
+                }
+                "#,
+                &json!({}),
+            )
+            .await?;
+
+        Ok(data
+            .webhook_subscriptions
+            .edges
+            .into_iter()
+            .map(|edge| edge.node.into())
+            .collect())
     }
+
     pub async fn add_webhook(
         &self,
         address: &str,
         topic: &str,
         format: &str,
-    ) -> Result<ShopifyWebhook, ShopifyAPIError> {
-        let webhook_data = json!({
-            "webhook": {
-                "address": address,
-                "topic": topic,
-                "format": format
-            }
-        });
+    ) -> Result<WebhookSubscription, ShopifyAPIError> {
+        let data: WebhookCreateData = self
+            .graphql(
+                r#"
+                mutation webhookSubscriptionCreate(
+                    $topic: WebhookSubscriptionTopic!,
+                    $uri: String!,
+                    $format: WebhookSubscriptionFormat!
+                ) {
+                    webhookSubscriptionCreate(
+                        topic: $topic,
+                        webhookSubscription: {
+                            uri: $uri,
+                            format: $format
+                        }
+                    ) {
+                        webhookSubscription {
+                            id
+                            topic
+                            format
+                            uri
+                        }
+                        userErrors {
+                            field
+                            message
+                        }
+                    }
+                }
+                "#,
+                &json!({
+                    "topic": topic,
+                    "uri": address,
+                    "format": format,
+                }),
+            )
+            .await?;
 
-        self.rest_query::<ShopifyWebhook>(
-            &ShopifyAPIRestType::Post("webhooks.json", &HashMap::new(), &webhook_data),
-            &Some(vec![ReadJsonTreeSteps::Key("webhook")]),
-        )
-        .await
-    }
-    pub async fn edit_webhook(
-        &self,
-        webhook_id: u64,
-        new_address: &str,
-    ) -> Result<ShopifyWebhook, ShopifyAPIError> {
-        let webhook_data = json!({
-            "webhook": {
-                "id": webhook_id,
-                "address": new_address,
-            }
-        });
+        if !data.webhook_subscription_create.user_errors.is_empty() {
+            return Err(ShopifyAPIError::Other(format!(
+                "webhookSubscriptionCreate returned errors: {:?}",
+                data.webhook_subscription_create.user_errors
+            )));
+        }
 
-        let endpoint = format!("webhooks/{}.json", webhook_id);
-        self.rest_query::<ShopifyWebhook>(
-            &ShopifyAPIRestType::Put(&endpoint, &HashMap::new(), &webhook_data),
-            &Some(vec![ReadJsonTreeSteps::Key("webhook")]),
-        )
-        .await
+        data.webhook_subscription_create
+            .webhook_subscription
+            .map(Into::into)
+            .ok_or_else(|| ShopifyAPIError::Other("no webhook subscription returned".to_string()))
     }
-    pub async fn delete_webhook(
-        &self,
-        webhook_id: u64,
-    ) -> Result<serde_json::Value, ShopifyAPIError> {
-        let endpoint = format!("webhooks/{}.json", webhook_id);
-        self.rest_query::<serde_json::Value>(
-            &ShopifyAPIRestType::Delete(&endpoint, &HashMap::new()),
-            &None,
-        )
-        .await
+
+    pub async fn delete_webhook(&self, webhook_id: &str) -> Result<(), ShopifyAPIError> {
+        let data: WebhookDeleteData = self
+            .graphql(
+                r#"
+                mutation webhookSubscriptionDelete($id: ID!) {
+                    webhookSubscriptionDelete(id: $id) {
+                        deletedWebhookSubscriptionId
+                        userErrors {
+                            field
+                            message
+                        }
+                    }
+                }
+                "#,
+                &json!({ "id": webhook_id }),
+            )
+            .await?;
+
+        if !data.webhook_subscription_delete.user_errors.is_empty() {
+            return Err(ShopifyAPIError::Other(format!(
+                "webhookSubscriptionDelete returned errors: {:?}",
+                data.webhook_subscription_delete.user_errors
+            )));
+        }
+
+        data.webhook_subscription_delete
+            .deleted_webhook_subscription_id
+            .map(|_| ())
+            .ok_or_else(|| ShopifyAPIError::Other("webhook was not deleted".to_string()))
     }
+
     pub async fn webhook_auto_config(
         &self,
         desired_webhooks: Vec<(&str, &str, &str)>,
-        // api_version: &str,
     ) -> Result<(), ShopifyAPIError> {
         let existing_webhooks = self.list_webhooks().await?;
-
-        log::debug!("Existing webhooks: {:?}", existing_webhooks);
-
-        let mut webhooks_to_import: Vec<(&str, &str, &str)> = Vec::new();
-        let mut webhooks_to_delete: Vec<u64> = Vec::new();
-        let mut webhooks_treated: Vec<u64> = Vec::new();
-
-        for (address, topic, format) in desired_webhooks {
-            let mut webhook_found = false;
-            for webhook in &existing_webhooks {
-                if webhook.address == address && webhook.topic == topic && webhook.format == format
-                {
-                    webhook_found = true;
-                    webhooks_treated.push(webhook.id);
-                    break;
-                }
-            }
-
-            if !webhook_found {
-                webhooks_to_import.push((address, topic, format));
-            }
-        }
+        let mut desired = desired_webhooks;
 
         for webhook in &existing_webhooks {
-            if !webhooks_treated.contains(&webhook.id) {
-                webhooks_to_delete.push(webhook.id);
+            let matches_desired = desired.iter().position(|(address, topic, format)| {
+                webhook.uri == *address && webhook.topic == *topic && webhook.format == *format
+            });
+
+            if let Some(index) = matches_desired {
+                desired.remove(index);
+            } else {
+                self.delete_webhook(&webhook.id).await?;
             }
         }
 
-        log::debug!("Webhooks to delete: {:?}", webhooks_to_delete);
-        for webhook_id in webhooks_to_delete {
-            self.delete_webhook(webhook_id).await?;
-        }
-
-        log::debug!("Webhooks to import: {:?}", webhooks_to_import);
-        for (address, topic, format) in webhooks_to_import {
+        for (address, topic, format) in desired {
             self.add_webhook(address, topic, format).await?;
         }
 

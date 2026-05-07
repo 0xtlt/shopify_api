@@ -1,7 +1,7 @@
 #![cfg(feature = "warp-wrapper")]
 pub mod warp;
 
-// https://shopify.dev/docs/api/admin-rest/2024-04/resources/webhook#event-topics
+// Webhook payload structs used by the optional warp receiver.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
