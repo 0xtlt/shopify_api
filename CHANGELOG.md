@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.6
+
+- Security: update `openssl` to `0.10.79` in `Cargo.lock` to resolve Dependabot alerts affecting the optional `native-tls` feature path.
+
+## 0.9.5
+
 - Add: `debug` feature added, enabled by default
 
 ## 0.9.1
