@@ -14,20 +14,20 @@ authors = ["Thomas Tastet"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["form", "json", "multipart"] }
 serde_json = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 log = "0.4"
-simple_logger = "4.3"
-thiserror = "1.0"
-hmac = { version = "0.12", optional = true }
-sha2 = { version = "0.10", optional = true }
+simple_logger = "5.2.0"
+thiserror = "2.0.18"
+hmac = { version = "0.13.0", optional = true }
+sha2 = { version = "0.11.0", optional = true }
 base64 = { version = "0.22", optional = true }
-warp = { version = "0.3", optional = true, default-features = false, features = [] }
+warp = { version = "0.4.3", optional = true, default-features = false, features = [] }
 bytes = { version = "1.6", optional = true }
-graphql_client = { version = "0.14", optional = true }
+graphql_client = { version = "0.16.0", optional = true }
 serde_path_to_error = { version = "0.1", optional = true }
 clap = { version = "4.6.1", features = ["derive"], optional = true }
 
@@ -44,8 +44,12 @@ default = ["rustls"]
 warp-wrapper = ["warp", "bytes"]
 graphql-client = ["graphql_client"]
 full = ["webhooks", "graphql-client", "debug", "cli"]
-rustls = ["reqwest/rustls-tls"]
+rustls = ["reqwest/rustls"]
 native-tls = ["reqwest/native-tls"]
 webhooks = ["hmac", "sha2", "base64"]
 debug = ["serde_path_to_error"]
 cli = ["dep:clap"]
+hmac = ["dep:hmac"]
+sha2 = ["dep:sha2"]
+warp = ["dep:warp"]
+graphql_client = ["dep:graphql_client"]
