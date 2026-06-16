@@ -152,7 +152,7 @@ pub enum ReadJsonTreeSteps<'a> {
 /// This function returns an error if the json tree is not found
 pub fn read_json_tree<'a>(
     json_value: &'a serde_json::Value,
-    path: &Vec<ReadJsonTreeSteps>,
+    path: &[ReadJsonTreeSteps],
 ) -> Result<&'a serde_json::Value, ReadJsonTreeError> {
     let mut actual_value: &serde_json::Value = json_value;
 
@@ -179,7 +179,8 @@ pub fn deserialize_from_value<T>(value: serde_json::Value) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
-    let json_string = serde_json::to_string(&value).unwrap();
+    let json_string = serde_json::to_string(&value)
+        .map_err(|err| format!("Error serializing JSON value: {err}"))?;
     let jd = &mut serde_json::Deserializer::from_str(&json_string);
 
     let result: Result<T, _> = serde_path_to_error::deserialize(jd);
@@ -210,7 +211,8 @@ pub fn deserialize_from_str<T>(json_string: &str) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
-    let value: serde_json::Value = serde_json::from_str(json_string).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(json_string).map_err(|err| format!("Error parsing JSON: {err}"))?;
     deserialize_from_value(value)
 }
 
@@ -219,12 +221,7 @@ pub fn deserialize_from_str<T>(json_string: &str) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
-    use serde_json::Error;
-
-    let value: serde_json::Value = serde_json::from_str(json_string).unwrap();
-    let result: Result<T, Error> = serde_json::from_value(value);
-
-    match result {
+    match serde_json::from_str(json_string) {
         Ok(customer) => Ok(customer),
         Err(err) => Err(format!("Error parsing JSON: {}", err)),
     }

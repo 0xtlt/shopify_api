@@ -2,110 +2,163 @@
 
 [![crates.io](https://img.shields.io/crates/v/shopify_api.svg)](https://crates.io/crates/shopify_api)
 [![Documentation](https://docs.rs/shopify_api/badge.svg)](https://docs.rs/shopify_api)
-[![MIT/Apache-2 licensed](https://img.shields.io/crates/l/shopify_api.svg)](./LICENSE.txt)
+[![MIT licensed](https://img.shields.io/crates/l/shopify_api.svg)](./LICENSE.txt)
 [![CI](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml)
-[![Issues](https://img.shields.io/github/issues/0xtlt/shopify_api)](https://img.shields.io/github/issues/0xtlt/shopify_api)
 
-An ergonomic, Shopify API Client for Rust.
+An ergonomic Shopify Admin GraphQL API client for Rust.
 
-- GraphQL API support with automatic data deserialization
-- [Changelog](CHANGELOG.md)
+Version `0.10` is a breaking refactor for Shopify Admin API `2026-04` and newer:
 
-## Example
+- GraphQL-first client
+- `2026-04` minimum API version
+- static access tokens, client credentials tokens, and expiring offline tokens
+- dynamic GraphQL schema download
+- Bulk operations using the 2026 `bulkOperation(id:)` and `bulkOperations` APIs
 
-This asynchronous example uses [Tokio](https://tokio.rs) and enables some
-optional features, so your `Cargo.toml` could look like this:
+## Install
 
 ```toml
 [dependencies]
-shopify_api = "0.9"
+shopify_api = "0.10"
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 ```
 
-And then the code:
+## Basic GraphQL
 
 ```rust,no_run
-use shopify_api::*;
-use shopify_api::utils::ReadJsonTreeSteps;
-use serde::{Deserialize};
+use serde::Deserialize;
+use shopify_api::{Shopify, ShopifyAuth, ShopifyConfig};
+
+#[derive(Deserialize)]
+struct ShopQuery {
+    shop: Shop,
+}
 
 #[derive(Deserialize)]
 struct Shop {
-  name: String,
+    name: String,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let shopify = Shopify::new("hello", "world", String::from("2024-04"), None);
+async fn main() -> Result<(), shopify_api::ShopifyAPIError> {
+    let shopify = Shopify::new(
+        "my-shop",
+        ShopifyAuth::AccessToken("shpat_...".to_string()),
+        ShopifyConfig::default(),
+    )?;
 
-  let graphql_query = r#"
-    query {
-      shop {
-      name
-     }
-  }"#;
+    let data: ShopQuery = shopify
+        .graphql(
+            "query { shop { name } }",
+            &serde_json::json!({}),
+        )
+        .await?;
 
-  let variables = serde_json::json!({});
-  let json_finder = vec![ReadJsonTreeSteps::Key("data"), ReadJsonTreeSteps::Key("shop")];
-
-  let shop: Shop = shopify.graphql_query(graphql_query, &variables, &json_finder).await.unwrap();
-  Ok(())
+    println!("{}", data.shop.name);
+    Ok(())
 }
 ```
 
-### Or with the `new` GraphQl Client!
+## Client Credentials
 
-```toml
-[dependencies]
-shopify_api = "0.9"
-tokio = { version = "1", features = ["full"] }
-graphql_client = "0.14.0"
+```rust,ignore
+use shopify_api::{Shopify, ShopifyAuth, ShopifyConfig};
+
+let shopify = Shopify::new(
+    "my-shop",
+    ShopifyAuth::client_credentials("client_id", "client_secret"),
+    ShopifyConfig::default(),
+)?;
 ```
 
-```graphql
-query GetShop {
-  shop {
-    name
-  }
-}
-```
+The crate acquires and refreshes 24-hour client-credentials tokens automatically. Add a `TokenStore` in `ShopifyConfig` when your app needs to persist refreshed token data.
+
+## Dynamic GraphQL Schema
+
+Public Shopify schema:
 
 ```rust,no_run
-use shopify_api::*;
-use graphql_client::GraphQLQuery;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "./graphql.schema.json",
-    query_path = "graphql/getShop.graphql",
-    response_derives = "Debug"
-)]
-struct GetShop;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let shopify = Shopify::new("hello", "world", String::from("2024-04"), None);
-
-  let shop_info = connector
-        .shopify
-        .post_graphql::<GetShop>(get_shop::Variables {})
-        .await;
-
-  Ok(())
-}
+# async fn example() -> Result<(), shopify_api::ShopifyAPIError> {
+let schema = shopify_api::download_public_admin_schema("2026-04").await?;
+# Ok(())
+# }
 ```
 
-### Download the graphql schema
+```bash
+cargo install shopify_api --features cli
+shopify-api schema download \
+  --public \
+  --api-version 2026-04 \
+  --out graphql.schema.json
+```
 
-#### You can download one from this repository
+This uses Shopify's public schema proxy:
 
-- [2024-04](./schemas/2024-04.json)
+```txt
+https://shopify.dev/admin-graphql-direct-proxy/2026-04
+```
 
-#### Or download it from the Shopify Graphql API with [the following command](./schema_dl.graphql)
+The proxy is a GraphQL endpoint for introspection requests, not a static `GET` file.
 
-> [!WARNING]
-> Sometimes you'll get an error with the GraphQLQuery derive caused my a missing struct, most of the time, you can fix it by adding the missing struct by importing it from [the types import](./src/graphql/types.rs) or you can create a new struct with the same name as the missing one, and the derive will work.
+Runtime:
 
-## License
+```rust,no_run
+use shopify_api::{Shopify, ShopifyAuth, ShopifyConfig};
 
-Licensed under MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+# async fn example() -> Result<(), shopify_api::ShopifyAPIError> {
+let shopify = Shopify::new(
+    "my-shop",
+    ShopifyAuth::AccessToken("shpat_...".to_string()),
+    ShopifyConfig::default(),
+)?;
+let schema = shopify.download_admin_schema().await?;
+# Ok(())
+# }
+```
+
+CLI:
+
+```bash
+cargo install shopify_api --features cli
+shopify-api schema download \
+  --shop my-shop \
+  --access-token "$SHOPIFY_ACCESS_TOKEN" \
+  --out shop.graphql.schema.json
+```
+
+The crate no longer ships built-in Shopify schema JSON files. Use the CLI output as the `schema_path` for `graphql_client`.
+
+## Bulk Operations
+
+```rust,no_run
+use shopify_api::{BulkWaitOptions, Shopify, ShopifyAuth, ShopifyConfig};
+
+# async fn example() -> Result<(), shopify_api::ShopifyAPIError> {
+let shopify = Shopify::new(
+    "my-shop",
+    ShopifyAuth::AccessToken("shpat_...".to_string()),
+    ShopifyConfig::default(),
+)?;
+
+let payload = shopify
+    .run_bulk_query("{ products { edges { node { id title } } } }")
+    .await?;
+
+let operation = payload.bulk_operation.unwrap();
+let operation = shopify
+    .wait_for_bulk(&operation.id, BulkWaitOptions::default())
+    .await?;
+
+if let Some(url) = operation.url {
+    let rows: Vec<serde_json::Value> = Shopify::download_bulk_jsonl(&url).await?;
+    println!("{} rows", rows.len());
+}
+# Ok(())
+# }
+```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).

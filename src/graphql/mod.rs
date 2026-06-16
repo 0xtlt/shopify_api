@@ -1,157 +1,146 @@
 mod bulk_query;
 pub mod types;
-use crate::{
-    utils::{self, read_json_tree, ReadJsonTreeSteps},
-    Shopify, ShopifyAPIError,
-};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{utils::ReadJsonTreeSteps, Shopify, ShopifyAPIError};
+
+pub use bulk_query::*;
+
 #[cfg(feature = "graphql-client")]
-use graphql_client::{GraphQLQuery, Response as GraphQLResponse};
-use reqwest::{Client, Response};
+use graphql_client::{GraphQLQuery, Response as GraphQLClientResponse};
 
-async fn shopify_graphql_query<VariablesType, ReturnType>(
-    (shopify, graphql_query, variables, json_finder): &(
-        &Shopify,
-        &str,
-        &VariablesType,
-        &Vec<ReadJsonTreeSteps<'_>>,
-    ),
-) -> Result<ReturnType, ShopifyAPIError>
-where
-    VariablesType: serde::Serialize,
-    ReturnType: serde::de::DeserializeOwned,
-{
-    // Prepare the client
-    let client = reqwest::Client::new();
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("X-Shopify-Access-Token", shopify.api_key.parse().unwrap());
-    let req_body: &serde_json::Value = &serde_json::json!({
-        "query": graphql_query,
-        "variables": variables
-    });
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphqlResponse<T> {
+    pub data: Option<T>,
+    pub errors: Option<Vec<GraphqlError>>,
+    pub extensions: Option<serde_json::Value>,
+}
 
-    // Connection Response
-    let res: Response = client
-        .post(shopify.get_query_url())
-        .headers(headers)
-        .body(req_body.to_string())
-        .send()
-        .await?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphqlError {
+    pub message: String,
+    pub locations: Option<serde_json::Value>,
+    pub path: Option<serde_json::Value>,
+    pub extensions: Option<serde_json::Value>,
+}
 
-    // Connection data
-    let body = res.text().await;
-
-    if body.is_err() {
-        return Err(ShopifyAPIError::ResponseBroken);
-    }
-    let body = body.unwrap();
-
-    log::debug!(
-        "shopify (url: {}) response: {body} \n With body: {}",
-        shopify.get_query_url(),
-        req_body.to_string()
-    );
-
-    let json: serde_json::Value =
-        serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)?;
-
-    // Check if the query was THROTTLED
-    if let Some(error) = json["errors"]["01"]["extensions"]["code"].as_str() {
-        if error == "THROTTLED" {
-            return Err(ShopifyAPIError::Throttled);
-        }
-    }
-
-    let json = match read_json_tree(&json, json_finder) {
-        Ok(v) => v,
-        Err(_) => {
-            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
-        }
-    };
-
-    let end_json: ReturnType = match serde_json::from_value(json.to_owned()) {
-        Ok(v) => v,
-        Err(_) => {
-            // The shopify response is not wanted json
-            return Err(ShopifyAPIError::NotWantedJsonFormat(json.to_string()));
-        }
-    };
-
-    Ok(end_json)
+#[derive(Debug, Serialize)]
+struct GraphqlRequest<'a, Variables> {
+    query: &'a str,
+    variables: &'a Variables,
 }
 
 impl Shopify {
-    /// Query graphql shopify api
-    /// # Example
-    /// ```
-    /// use shopify_api::*;
-    /// use shopify_api::utils::ReadJsonTreeSteps;
-    /// use serde::{Deserialize};
-    ///
-    /// #[derive(Deserialize)]
-    /// struct Shop {
-    ///    name: String,
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///   let shopify = Shopify::new(env!("TEST_SHOP_NAME"), env!("TEST_KEY"), String::from("2024-04"), None);
-    ///   let graphql_query = r#"
-    ///      query {
-    ///         shop {
-    ///          name
-    ///         }
-    ///     }
-    ///   "#;
-    ///   let variables = serde_json::json!({});
-    ///   let json_finder = vec![ReadJsonTreeSteps::Key("data"), ReadJsonTreeSteps::Key("shop")];
-    ///   let shop: Shop = shopify.graphql_query(graphql_query, &variables, &json_finder).await.unwrap();
-    ///
-    ///   assert_eq!(shop.name, "Rust api");
-    /// }
-    ///
-    ///
-    /// ```
-    pub async fn graphql_query<ReturnType, VariablesType>(
+    pub async fn graphql_raw<Variables>(
         &self,
-        graphql_query: &str,
-        variables: &VariablesType,
-        json_finder: &Vec<ReadJsonTreeSteps<'_>>,
+        query: &str,
+        variables: &Variables,
+    ) -> Result<GraphqlResponse<serde_json::Value>, ShopifyAPIError>
+    where
+        Variables: serde::Serialize,
+    {
+        let token = self.access_token().await?;
+        let response = self
+            .client()
+            .post(self.get_query_url())
+            .header("Content-Type", "application/json")
+            .header("X-Shopify-Access-Token", token)
+            .json(&GraphqlRequest { query, variables })
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let status = response.status();
+        let body = response.text().await?;
+        log::debug!("shopify graphql response status: {status}");
+        serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)
+    }
+
+    pub async fn graphql<ReturnType, Variables>(
+        &self,
+        query: &str,
+        variables: &Variables,
     ) -> Result<ReturnType, ShopifyAPIError>
     where
         ReturnType: serde::de::DeserializeOwned,
-        VariablesType: serde::Serialize,
+        Variables: serde::Serialize,
     {
-        let args = (self, graphql_query, variables, json_finder);
-        let response_json = utils::retry_async(
-            10,
-            shopify_graphql_query::<VariablesType, ReturnType>,
-            &args,
-        )
-        .await?;
+        let response = self.graphql_raw(query, variables).await?;
+        if let Some(errors) = response.errors {
+            if errors.iter().any(|error| {
+                error
+                    .extensions
+                    .as_ref()
+                    .and_then(|v| v.get("code"))
+                    .and_then(|v| v.as_str())
+                    == Some("THROTTLED")
+            }) {
+                return Err(ShopifyAPIError::Throttled);
+            }
+            return Err(ShopifyAPIError::GraphqlErrors(errors));
+        }
 
-        Ok(response_json)
+        let data = response.data.ok_or(ShopifyAPIError::MissingGraphqlData)?;
+        serde_json::from_value(data).map_err(ShopifyAPIError::JsonParseError)
     }
 
-    // V2 Query using graphql_client
+    pub async fn graphql_at_path<ReturnType, Variables>(
+        &self,
+        query: &str,
+        variables: &Variables,
+        json_finder: &[ReadJsonTreeSteps<'_>],
+    ) -> Result<ReturnType, ShopifyAPIError>
+    where
+        ReturnType: serde::de::DeserializeOwned,
+        Variables: serde::Serialize,
+    {
+        let data = self
+            .graphql::<serde_json::Value, _>(query, variables)
+            .await?;
+        let value = crate::utils::read_json_tree(&data, json_finder)
+            .map_err(|_| ShopifyAPIError::NotWantedJsonFormat(data.to_string()))?;
+        serde_json::from_value(value.to_owned()).map_err(ShopifyAPIError::JsonParseError)
+    }
+
     #[cfg(feature = "graphql-client")]
     pub async fn post_graphql<Q: GraphQLQuery>(
         &self,
         variables: Q::Variables,
-    ) -> Result<GraphQLResponse<Q::ResponseData>, reqwest::Error> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Content-Type", "application/json".parse().unwrap());
-        headers.insert("X-Shopify-Access-Token", self.api_key.parse().unwrap());
-
-        // TODO: put the client in the struct to avoid creating it every time
-        let client = Client::builder()
-            .user_agent(crate::VERSION)
-            .default_headers(headers)
-            .build()?;
-
+    ) -> Result<GraphQLClientResponse<Q::ResponseData>, ShopifyAPIError> {
+        let token = self.access_token().await?;
         let body = Q::build_query(variables);
-        let reqwest_response = client.post(self.get_query_url()).json(&body).send().await?;
+        let response = self
+            .client()
+            .post(self.get_query_url())
+            .header("Content-Type", "application/json")
+            .header("X-Shopify-Access-Token", token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
 
-        reqwest_response.json().await
+        response
+            .json::<GraphQLClientResponse<Q::ResponseData>>()
+            .await
+            .map_err(ShopifyAPIError::ConnectionFailed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graphql_response_parses_errors_and_extensions() {
+        let raw = r#"{
+            "errors": [{"message": "boom", "extensions": {"code": "THROTTLED"}}],
+            "extensions": {"cost": {"actualQueryCost": 1}}
+        }"#;
+
+        let parsed: GraphqlResponse<serde_json::Value> = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(parsed.errors.unwrap()[0].message, "boom");
+        assert!(parsed.extensions.unwrap().get("cost").is_some());
     }
 }

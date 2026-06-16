@@ -1,3 +1,6 @@
 /target
 .DS_Store
 Makefile
+.env
+.env.*
+!.env.example
