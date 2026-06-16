@@ -51,8 +51,9 @@ impl Shopify {
             .await?
             .error_for_status()?;
 
+        let status = response.status();
         let body = response.text().await?;
-        log::debug!("shopify graphql response: {body}");
+        log::debug!("shopify graphql response status: {status}");
         serde_json::from_str(&body).map_err(ShopifyAPIError::JsonParseError)
     }
 

@@ -46,53 +46,69 @@ impl Shopify {
                             ));
                         }
 
-                        let str_body = std::str::from_utf8(&body).unwrap();
-
-                        log::debug!("Received webhook topic: {} with body {}", topic, str_body);
-
-                        let webhook_data: ShopifyWebhook = match topic.as_str() {
-                            "inventory_items/create" => ShopifyWebhook::InventoryItemCreate(
-                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
-                                    .unwrap(),
-                            ),
-                            "inventory_items/update" => ShopifyWebhook::InventoryItemUpdate(
-                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
-                                    .unwrap(),
-                            ),
-                            "inventory_items/delete" => ShopifyWebhook::InventoryItemDelete(
-                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
-                                    .unwrap(),
-                            ),
-                            "inventory_levels/connect" => ShopifyWebhook::InventoryLevelConnect(
-                                crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
-                                    .unwrap(),
-                            ),
-                            "inventory_levels/disconnect" => {
-                                ShopifyWebhook::InventoryLevelDisconnect(
-                                    crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
-                                        .unwrap(),
-                                )
+                        let str_body = match std::str::from_utf8(&body) {
+                            Ok(body) => body,
+                            Err(_) => {
+                                return Ok::<_, Rejection>(warp::reply::with_status(
+                                    warp::reply::html("Invalid UTF-8 payload"),
+                                    StatusCode::BAD_REQUEST,
+                                ));
                             }
-                            "inventory_levels/update" => ShopifyWebhook::InventoryLevelUpdate(
+                        };
+
+                        log::debug!("Received webhook topic: {}", topic);
+
+                        let webhook_data = match topic.as_str() {
+                            "inventory_items/create" => {
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .map(ShopifyWebhook::InventoryItemCreate)
+                            }
+                            "inventory_items/update" => {
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .map(ShopifyWebhook::InventoryItemUpdate)
+                            }
+                            "inventory_items/delete" => {
+                                crate::utils::deserialize_from_str::<InventoryItem>(str_body)
+                                    .map(ShopifyWebhook::InventoryItemDelete)
+                            }
+                            "inventory_levels/connect" => {
                                 crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
-                                    .unwrap(),
-                            ),
-                            "customers/create" => ShopifyWebhook::CustomersCreate(
-                                crate::utils::deserialize_from_str::<Customer>(str_body).unwrap(),
-                            ),
-                            "customers/update" => ShopifyWebhook::CustomersUpdate(
-                                crate::utils::deserialize_from_str::<Customer>(str_body).unwrap(),
-                            ),
-                            "orders/create" => ShopifyWebhook::OrdersCreate(
-                                crate::utils::deserialize_from_str(str_body).unwrap(),
-                            ),
-                            "orders/updated" => ShopifyWebhook::OrdersUpdated(
-                                crate::utils::deserialize_from_str(str_body).unwrap(),
-                            ),
-                            _ => ShopifyWebhook::Other((
-                                topic,
-                                serde_json::from_str(str_body).unwrap(),
-                            )),
+                                    .map(ShopifyWebhook::InventoryLevelConnect)
+                            }
+                            "inventory_levels/disconnect" => {
+                                crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
+                                    .map(ShopifyWebhook::InventoryLevelDisconnect)
+                            }
+                            "inventory_levels/update" => {
+                                crate::utils::deserialize_from_str::<InventoryLevel>(str_body)
+                                    .map(ShopifyWebhook::InventoryLevelUpdate)
+                            }
+                            "customers/create" => {
+                                crate::utils::deserialize_from_str::<Customer>(str_body)
+                                    .map(ShopifyWebhook::CustomersCreate)
+                            }
+                            "customers/update" => {
+                                crate::utils::deserialize_from_str::<Customer>(str_body)
+                                    .map(ShopifyWebhook::CustomersUpdate)
+                            }
+                            "orders/create" => crate::utils::deserialize_from_str(str_body)
+                                .map(ShopifyWebhook::OrdersCreate),
+                            "orders/updated" => crate::utils::deserialize_from_str(str_body)
+                                .map(ShopifyWebhook::OrdersUpdated),
+                            _ => serde_json::from_str(str_body)
+                                .map(|value| ShopifyWebhook::Other((topic.clone(), value)))
+                                .map_err(|err| format!("Error parsing JSON: {err}")),
+                        };
+
+                        let webhook_data = match webhook_data {
+                            Ok(webhook_data) => webhook_data,
+                            Err(err) => {
+                                log::info!("Failed to parse webhook payload: {}", err);
+                                return Ok::<_, Rejection>(warp::reply::with_status(
+                                    warp::reply::html("Invalid JSON payload"),
+                                    StatusCode::BAD_REQUEST,
+                                ));
+                            }
                         };
 
                         match callback_clone(webhook_data, shopify.clone(), extra.clone()).await {
