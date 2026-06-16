@@ -14,7 +14,7 @@ authors = ["Thomas Tastet"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.13.3", default-features = false, features = ["form", "json", "multipart"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "multipart"] }
 serde_json = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
