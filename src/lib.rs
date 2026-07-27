@@ -63,6 +63,13 @@ impl TryFrom<String> for ApiVersion {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ShopifyApi {
+    Admin,
+    Storefront,
+    Custom(&'static str),
+}
+
 #[derive(Clone)]
 pub struct ShopifyConfig {
     pub api_version: ApiVersion,
@@ -70,6 +77,7 @@ pub struct ShopifyConfig {
     pub shared_secret: Option<String>,
     pub token_store: Option<Arc<dyn TokenStore>>,
     pub token_refresh_leeway: chrono::Duration,
+    pub api: ShopifyApi,
     pub user_agent: String,
 }
 
@@ -80,6 +88,7 @@ impl Default for ShopifyConfig {
             #[cfg(feature = "webhooks")]
             shared_secret: None,
             token_store: None,
+            api: ShopifyApi::Admin,
             token_refresh_leeway: chrono::Duration::minutes(5),
             user_agent: VERSION.to_string(),
         }
@@ -164,8 +173,14 @@ impl Shopify {
         let shop = shop.as_ref().to_string();
         let shop_domain = normalize_shop_domain(&shop);
         let query_url = format!(
-            "https://{}/admin/api/{}/graphql.json",
-            shop_domain, config.api_version
+            "https://{}/{}/api/{}/graphql.json",
+            shop_domain,
+            match config.api {
+                ShopifyApi::Admin => "admin",
+                ShopifyApi::Storefront => "api",
+                ShopifyApi::Custom(path) => path,
+            },
+            config.api_version
         );
         let token_url = format!("https://{}/admin/oauth/access_token", shop_domain);
         let mut headers = reqwest::header::HeaderMap::new();
@@ -181,6 +196,7 @@ impl Shopify {
             api_version: config.api_version,
             #[cfg(feature = "webhooks")]
             shared_secret: config.shared_secret,
+            // We don't need to store config.api in Shopify struct since it's used in query_url
             auth: Arc::new(Mutex::new(auth)),
             client,
             query_url,
