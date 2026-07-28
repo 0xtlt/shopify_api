@@ -9,7 +9,7 @@ pub mod utils;
 #[cfg(feature = "webhooks")]
 pub mod webhooks;
 
-pub use auth::{ShopifyAuth, TokenData, TokenStore};
+pub use auth::{ShopifyAuth, StorefrontAuth, TokenData, TokenStore};
 pub use graphql::{
     BulkConcurrencyOptions, BulkOperationPayload, BulkOperationsFilter, BulkWaitOptions,
     GraphqlError, GraphqlResponse, ShopifyBulkOperation, ShopifyBulkStatus,
@@ -63,6 +63,12 @@ impl TryFrom<String> for ApiVersion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShopifyApi {
+    Admin,
+    Storefront,
+}
+
 #[derive(Clone)]
 pub struct ShopifyConfig {
     pub api_version: ApiVersion,
@@ -89,9 +95,10 @@ impl Default for ShopifyConfig {
 #[derive(Clone)]
 pub struct Shopify {
     pub api_version: ApiVersion,
+    api: ShopifyApi,
     #[cfg(feature = "webhooks")]
     pub(crate) shared_secret: Option<String>,
-    auth: Arc<Mutex<ShopifyAuth>>,
+    auth: Arc<Mutex<auth::ApiAuth>>,
     client: reqwest::Client,
     query_url: String,
     token_url: String,
@@ -105,6 +112,7 @@ impl std::fmt::Debug for Shopify {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shopify")
             .field("api_version", &self.api_version)
+            .field("api", &self.api)
             .field("query_url", &self.query_url)
             .field("token_url", &self.token_url)
             .field("shop", &self.shop)
@@ -151,6 +159,9 @@ pub enum ShopifyAPIError {
     #[error("operation timed out: {0}")]
     Timeout(String),
 
+    #[error("{operation} is only supported by the Admin API")]
+    AdminApiRequired { operation: &'static str },
+
     #[error("other error: {0}")]
     Other(String),
 }
@@ -161,12 +172,42 @@ impl Shopify {
         auth: ShopifyAuth,
         config: ShopifyConfig,
     ) -> Result<Self, ShopifyAPIError> {
+        Self::new_with_auth(shop, auth::ApiAuth::Admin(auth), config)
+    }
+
+    /// Creates a client for Shopify's Storefront GraphQL API.
+    ///
+    /// The authentication mode determines whether requests are tokenless or use
+    /// Shopify's public or private Storefront access-token header.
+    pub fn new_storefront(
+        shop: impl AsRef<str>,
+        auth: StorefrontAuth,
+        config: ShopifyConfig,
+    ) -> Result<Self, ShopifyAPIError> {
+        Self::new_with_auth(shop, auth::ApiAuth::Storefront(auth), config)
+    }
+
+    fn new_with_auth(
+        shop: impl AsRef<str>,
+        auth: auth::ApiAuth,
+        config: ShopifyConfig,
+    ) -> Result<Self, ShopifyAPIError> {
         let shop = shop.as_ref().to_string();
         let shop_domain = normalize_shop_domain(&shop);
-        let query_url = format!(
-            "https://{}/admin/api/{}/graphql.json",
-            shop_domain, config.api_version
-        );
+        let api = match &auth {
+            auth::ApiAuth::Admin(_) => ShopifyApi::Admin,
+            auth::ApiAuth::Storefront(_) => ShopifyApi::Storefront,
+        };
+        let query_url = match api {
+            ShopifyApi::Admin => format!(
+                "https://{}/admin/api/{}/graphql.json",
+                shop_domain, config.api_version
+            ),
+            ShopifyApi::Storefront => format!(
+                "https://{}/api/{}/graphql.json",
+                shop_domain, config.api_version
+            ),
+        };
         let token_url = format!("https://{}/admin/oauth/access_token", shop_domain);
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -179,6 +220,7 @@ impl Shopify {
 
         Ok(Self {
             api_version: config.api_version,
+            api,
             #[cfg(feature = "webhooks")]
             shared_secret: config.shared_secret,
             auth: Arc::new(Mutex::new(auth)),
@@ -200,6 +242,10 @@ impl Shopify {
         &self.shop_domain
     }
 
+    pub fn api(&self) -> ShopifyApi {
+        self.api
+    }
+
     pub fn get_query_url(&self) -> &str {
         &self.query_url
     }
@@ -212,13 +258,45 @@ impl Shopify {
         &self.client
     }
 
+    pub(crate) fn ensure_admin_api(&self, operation: &'static str) -> Result<(), ShopifyAPIError> {
+        if self.api == ShopifyApi::Admin {
+            Ok(())
+        } else {
+            Err(ShopifyAPIError::AdminApiRequired { operation })
+        }
+    }
+
     pub fn replace_auth(&self, auth: ShopifyAuth) -> Result<(), ShopifyAPIError> {
         let mut current = self
             .auth
             .lock()
             .map_err(|_| ShopifyAPIError::Authentication("auth lock poisoned".to_string()))?;
-        *current = auth;
-        Ok(())
+        match &mut *current {
+            auth::ApiAuth::Admin(current) => {
+                *current = auth;
+                Ok(())
+            }
+            auth::ApiAuth::Storefront(_) => Err(ShopifyAPIError::Authentication(
+                "cannot replace Admin authentication on a Storefront API client".to_string(),
+            )),
+        }
+    }
+
+    /// Replaces authentication on an existing Storefront API client.
+    pub fn replace_storefront_auth(&self, auth: StorefrontAuth) -> Result<(), ShopifyAPIError> {
+        let mut current = self
+            .auth
+            .lock()
+            .map_err(|_| ShopifyAPIError::Authentication("auth lock poisoned".to_string()))?;
+        match &mut *current {
+            auth::ApiAuth::Storefront(current) => {
+                *current = auth;
+                Ok(())
+            }
+            auth::ApiAuth::Admin(_) => Err(ShopifyAPIError::Authentication(
+                "cannot replace Storefront authentication on an Admin API client".to_string(),
+            )),
+        }
     }
 }
 
@@ -272,6 +350,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(shopify.shop_domain(), "example.myshopify.com");
+        assert_eq!(shopify.api(), ShopifyApi::Admin);
         assert_eq!(
             shopify.get_query_url(),
             "https://example.myshopify.com/admin/api/2026-04/graphql.json"
@@ -280,5 +359,62 @@ mod tests {
             shopify.token_url(),
             "https://example.myshopify.com/admin/oauth/access_token"
         );
+    }
+
+    #[test]
+    fn storefront_endpoint_uses_the_storefront_graphql_path() {
+        let shopify = Shopify::new_storefront(
+            "https://example.myshopify.com/",
+            StorefrontAuth::Tokenless,
+            ShopifyConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(shopify.shop_domain(), "example.myshopify.com");
+        assert_eq!(shopify.api(), ShopifyApi::Storefront);
+        assert_eq!(
+            shopify.get_query_url(),
+            "https://example.myshopify.com/api/2026-04/graphql.json"
+        );
+    }
+
+    #[test]
+    fn authentication_can_only_be_replaced_for_the_selected_api() {
+        let admin = Shopify::new(
+            "example",
+            ShopifyAuth::AccessToken("admin-token".to_string()),
+            ShopifyConfig::default(),
+        )
+        .unwrap();
+        let storefront = Shopify::new_storefront(
+            "example",
+            StorefrontAuth::Tokenless,
+            ShopifyConfig::default(),
+        )
+        .unwrap();
+
+        assert!(admin
+            .replace_storefront_auth(StorefrontAuth::Tokenless)
+            .is_err());
+        assert!(storefront
+            .replace_auth(ShopifyAuth::AccessToken("admin-token".to_string()))
+            .is_err());
+    }
+
+    #[test]
+    fn storefront_clients_reject_admin_only_operations() {
+        let storefront = Shopify::new_storefront(
+            "example",
+            StorefrontAuth::Tokenless,
+            ShopifyConfig::default(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            storefront.ensure_admin_api("bulk operations"),
+            Err(ShopifyAPIError::AdminApiRequired {
+                operation: "bulk operations"
+            })
+        ));
     }
 }

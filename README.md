@@ -5,13 +5,14 @@
 [![MIT licensed](https://img.shields.io/crates/l/shopify_api.svg)](./LICENSE.txt)
 [![CI](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml)
 
-An ergonomic Shopify Admin GraphQL API client for Rust.
+An ergonomic Shopify Admin and Storefront GraphQL API client for Rust.
 
 Version `0.10` is a breaking refactor for Shopify Admin API `2026-04` and newer:
 
 - GraphQL-first client
 - `2026-04` minimum API version
 - static access tokens, client credentials tokens, and expiring offline tokens
+- Storefront tokenless, public-token, and private-token access
 - dynamic GraphQL schema download
 - Bulk operations using the 2026 `bulkOperation(id:)` and `bulkOperations` APIs
 
@@ -74,6 +75,34 @@ let shopify = Shopify::new(
 ```
 
 The crate acquires and refreshes 24-hour client-credentials tokens automatically. Add a `TokenStore` in `ShopifyConfig` when your app needs to persist refreshed token data.
+
+## Storefront GraphQL
+
+Use `Shopify::new_storefront` to target the Storefront GraphQL endpoint without changing
+existing Admin API clients:
+
+```rust,no_run
+use shopify_api::{Shopify, ShopifyConfig, StorefrontAuth};
+
+let shopify = Shopify::new_storefront(
+    "my-shop",
+    StorefrontAuth::PrivateAccessToken("private-storefront-token".to_string()),
+    ShopifyConfig::default(),
+)?;
+# Ok::<(), shopify_api::ShopifyAPIError>(())
+```
+
+`StorefrontAuth` supports:
+
+- `Tokenless`
+- `PublicAccessToken`, sent as `X-Shopify-Storefront-Access-Token`
+- `PrivateAccessToken`, sent as `Shopify-Storefront-Private-Token`
+
+All Storefront clients use:
+
+```txt
+https://{shop}.myshopify.com/api/{version}/graphql.json
+```
 
 ## Dynamic GraphQL Schema
 

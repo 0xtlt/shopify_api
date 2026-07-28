@@ -40,16 +40,16 @@ impl Shopify {
     where
         Variables: serde::Serialize,
     {
-        let token = self.access_token().await?;
-        let response = self
+        let request = self
             .client()
             .post(self.get_query_url())
             .header("Content-Type", "application/json")
-            .header("X-Shopify-Access-Token", token)
-            .json(&GraphqlRequest { query, variables })
-            .send()
-            .await?
-            .error_for_status()?;
+            .json(&GraphqlRequest { query, variables });
+        let request = match self.graphql_auth_header().await? {
+            Some((name, value)) => request.header(name, value),
+            None => request,
+        };
+        let response = request.send().await?.error_for_status()?;
 
         let status = response.status();
         let body = response.text().await?;
@@ -108,17 +108,17 @@ impl Shopify {
         &self,
         variables: Q::Variables,
     ) -> Result<GraphQLClientResponse<Q::ResponseData>, ShopifyAPIError> {
-        let token = self.access_token().await?;
         let body = Q::build_query(variables);
-        let response = self
+        let request = self
             .client()
             .post(self.get_query_url())
             .header("Content-Type", "application/json")
-            .header("X-Shopify-Access-Token", token)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?;
+            .json(&body);
+        let request = match self.graphql_auth_header().await? {
+            Some((name, value)) => request.header(name, value),
+            None => request,
+        };
+        let response = request.send().await?.error_for_status()?;
 
         response
             .json::<GraphQLClientResponse<Q::ResponseData>>()
