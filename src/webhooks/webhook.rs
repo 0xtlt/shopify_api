@@ -75,7 +75,6 @@ impl From<WebhookSubscriptionNode> for WebhookSubscription {
 
 impl Shopify {
     pub async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, ShopifyAPIError> {
-        self.ensure_admin_api("webhook listing")?;
         let data: WebhookSubscriptionsData = self
             .graphql(
                 r#"
@@ -110,7 +109,6 @@ impl Shopify {
         topic: &str,
         format: &str,
     ) -> Result<WebhookSubscription, ShopifyAPIError> {
-        self.ensure_admin_api("webhook creation")?;
         let data: WebhookCreateData = self
             .graphql(
                 r#"
@@ -161,7 +159,6 @@ impl Shopify {
     }
 
     pub async fn delete_webhook(&self, webhook_id: &str) -> Result<(), ShopifyAPIError> {
-        self.ensure_admin_api("webhook deletion")?;
         let data: WebhookDeleteData = self
             .graphql(
                 r#"
@@ -196,7 +193,6 @@ impl Shopify {
         &self,
         desired_webhooks: Vec<(&str, &str, &str)>,
     ) -> Result<(), ShopifyAPIError> {
-        self.ensure_admin_api("webhook configuration")?;
         let existing_webhooks = self.list_webhooks().await?;
         let mut desired = desired_webhooks;
 

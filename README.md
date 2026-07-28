@@ -78,16 +78,16 @@ The crate acquires and refreshes 24-hour client-credentials tokens automatically
 
 ## Storefront GraphQL
 
-Use `Shopify::new_storefront` to target the Storefront GraphQL endpoint without changing
-existing Admin API clients:
+Use the separate `ShopifyStorefront` client to target the Storefront GraphQL endpoint.
+Admin-only methods such as bulk operations are not exposed on this type:
 
 ```rust,no_run
-use shopify_api::{Shopify, ShopifyConfig, StorefrontAuth};
+use shopify_api::{ShopifyStorefront, StorefrontAuth, StorefrontConfig};
 
-let shopify = Shopify::new_storefront(
+let storefront = ShopifyStorefront::new(
     "my-shop",
     StorefrontAuth::PrivateAccessToken("private-storefront-token".to_string()),
-    ShopifyConfig::default(),
+    StorefrontConfig::default(),
 )?;
 # Ok::<(), shopify_api::ShopifyAPIError>(())
 ```

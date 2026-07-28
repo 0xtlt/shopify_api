@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add: Storefront GraphQL clients with tokenless, public-token, and private-token authentication.
+- Add: a separate `ShopifyStorefront` GraphQL client with tokenless, public-token, and private-token authentication.
 - Preserve: existing `Shopify::new` behavior for Admin API clients.
 
 ## 0.10.0

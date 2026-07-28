@@ -211,7 +211,6 @@ impl Shopify {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.ensure_admin_api("bulk queries")?;
         let queries = queries.into_iter().collect::<Vec<_>>();
         if queries.len() > options.max_concurrent {
             return Err(ShopifyAPIError::Other(format!(
@@ -239,7 +238,6 @@ impl Shopify {
         M: AsRef<str>,
         P: AsRef<str>,
     {
-        self.ensure_admin_api("bulk mutations")?;
         let mutations = mutations.into_iter().collect::<Vec<_>>();
         if mutations.len() > options.max_concurrent {
             return Err(ShopifyAPIError::Other(format!(
@@ -272,7 +270,6 @@ impl Shopify {
         query: &str,
         group_objects: bool,
     ) -> Result<BulkOperationPayload, ShopifyAPIError> {
-        self.ensure_admin_api("bulk queries")?;
         let data: RunBulkQueryData = self
             .graphql(
                 r#"
@@ -306,7 +303,6 @@ impl Shopify {
         mutation: &str,
         staged_upload_path: &str,
     ) -> Result<BulkOperationPayload, ShopifyAPIError> {
-        self.ensure_admin_api("bulk mutations")?;
         let data: RunBulkMutationData = self
             .graphql(
                 r#"
@@ -342,7 +338,6 @@ impl Shopify {
         &self,
         id: &str,
     ) -> Result<Option<ShopifyBulkOperation>, ShopifyAPIError> {
-        self.ensure_admin_api("bulk operation lookup")?;
         let data: BulkOperationData = self
             .graphql(
                 r#"
@@ -371,7 +366,6 @@ impl Shopify {
         &self,
         filter: BulkOperationsFilter,
     ) -> Result<BulkOperationConnection, ShopifyAPIError> {
-        self.ensure_admin_api("bulk operation listing")?;
         let first = if filter.first == 0 { 10 } else { filter.first };
         let data: BulkOperationsData = self
             .graphql(
@@ -415,7 +409,6 @@ impl Shopify {
         id: &str,
         options: BulkWaitOptions,
     ) -> Result<ShopifyBulkOperation, ShopifyAPIError> {
-        self.ensure_admin_api("bulk operation polling")?;
         let started_at = Instant::now();
 
         loop {
@@ -443,7 +436,6 @@ impl Shopify {
     where
         T: Serialize,
     {
-        self.ensure_admin_api("staged uploads")?;
         let jsonl_data = data
             .iter()
             .map(serde_json::to_string)

@@ -29,7 +29,6 @@ pub async fn download_public_admin_schema(
 impl Shopify {
     /// Downloads the Admin GraphQL schema through the authenticated shop endpoint.
     pub async fn download_admin_schema(&self) -> Result<serde_json::Value, ShopifyAPIError> {
-        self.ensure_admin_api("Admin schema download")?;
         let response = self
             .graphql_raw(ADMIN_SCHEMA_INTROSPECTION_QUERY, &json!({}))
             .await?;
