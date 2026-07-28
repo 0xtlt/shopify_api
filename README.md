@@ -5,13 +5,14 @@
 [![MIT licensed](https://img.shields.io/crates/l/shopify_api.svg)](./LICENSE.txt)
 [![CI](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml/badge.svg)](https://github.com/0xtlt/shopify_api/actions/workflows/ci.yml)
 
-An ergonomic Shopify Admin GraphQL API client for Rust.
+An ergonomic Shopify Admin and Storefront GraphQL API client for Rust.
 
 Version `0.10` is a breaking refactor for Shopify Admin API `2026-04` and newer:
 
 - GraphQL-first client
 - `2026-04` minimum API version
 - static access tokens, client credentials tokens, and expiring offline tokens
+- Storefront tokenless, public-token, and private-token access
 - dynamic GraphQL schema download
 - Bulk operations using the 2026 `bulkOperation(id:)` and `bulkOperations` APIs
 
@@ -74,6 +75,61 @@ let shopify = Shopify::new(
 ```
 
 The crate acquires and refreshes 24-hour client-credentials tokens automatically. Add a `TokenStore` in `ShopifyConfig` when your app needs to persist refreshed token data.
+
+## Storefront GraphQL
+
+Use the separate `ShopifyStorefront` client to target the Storefront GraphQL endpoint.
+Admin-only methods such as bulk operations are not exposed on this type:
+
+```rust,no_run
+use shopify_api::{ShopifyStorefront, StorefrontAuth, StorefrontConfig};
+
+let storefront = ShopifyStorefront::new(
+    "my-shop",
+    StorefrontAuth::PrivateAccessToken("private-storefront-token".to_string()),
+    StorefrontConfig::default(),
+)?;
+# Ok::<(), shopify_api::ShopifyAPIError>(())
+```
+
+`StorefrontAuth` supports:
+
+- `Tokenless`, for the limited set of fields that Shopify makes available without a token; queries have a maximum complexity of 1,000
+- `PublicAccessToken`, sent as `X-Shopify-Storefront-Access-Token`
+- `PrivateAccessToken`, sent as `Shopify-Storefront-Private-Token`; keep this token secret and use it only from a server
+
+When a server-side private-token request originates from buyer traffic, pass the
+trusted buyer IP per request:
+
+```rust,no_run
+# use std::net::{IpAddr, Ipv4Addr};
+# use shopify_api::{ShopifyAPIError, ShopifyStorefront, StorefrontAuth, StorefrontConfig, StorefrontRequestContext};
+# async fn example() -> Result<(), ShopifyAPIError> {
+# let storefront = ShopifyStorefront::new(
+#     "my-shop",
+#     StorefrontAuth::PrivateAccessToken("private-storefront-token".to_string()),
+#     StorefrontConfig::default(),
+# )?;
+let context = StorefrontRequestContext::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)));
+let data: serde_json::Value = storefront
+    .graphql_with_context(
+        "query { shop { name } }",
+        &serde_json::json!({}),
+        &context,
+    )
+    .await?;
+# Ok(())
+# }
+```
+
+This sends `Shopify-Storefront-Buyer-IP`. Requests such as static site builds
+that aren't associated with a buyer can use the regular GraphQL methods.
+
+All Storefront clients use:
+
+```txt
+https://{shop}.myshopify.com/api/{version}/graphql.json
+```
 
 ## Dynamic GraphQL Schema
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add: a separate `ShopifyStorefront` GraphQL client with tokenless, public-token, and private-token authentication, including per-request buyer IP forwarding.
+- Preserve: existing `Shopify::new` behavior for Admin API clients.
+
 ## 0.10.0
 
 - Breaking: refactor the client around Shopify Admin GraphQL API `2026-04` and newer.
