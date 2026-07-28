@@ -16,7 +16,9 @@ pub use graphql::{
     GraphqlError, GraphqlResponse, ShopifyBulkOperation, ShopifyBulkStatus,
 };
 pub use schema::{download_public_admin_schema, SHOPIFY_DEV_ADMIN_SCHEMA_PROXY};
-pub use storefront::{ShopifyStorefront, StorefrontAuth, StorefrontConfig};
+pub use storefront::{
+    ShopifyStorefront, StorefrontAuth, StorefrontConfig, StorefrontRequestContext,
+};
 
 pub const DEFAULT_API_VERSION: &str = "2026-04";
 pub const MIN_API_VERSION: &str = "2026-04";

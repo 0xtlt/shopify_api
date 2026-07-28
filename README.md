@@ -94,9 +94,36 @@ let storefront = ShopifyStorefront::new(
 
 `StorefrontAuth` supports:
 
-- `Tokenless`
+- `Tokenless`, for the limited set of fields that Shopify makes available without a token; queries have a maximum complexity of 1,000
 - `PublicAccessToken`, sent as `X-Shopify-Storefront-Access-Token`
-- `PrivateAccessToken`, sent as `Shopify-Storefront-Private-Token`
+- `PrivateAccessToken`, sent as `Shopify-Storefront-Private-Token`; keep this token secret and use it only from a server
+
+When a server-side private-token request originates from buyer traffic, pass the
+trusted buyer IP per request:
+
+```rust,no_run
+# use std::net::{IpAddr, Ipv4Addr};
+# use shopify_api::{ShopifyAPIError, ShopifyStorefront, StorefrontAuth, StorefrontConfig, StorefrontRequestContext};
+# async fn example() -> Result<(), ShopifyAPIError> {
+# let storefront = ShopifyStorefront::new(
+#     "my-shop",
+#     StorefrontAuth::PrivateAccessToken("private-storefront-token".to_string()),
+#     StorefrontConfig::default(),
+# )?;
+let context = StorefrontRequestContext::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)));
+let data: serde_json::Value = storefront
+    .graphql_with_context(
+        "query { shop { name } }",
+        &serde_json::json!({}),
+        &context,
+    )
+    .await?;
+# Ok(())
+# }
+```
+
+This sends `Shopify-Storefront-Buyer-IP`. Requests such as static site builds
+that aren't associated with a buyer can use the regular GraphQL methods.
 
 All Storefront clients use:
 
