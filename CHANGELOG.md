@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1
+
+- Security: refresh `Cargo.lock` to pick up fixes for RUSTSEC-2026-0185, -0285, -0338, -0339, -0340, -0342, -0346, -0348, -0349, -0382 and -0383 (`quinn-proto`, `rustls`, `rustls-webpki`, `webpki-root-certs`).
+- Updated: raise minimum versions of `reqwest` (0.13.5), `thiserror` (2.0.21), `bytes` (1.12) and `clap` (4.6.7).
+
 ## 0.10.0
 
 - Breaking: refactor the client around Shopify Admin GraphQL API `2026-04` and newer.
