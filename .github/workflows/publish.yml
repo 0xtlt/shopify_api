@@ -20,8 +20,8 @@ jobs:
     needs:
       - call-ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
       # In dependency order: the schema and checker, the macro, then the client.
       - run: cargo publish --locked -p shopify_api_graphql
         env:

@@ -28,8 +28,8 @@ jobs:
     name: fmt, clippy, tests, docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
       - run: mise run check
 
@@ -37,7 +37,7 @@ jobs:
     name: Rust 1.88
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-features --locked
