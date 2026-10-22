@@ -190,8 +190,11 @@ impl fmt::Debug for Lines {
 /// return it.
 ///
 /// It holds one line at a time, and the rest of the chunk that line ends
-/// in: the memory it takes follows the line being read, not the file. Read it
-/// with [`BulkRows::next_row`], or as a [`Stream`].
+/// in: the memory it takes follows the lines being read, not the file. To
+/// avoid reallocating for every line, its buffer keeps the room the longest
+/// of the last 16 to 32 lines needed, and gives it back once lines stay four
+/// times smaller for that long, or when the file ends. Read it with
+/// [`BulkRows::next_row`], or as a [`Stream`].
 ///
 /// Lines are split on `\n`; a `\r` before it, a last line without one and
 /// blank lines are fine, and blank lines are skipped but counted.

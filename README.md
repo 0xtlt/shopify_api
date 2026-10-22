@@ -238,7 +238,7 @@ let operation = shopify.run_bulk_mutation(
 
 `bulk_query_rows` holds every row in a `Vec`. For an export of gigabytes,
 `bulk_query_stream` reads the file line by line as it downloads: memory
-follows the line being read, not the file.
+follows the lines being read (the longest of the last few dozen), not the file.
 
 ```rust,ignore
 let mut products = shopify

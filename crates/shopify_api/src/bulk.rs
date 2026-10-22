@@ -25,7 +25,7 @@
 //! downloads ([`BulkRows`]), and [`Shopify::bulk_query_grouped`] each
 //! top-level object with its nested objects ([`BulkGroups`]). Neither holds
 //! the file: [`BulkRows`] holds the line being read and the rest of the
-//! chunk it ends in; [`BulkGroups`] holds that, and the group being read,
+//! chunk it ends in, in a buffer sized for the longest recent line; [`BulkGroups`] holds that, and the group being read,
 //! its top-level object with every child read so far and their IDs. A
 //! product with 2,000 variants is held with its 2,000 variants.
 //!
@@ -708,8 +708,8 @@ impl Shopify {
     }
 
     /// Runs a bulk query to its end, then reads its results line by line
-    /// as they download: the memory it takes follows the line being read,
-    /// not the file. Fails when the operation does not complete.
+    /// as they download: the memory it takes follows the lines being read,
+    /// not the file (see [`BulkRows`]). Fails when the operation does not complete.
     ///
     /// The stream ends after some errors and goes on after others: see
     /// [`BulkRows`].
