@@ -37,6 +37,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 shopify_api_macros.workspace = true
 
 chrono.workspace = true
+# `Stream`, which the bulk downloads implement: the trait the async ecosystem shares.
+futures-core.workspace = true
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -54,7 +56,7 @@ clap = { workspace = true, optional = true }
 shopify_api_graphql = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "net", "io-util"] }
 trybuild.workspace = true
 
 [features]

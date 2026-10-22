@@ -93,8 +93,9 @@ pub enum Error {
         /// Shopify's `X-Request-Id`, which its support asks for. `Debug`
         /// shows it when it is made of hexadecimal digits and dashes.
         request_id: Option<String>,
-        /// The whole body, as it was received. It may hold secrets: read it
-        /// with [`Error::raw_http_body`]. Its `Debug` shows its length only.
+        /// The whole body, as it was received; of a bulk download, its first
+        /// MiB. It may hold secrets: read it with [`Error::raw_http_body`].
+        /// Its `Debug` shows its length only.
         raw_body: RawBody,
     },
 
@@ -391,8 +392,8 @@ impl Error {
         }
     }
 
-    /// The whole body of the answer, for [`Error::Http`], exactly as it was
-    /// received.
+    /// The body of the answer, for [`Error::Http`], exactly as it was
+    /// received: the whole body, or the first MiB of a bulk download.
     ///
     /// **It may contain secrets** (a token, a signed address): do not log it
     /// or show it to a user.

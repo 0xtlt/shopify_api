@@ -20,6 +20,12 @@
 //! # }
 //! ```
 //!
+//! [`Shopify::bulk_query_rows`] holds every row in memory. For an export
+//! of gigabytes, [`Shopify::bulk_query_stream`] reads the rows as the file
+//! downloads ([`BulkRows`]), and [`Shopify::bulk_query_grouped`] each
+//! top-level object with its nested objects ([`BulkGroups`]): the memory
+//! they take follows the longest line, not the file.
+//!
 //! The query of a bulk operation is a plain string. To have it checked when
 //! the crate compiles, declare it with [`graphql!`](crate::graphql!) and pass
 //! its `QUERY`:
@@ -45,8 +51,16 @@ use crate::transport::{HttpRequest, Method};
 use crate::{Error, Page, Result, Shopify, UserError};
 use shopify_api_macros::__graphql_internal as graphql;
 
-/// How long a download of results may take.
+mod rows;
+
+pub use rows::{BulkGroups, BulkRows, DEFAULT_MAX_LINE_LENGTH};
+
+/// How long a download waits for the answer, then for each chunk of it; a
+/// transport that does not stream gives it the whole download.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// What an [`Error::Http`] of a download keeps of the body: its first MiB.
+const ERROR_BODY_LIMIT: usize = 1024 * 1024;
 
 graphql! {
     mod run_query = file("graphql/operations/bulk_run_query.graphql");
@@ -617,45 +631,185 @@ impl Shopify {
     /// Runs a bulk query to its end and reads every line of its results as
     /// `T`. Fails when the operation does not complete.
     ///
+    /// The rows are collected in a `Vec`, up to the first error: for an
+    /// export too large for memory, read them one by one with
+    /// [`Shopify::bulk_query_stream`].
+    ///
     /// A nested connection writes its objects on lines of their own, with
     /// the `__parentId` of their parent: read the lines as `serde_json::Value`,
-    /// or as an enum of your types, to put them back together.
+    /// or as an enum of your types, to put them back together, or use
+    /// [`Shopify::bulk_query_grouped`].
     pub async fn bulk_query_rows<T: DeserializeOwned>(
         &self,
         query: &str,
         options: BulkWaitOptions,
     ) -> Result<Vec<T>> {
+        self.bulk_query_stream(query, options)
+            .await?
+            .collect()
+            .await
+    }
+
+    /// Runs a bulk query to its end, then reads its results line by line
+    /// as they download: the memory it takes follows the longest line, not
+    /// the file. Fails when the operation does not complete.
+    ///
+    /// The stream ends after some errors and goes on after others: see
+    /// [`BulkRows`].
+    ///
+    /// ```no_run
+    /// use serde::Deserialize;
+    /// use shopify_api::bulk::BulkWaitOptions;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Product {
+    ///     id: String,
+    ///     title: String,
+    /// }
+    ///
+    /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// let mut products = shopify
+    ///     .bulk_query_stream::<Product>(
+    ///         "{ products { edges { node { id title } } } }",
+    ///         BulkWaitOptions::default(),
+    ///     )
+    ///     .await?;
+    /// while let Some(product) = products.next_row().await {
+    ///     let product = product?;
+    ///     println!("{} {}", product.id, product.title);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bulk_query_stream<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        options: BulkWaitOptions,
+    ) -> Result<BulkRows<T>> {
         let operation = self.run_bulk_query(query).await?;
-        let operation = self.wait_for_bulk_operation(&operation.id, options).await?;
-        if operation.status != BulkOperationStatus::Completed {
-            return Err(not_completed(&operation));
-        }
-        match &operation.url {
-            Some(url) => self.download_bulk_results(url).await,
-            // An operation that found nothing has no file.
-            None => Ok(Vec::new()),
+        match self.completed_url(&operation.id, options).await? {
+            Some(url) => self.download_bulk_results_stream(&url).await,
+            None => Ok(BulkRows::new(None, "")),
         }
     }
 
-    /// Downloads the results of a bulk operation and reads each line as `T`.
+    /// Runs a bulk query with `groupObjects` to its end, then reads its
+    /// results one top-level object at a time, with the objects of its
+    /// nested connections, as they download. Fails when the operation does
+    /// not complete.
     ///
-    /// The file is held in memory while it is read: for an export of
-    /// gigabytes, download `url` with a client of your own and read it with
-    /// [`parse_jsonl`] chunk by chunk. The address is signed: errors leave
-    /// its query string out.
+    /// Grouping makes Shopify slower, and more likely to time out: use it
+    /// when you need the children with their parent. See [`BulkGroups`]
+    /// for the order it relies on and connections two levels deep.
+    ///
+    /// ```no_run
+    /// use serde::Deserialize;
+    /// use shopify_api::bulk::BulkWaitOptions;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Product {
+    ///     id: String,
+    ///     title: String,
+    /// }
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Variant {
+    ///     sku: Option<String>,
+    /// }
+    ///
+    /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// let mut products = shopify
+    ///     .bulk_query_grouped::<Product, Variant>(
+    ///         "{ products { edges { node { id title variants { edges { node { sku } } } } } } }",
+    ///         BulkWaitOptions::default(),
+    ///     )
+    ///     .await?;
+    /// while let Some(group) = products.next_group().await {
+    ///     let (product, variants) = group?;
+    ///     println!("{} has {} variants", product.title, variants.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bulk_query_grouped<P: DeserializeOwned, C: DeserializeOwned>(
+        &self,
+        query: &str,
+        options: BulkWaitOptions,
+    ) -> Result<BulkGroups<P, C>> {
+        let operation = self.run_bulk_query_grouped(query, true).await?;
+        match self.completed_url(&operation.id, options).await? {
+            Some(url) => self.download_bulk_results_grouped(&url).await,
+            None => Ok(BulkGroups::new(None, "")),
+        }
+    }
+
+    /// Waits for an operation, and returns the address of its results:
+    /// `None` when it found nothing.
+    async fn completed_url(&self, id: &str, options: BulkWaitOptions) -> Result<Option<String>> {
+        let operation = self.wait_for_bulk_operation(id, options).await?;
+        if operation.status != BulkOperationStatus::Completed {
+            return Err(not_completed(&operation));
+        }
+        Ok(operation.url)
+    }
+
+    /// Downloads the results of a bulk operation and reads each line as
+    /// `T`, up to the first error.
+    ///
+    /// The rows are collected in a `Vec`: for an export too large for
+    /// memory, use [`Shopify::download_bulk_results_stream`]. The address
+    /// is signed: errors leave its query string out.
     pub async fn download_bulk_results<T: DeserializeOwned>(&self, url: &str) -> Result<Vec<T>> {
+        self.download_bulk_results_stream(url)
+            .await?
+            .collect()
+            .await
+    }
+
+    /// Downloads the results of a bulk operation, its `url` or its
+    /// `partial_data_url`, and reads each line as `T` as it arrives. See
+    /// [`BulkRows`].
+    ///
+    /// It returns once the answer's headers arrive. An answer that is not a
+    /// success is an [`Error::Http`] with the first MiB of its body. The
+    /// address is signed: errors leave its query string out.
+    ///
+    /// The default transport waits 15 minutes at most for the answer, then
+    /// for each chunk, however long the whole download takes: read the rows
+    /// as they come, a storage server may close a connection left idle.
+    pub async fn download_bulk_results_stream<T: DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<BulkRows<T>> {
+        let body = self.open_bulk_results(url).await?;
+        Ok(BulkRows::new(Some(body), url))
+    }
+
+    /// [`Shopify::download_bulk_results_stream`], one top-level object and
+    /// its children at a time. The operation must have run with
+    /// `groupObjects`: see [`BulkGroups`].
+    pub async fn download_bulk_results_grouped<P: DeserializeOwned, C: DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<BulkGroups<P, C>> {
+        let body = self.open_bulk_results(url).await?;
+        Ok(BulkGroups::new(Some(body), url))
+    }
+
+    async fn open_bulk_results(&self, url: &str) -> Result<crate::transport::BodyStream> {
         let request = HttpRequest::new(Method::Get, url).with_timeout(DOWNLOAD_TIMEOUT);
         let response = self
             .shared
             .endpoint
             .transport
-            .send(request)
+            .send_streaming(request)
             .await
             .map_err(|source| Error::transport(url, source))?;
         if !response.is_success() {
+            let response = response.into_response(ERROR_BODY_LIMIT).await;
             return Err(Error::http(url, &response));
         }
-        parse_jsonl(&response.body)
+        Ok(response.body)
     }
 }
 
@@ -674,7 +828,8 @@ fn started<O: Serialize, E: Serialize>(
     operation_of(&operation)
 }
 
-/// Reads each non-empty line of a JSONL file as `T`.
+/// Reads each non-empty line of a JSONL file already in memory as `T`. To
+/// read one as it downloads, see [`BulkRows`].
 pub fn parse_jsonl<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>> {
     body.split(|byte| *byte == b'\n')
         .enumerate()

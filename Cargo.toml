@@ -24,6 +24,7 @@ shopify_api_macros = { path = "crates/shopify_api_macros", version = "=1.0.0" }
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 clap = { version = "4.6", features = ["derive", "env"] }
+futures-core = { version = "0.3.31", default-features = false }
 graphql-parser = "0.4"
 hex = "0.4"
 hmac = "0.13"

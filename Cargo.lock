@@ -1436,6 +1436,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "futures-core",
  "hex",
  "hmac",
  "reqwest",

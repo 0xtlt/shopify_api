@@ -2,7 +2,8 @@
 //!
 //! A [`MockTransport`] records the requests a client sends and answers them
 //! with what the test scripts: queued answers first, in order, then a
-//! handler, then `404`.
+//! handler, then `404`. A queued answer may stream its body in chunks you
+//! choose ([`MockTransport::push_chunks`]), to test the bulk downloads.
 //!
 //! ```
 //! use shopify_api::graphql;
@@ -29,7 +30,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::transport::{BoxFuture, HttpRequest, HttpResponse, Transport, TransportError};
+use crate::transport::{
+    BoxFuture, HttpRequest, HttpResponse, StreamingResponse, Transport, TransportError,
+};
 use crate::{RetryPolicy, Shopify};
 
 type Handler = dyn Fn(&HttpRequest) -> Result<HttpResponse, TransportError> + Send + Sync;
@@ -40,9 +43,15 @@ pub struct MockTransport {
     state: Arc<Mutex<State>>,
 }
 
+/// A queued answer.
+enum Answer {
+    Whole(Result<HttpResponse, TransportError>),
+    Streaming(StreamingResponse),
+}
+
 #[derive(Default)]
 struct State {
-    queue: VecDeque<Result<HttpResponse, TransportError>>,
+    queue: VecDeque<Answer>,
     handler: Option<Arc<Handler>>,
     requests: Vec<HttpRequest>,
 }
@@ -81,13 +90,57 @@ impl MockTransport {
 
     /// Answers the next request that finds no answer queued before this one.
     pub fn push(&self, response: HttpResponse) -> &Self {
-        self.state().queue.push_back(Ok(response));
+        self.state().queue.push_back(Answer::Whole(Ok(response)));
         self
     }
 
     /// Fails the next request, as a network failure.
     pub fn push_error(&self, error: TransportError) -> &Self {
-        self.state().queue.push_back(Err(error));
+        self.state().queue.push_back(Answer::Whole(Err(error)));
+        self
+    }
+
+    /// Answers the next request with `status` and a body sent in `chunks`,
+    /// each produced when it is read: split a body at the positions a test
+    /// needs, or generate a large one lazily.
+    ///
+    /// ```
+    /// use shopify_api::testing::{MockTransport, client};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> shopify_api::Result<()> {
+    /// let mock = MockTransport::new();
+    /// // A line cut in two, and a two-byte character cut in two.
+    /// mock.push_chunks(200, [&b"{\"title\":\"Caf"[..], b"\xc3", b"\xa9\"}\n{\"ti", b"tle\":\"Hat\"}"]);
+    /// let shopify = client(&mock);
+    ///
+    /// let mut rows = shopify
+    ///     .download_bulk_results_stream::<serde_json::Value>("https://storage.test/results.jsonl")
+    ///     .await?;
+    /// assert_eq!(rows.next_row().await.transpose()?.unwrap()["title"], "Café");
+    /// assert_eq!(rows.next_row().await.transpose()?.unwrap()["title"], "Hat");
+    /// assert!(rows.next_row().await.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn push_chunks<I>(&self, status: u16, chunks: I) -> &Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Vec<u8>>,
+        I::IntoIter: Send + 'static,
+    {
+        let body = crate::transport::chunks(chunks.into_iter().map(|chunk| Ok(chunk.into())));
+        self.push_streaming(StreamingResponse {
+            status,
+            headers: Vec::new(),
+            body,
+        })
+    }
+
+    /// Answers the next request with `response`, whose body is read as
+    /// the client polls it: a body that fails halfway, or one that waits.
+    pub fn push_streaming(&self, response: StreamingResponse) -> &Self {
+        self.state().queue.push_back(Answer::Streaming(response));
         self
     }
 
@@ -137,26 +190,57 @@ impl MockTransport {
     }
 }
 
+impl MockTransport {
+    /// Records `request` and takes its answer.
+    fn answer(&self, request: &HttpRequest) -> Answer {
+        let mut state = self.state();
+        state.requests.push(request.clone());
+        if let Some(answer) = state.queue.pop_front() {
+            return answer;
+        }
+        let Some(handler) = state.handler.clone() else {
+            return Answer::Whole(Ok(HttpResponse::new(
+                404,
+                format!("not mocked: {:?} {}", request.method, request.url),
+            )));
+        };
+        drop(state);
+        Answer::Whole(handler(request))
+    }
+}
+
 impl Transport for MockTransport {
     fn send(&self, request: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, TransportError>> {
-        let answer = {
-            let mut state = self.state();
-            state.requests.push(request.clone());
-            match state.queue.pop_front() {
-                Some(answer) => answer,
-                None => match state.handler.clone() {
-                    Some(handler) => {
-                        drop(state);
-                        handler(&request)
+        let answer = self.answer(&request);
+        Box::pin(async move {
+            match answer {
+                Answer::Whole(answer) => answer,
+                Answer::Streaming(mut response) => {
+                    let mut body = Vec::new();
+                    while let Some(chunk) = crate::transport::next_chunk(&mut response.body).await {
+                        body.extend_from_slice(&chunk?);
                     }
-                    None => Ok(HttpResponse::new(
-                        404,
-                        format!("not mocked: {:?} {}", request.method, request.url),
-                    )),
-                },
+                    Ok(HttpResponse {
+                        status: response.status,
+                        headers: response.headers,
+                        body,
+                    })
+                }
             }
-        };
-        Box::pin(async move { answer })
+        })
+    }
+
+    fn send_streaming(
+        &self,
+        request: HttpRequest,
+    ) -> BoxFuture<'_, Result<StreamingResponse, TransportError>> {
+        let answer = self.answer(&request);
+        Box::pin(async move {
+            match answer {
+                Answer::Whole(answer) => answer.map(StreamingResponse::from),
+                Answer::Streaming(response) => Ok(response),
+            }
+        })
     }
 }
 
