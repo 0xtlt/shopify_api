@@ -24,7 +24,6 @@ const KEPT_CAPACITY: usize = 64 * 1024;
 /// A line: its number, from 1, and where it is in the buffer.
 type Line = (usize, Range<usize>);
 
-/// A top-level object and its children.
 type Grouped<P, C> = Result<(P, Vec<C>)>;
 
 /// The lines of a JSONL body, split as its chunks arrive. It holds the
@@ -668,7 +667,6 @@ mod tests {
         assert_eq!(results[2].as_ref().unwrap().id, 3);
     }
 
-    /// The buffer follows the longest line, whatever the size of the file.
     #[tokio::test]
     async fn memory_follows_the_longest_line_not_the_file() {
         let line = format!(

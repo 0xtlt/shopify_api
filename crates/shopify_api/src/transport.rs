@@ -274,7 +274,6 @@ impl From<HttpResponse> for StreamingResponse {
     }
 }
 
-/// The next chunk of `body`.
 pub(crate) async fn next_chunk(body: &mut BodyStream) -> Option<Result<Vec<u8>, TransportError>> {
     std::future::poll_fn(|context| body.as_mut().poll_next(context)).await
 }

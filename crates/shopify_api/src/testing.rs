@@ -43,7 +43,6 @@ pub struct MockTransport {
     state: Arc<Mutex<State>>,
 }
 
-/// A queued answer.
 enum Answer {
     Whole(Result<HttpResponse, TransportError>),
     Streaming(StreamingResponse),
@@ -191,7 +190,6 @@ impl MockTransport {
 }
 
 impl MockTransport {
-    /// Records `request` and takes its answer.
     fn answer(&self, request: &HttpRequest) -> Answer {
         let mut state = self.state();
         state.requests.push(request.clone());

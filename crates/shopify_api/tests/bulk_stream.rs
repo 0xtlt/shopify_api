@@ -40,7 +40,6 @@ fn fast() -> BulkWaitOptions {
     BulkWaitOptions::new().poll_interval(Duration::from_millis(1))
 }
 
-/// Shopify starts the operation, then reports it completed.
 fn push_run_and_completed(mock: &MockTransport, url: Option<&str>) {
     mock.push_data(json!({ "bulkOperationRunQuery": { "bulkOperation": operation("CREATED", None), "userErrors": [] } }));
     mock.push_data(json!({ "bulkOperation": operation("COMPLETED", url) }));
