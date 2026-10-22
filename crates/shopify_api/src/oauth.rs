@@ -700,7 +700,6 @@ mod tests {
         );
     }
 
-    /// A timestamp at the edge of `i64` is rejected, never a panic, in both checks.
     #[test]
     fn extreme_timestamps_are_rejected_without_panicking() {
         for timestamp in [i64::MIN, i64::MAX] {
@@ -729,7 +728,6 @@ mod tests {
         }
     }
 
-    /// Extreme `exp` and `nbf` claims are rejected, never a panic.
     #[test]
     fn extreme_session_token_times_do_not_panic() {
         let now = 1_700_000_000;

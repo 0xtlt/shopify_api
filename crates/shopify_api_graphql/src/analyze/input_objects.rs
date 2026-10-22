@@ -342,8 +342,7 @@ mod tests {
 
     #[test]
     fn a_large_input_object_is_scanned_in_linear_time() {
-        // Looking each field up among the previous ones took about 50 s for this
-        // object in a debug build; a set takes well under one.
+        // A quadratic scan takes about 50 s on this object in a debug build.
         let fields: Vec<String> = (0..100_000)
             .map(|index| format!("f{index}: {index}"))
             .collect();

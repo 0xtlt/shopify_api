@@ -310,7 +310,6 @@ impl TokenResponse {
     }
 }
 
-/// `https://{shop}/admin/oauth/access_token`.
 pub(crate) fn token_url(shop: &ShopDomain) -> String {
     format!("https://{shop}/admin/oauth/access_token")
 }

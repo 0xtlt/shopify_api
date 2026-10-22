@@ -33,8 +33,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// - of the token endpoint's refusal, its status and its standard OAuth error
 ///   code;
 /// - no shop domain or API version that does not validate: a token given in
-///   their place is not shown.
-///
+///   their place is not shown;
 /// - of the partial `data` of a GraphQL error, and of its `extensions` but
 ///   `code`, how many entries there are: no name, no value;
 /// - of a bulk operation, its ID when it is a `gid://` of Shopify, a status
@@ -683,7 +682,7 @@ mod tests {
     const SIGNED_URL: &str =
         "https://me:USERINFO_SECRET@storage.test/k?sig=SIGNED_SECRET#SIGNED_SECRET";
 
-    /// A body that holds every secret, the ways round 4 found.
+    /// A body that holds every secret, in every form a body may hold it.
     fn secret_body() -> String {
         format!(
             "{{\"access_token\":\t\"{TOKEN}\",\n\"client_secret\":\n\"QUOTED_SECRET\",\

@@ -154,8 +154,6 @@ const FIXED: &[&str] = &[
 ];
 
 /// The kinds serde names an unexpected value by (`Unexpected`'s `Display`).
-/// The longer first: `unit variant` before `unit value` is not an issue, but
-/// `floating point` must not read as another kind.
 const KINDS: &[&str] = &[
     "boolean",
     "integer",

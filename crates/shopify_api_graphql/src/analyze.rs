@@ -551,7 +551,6 @@ type ArgumentOrders<'a> = Option<Vec<(&'a str, Vec<&'a str>)>>;
 
 struct Analyzer<'a> {
     schema: &'a Schema,
-    /// The text of the operation.
     source: &'a str,
     /// [`input_objects::argument_orders`] of the fields compared so far, by
     /// position.

@@ -130,7 +130,7 @@ impl Shopify {
         &self.shared.endpoint
     }
 
-    /// The version `operation` goes to: the pinned one, else the one its
+    /// The version an operation goes to: the pinned one, else the one its
     /// schema was checked against.
     pub(crate) fn version_for(&self, checked_against: Option<&'static str>) -> Result<ApiVersion> {
         match (self.pinned, checked_against) {

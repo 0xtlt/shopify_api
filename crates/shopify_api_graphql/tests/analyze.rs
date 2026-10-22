@@ -803,8 +803,8 @@ fn the_order_of_input_fields_is_found_after_any_text() {
 }
 
 /// An alias spelled like its field is still an alias: the arguments after it
-/// are read for the order of their input fields (round 4 review: Shopify's
-/// GraphQL Ruby refuses this operation with `fieldConflict`).
+/// are read for the order of their input fields (GraphQL Ruby refuses this
+/// operation with `fieldConflict`).
 #[test]
 fn an_alias_spelled_like_its_field_keeps_the_order_of_input_fields() {
     let refused = refusal(

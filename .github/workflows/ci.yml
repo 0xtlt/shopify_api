@@ -43,7 +43,6 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
-      # `cargo check -p shopify_api --no-default-features --lib --locked`, then each feature alone.
       - run: mise run check:features
 
   msrv:
