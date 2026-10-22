@@ -18,8 +18,12 @@ use crate::{Error, Result};
 pub const DEFAULT_MAX_LINE_LENGTH: usize = 64 * 1024 * 1024;
 
 /// What the buffer may keep, whatever it holds: a buffer more than four
-/// times what it holds, and than this, shrinks after a long line.
+/// times what it held lately, and than this, shrinks after a long line.
 const KEPT_CAPACITY: usize = 64 * 1024;
+
+/// How many lines the buffer remembers what it held: lines of the same
+/// size, cut into small chunks, reuse its capacity rather than regrow it.
+const KEPT_LINES: usize = 16;
 
 /// A line: its number, from 1, and where it is in the buffer.
 type Line = (usize, Range<usize>);
@@ -41,6 +45,13 @@ struct Lines {
     line: usize,
     max: usize,
     done: bool,
+    /// The most `buffer` held since line `window`, and in the
+    /// `KEPT_LINES` lines before.
+    held: usize,
+    held_before: usize,
+    window: usize,
+    #[cfg(test)]
+    shrinks: usize,
 }
 
 impl Lines {
@@ -54,6 +65,11 @@ impl Lines {
             scanned: 0,
             line: 0,
             max: DEFAULT_MAX_LINE_LENGTH,
+            held: 0,
+            held_before: 0,
+            window: 0,
+            #[cfg(test)]
+            shrinks: 0,
         }
     }
 
@@ -120,11 +136,25 @@ impl Lines {
                 Poll::Ready(Some(Ok(chunk))) => {
                     self.buffer.drain(..self.start);
                     self.start = 0;
-                    let needed = (self.buffer.len() + chunk.len()).max(KEPT_CAPACITY);
-                    if self.buffer.capacity() > 4 * needed {
-                        self.buffer.shrink_to(needed);
+                    let lines = self.line - self.window;
+                    if lines >= KEPT_LINES {
+                        self.held_before = if lines < 2 * KEPT_LINES { self.held } else { 0 };
+                        self.held = 0;
+                        self.window = self.line;
+                    }
+                    let kept = (self.buffer.len() + chunk.len())
+                        .max(self.held)
+                        .max(self.held_before)
+                        .max(KEPT_CAPACITY);
+                    if self.buffer.capacity() > 4 * kept {
+                        self.buffer.shrink_to(kept);
+                        #[cfg(test)]
+                        {
+                            self.shrinks += 1;
+                        }
                     }
                     self.buffer.extend_from_slice(&chunk);
+                    self.held = self.held.max(self.buffer.len());
                 }
             }
         }
@@ -695,19 +725,47 @@ mod tests {
         );
     }
 
+    fn cut(line: &[u8], size: usize) -> impl Iterator<Item = Vec<u8>> + '_ {
+        line.chunks(size).map(<[u8]>::to_vec)
+    }
+
+    fn line_of(bytes: usize) -> Vec<u8> {
+        format!("{{\"a\":\"{}\"}}\n", "x".repeat(bytes)).into_bytes()
+    }
+
     #[tokio::test]
-    async fn the_buffer_of_a_huge_line_is_released_once_it_is_read() {
-        let huge = format!("{{\"a\":\"{}\"}}\n", "x".repeat(16 * 1024 * 1024));
-        let tiny = b"{\"b\":1}\n".to_vec();
-        let parts = vec![huge.into_bytes(), tiny.clone(), tiny.clone(), tiny.clone()];
+    async fn the_buffer_is_kept_while_lines_stay_alike() {
+        let line = line_of(1024 * 1024);
+        for size in [line.len(), 32 * 1024, 1024] {
+            let parts = (0..16).flat_map(|_| cut(&line, size)).collect();
+            let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
+            rows.next_row().await.unwrap().unwrap();
+            let capacity = rows.lines.capacity();
+            while let Some(row) = rows.next_row().await {
+                row.unwrap();
+                if !rows.lines.done {
+                    assert_eq!(rows.lines.capacity(), capacity, "chunks of {size}");
+                }
+            }
+            assert_eq!(rows.lines.shrinks, 0, "chunks of {size}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_buffer_of_a_huge_line_is_released_a_few_lines_later() {
+        let mut parts: Vec<Vec<u8>> = cut(&line_of(16 * 1024 * 1024), 32 * 1024).collect();
+        parts.extend(std::iter::repeat_n(b"{\"b\":1}\n".to_vec(), 100));
         let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
         rows.next_row().await.unwrap().unwrap();
         assert!(rows.lines.capacity() > 16 * 1024 * 1024);
-        rows.next_row().await.unwrap().unwrap();
+        for _ in 0..2 * KEPT_LINES {
+            rows.next_row().await.unwrap().unwrap();
+        }
         assert!(
             rows.lines.capacity() <= 1024 * 1024,
-            "{} bytes held after a tiny line",
-            rows.lines.capacity()
+            "{} bytes held after {} tiny lines",
+            rows.lines.capacity(),
+            2 * KEPT_LINES
         );
         while let Some(row) = rows.next_row().await {
             row.unwrap();
@@ -715,18 +773,21 @@ mod tests {
         assert_eq!(rows.lines.capacity(), 0);
     }
 
-    /// A buffer a few times larger than its chunks is kept: no
-    /// reallocation on each chunk.
     #[tokio::test]
-    async fn the_buffer_is_kept_while_lines_stay_alike() {
-        let line = format!("{{\"a\":\"{}\"}}\n", "x".repeat(300 * 1024));
-        let parts: Vec<Vec<u8>> = std::iter::repeat_n(line.into_bytes(), 8).collect();
-        let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
-        rows.next_row().await.unwrap().unwrap();
-        let first = rows.lines.buffer.as_ptr();
-        for _ in 0..7 {
-            rows.next_row().await.unwrap().unwrap();
-            assert_eq!(rows.lines.buffer.as_ptr(), first);
+    async fn alternating_huge_and_tiny_lines_keep_the_buffer() {
+        let huge = line_of(1024 * 1024);
+        for size in [huge.len(), 32 * 1024, 1024] {
+            let parts = (0..16)
+                .flat_map(|_| cut(&huge, size).chain([b"{}\n".to_vec()]))
+                .collect();
+            let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
+            let mut read = 0;
+            while let Some(row) = rows.next_row().await {
+                row.unwrap();
+                read += 1;
+            }
+            assert_eq!(read, 32);
+            assert_eq!(rows.lines.shrinks, 0, "chunks of {size}");
         }
     }
 
