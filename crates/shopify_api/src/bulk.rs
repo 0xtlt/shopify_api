@@ -23,8 +23,11 @@
 //! [`Shopify::bulk_query_rows`] holds every row in memory. For an export
 //! of gigabytes, [`Shopify::bulk_query_stream`] reads the rows as the file
 //! downloads ([`BulkRows`]), and [`Shopify::bulk_query_grouped`] each
-//! top-level object with its nested objects ([`BulkGroups`]): the memory
-//! they take follows the longest line, not the file.
+//! top-level object with its nested objects ([`BulkGroups`]). Neither holds
+//! the file: [`BulkRows`] holds the line being read and the rest of the
+//! chunk it ends in; [`BulkGroups`] holds that, and the group being read,
+//! its top-level object with every child read so far and their IDs. A
+//! product with 2,000 variants is held with its 2,000 variants.
 //!
 //! The query of a bulk operation is a plain string. To have it checked when
 //! the crate compiles, declare it with [`graphql!`](crate::graphql!) and pass
@@ -423,6 +426,9 @@ impl Shopify {
     /// item, which holds the variables of that run. The items are uploaded
     /// as a JSONL file first.
     ///
+    /// The upload target is reserved first: an item that does not
+    /// serialize fails after it, and the target goes unused.
+    ///
     /// ```no_run
     /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
     /// let rows = vec![
@@ -449,6 +455,9 @@ impl Shopify {
     /// [`Shopify::run_bulk_mutation`] over the items of an iterator, each
     /// serialized as it is taken: the items need not all be in memory, only
     /// the JSONL file, which Shopify caps at 100 MB.
+    ///
+    /// The upload target is reserved first: an item that does not
+    /// serialize fails after it, and the target goes unused.
     ///
     /// ```no_run
     /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
@@ -505,6 +514,9 @@ impl Shopify {
 
     /// Uploads `variables` as the JSONL file of a bulk mutation, one item per
     /// line, and returns its staged upload path.
+    ///
+    /// The upload target is reserved first: an item that does not
+    /// serialize fails after it, and the target goes unused.
     pub async fn stage_bulk_variables<T: Serialize>(&self, variables: &[T]) -> Result<String> {
         self.stage_bulk_variables_iter(variables).await
     }

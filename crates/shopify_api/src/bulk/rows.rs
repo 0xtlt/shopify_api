@@ -162,7 +162,7 @@ impl fmt::Debug for Lines {
 /// return it.
 ///
 /// It holds one line at a time, and the rest of the chunk that line ends
-/// in: the memory it takes follows the longest line, not the file. Read it
+/// in: the memory it takes follows the line being read, not the file. Read it
 /// with [`BulkRows::next_row`], or as a [`Stream`].
 ///
 /// Lines are split on `\n`; a `\r` before it, a last line without one and
@@ -277,7 +277,8 @@ struct Group<P, C> {
 /// with one is a child, read as `C`. Each item is a top-level object and
 /// its children, in the order of the file: the item is complete when the
 /// next top-level object, or the end of the file, arrives. One group is
-/// held at a time.
+/// held at a time, with every child read so far: its memory follows the
+/// largest group, as well as the line being read.
 ///
 /// # Nested connections two levels deep
 ///
