@@ -476,10 +476,25 @@ fn load_inputs(
 impl Schema {
     /// Reads the form written by [`Schema::to_json`].
     pub fn from_json(json: &str) -> Result<Self, SchemaError> {
-        let format = serde_json::from_str::<Value>(json)
-            .map_err(|error| schema_error(format!("Invalid schema file: {error}")))?
-            .get("format")
-            .and_then(Value::as_u64);
+        // Only `format`, without building the rest. Anything but an object
+        // that reads takes the full parse, for its error.
+        #[derive(Deserialize)]
+        struct Header {
+            format: Option<Value>,
+        }
+        let header = json
+            .trim_start()
+            .starts_with('{')
+            .then(|| serde_json::from_str::<Header>(json).ok())
+            .flatten();
+        let format = match header {
+            Some(header) => header.format,
+            None => serde_json::from_str::<Value>(json)
+                .map_err(|error| schema_error(format!("Invalid schema file: {error}")))?
+                .get("format")
+                .cloned(),
+        };
+        let format = format.as_ref().and_then(Value::as_u64);
         if format != Some(u64::from(FORMAT)) {
             return Err(schema_error(match format {
                 Some(format) => format!(
@@ -1097,6 +1112,12 @@ mod tests {
         );
         assert_eq!(
             Schema::from_json(r#"{"apiVersion":"2026-10","query":"Q","types":{}}"#),
+            Err(SchemaError(
+                "Not a schema file of shopify_api: it has no `format`".to_string()
+            ))
+        );
+        assert_eq!(
+            Schema::from_json(r#"[1]"#),
             Err(SchemaError(
                 "Not a schema file of shopify_api: it has no `format`".to_string()
             ))

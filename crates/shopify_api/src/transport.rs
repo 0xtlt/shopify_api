@@ -332,7 +332,7 @@ impl Transport for ReqwestTransport {
                     Some((name.to_string(), value.to_str().ok()?.to_string()))
                 })
                 .collect();
-            let body = response.bytes().await.map_err(failed)?.to_vec();
+            let body = Vec::from(response.bytes().await.map_err(failed)?);
             Ok(HttpResponse {
                 status,
                 headers,
