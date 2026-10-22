@@ -4,7 +4,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,12 +52,6 @@ fragment TypeRef on __Type {
   ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } }
 }
 ";
-
-/// The Admin API version of the schema bundled with this crate.
-pub const BUNDLED_API_VERSION: &str = "2026-10";
-
-/// Shopify's Admin GraphQL schema for [`BUNDLED_API_VERSION`].
-const BUNDLED_SCHEMA: &str = include_str!("../schema/admin.schema.json");
 
 /// The version of the stored form written by [`Schema::to_json`].
 const FORMAT: u32 = 1;
@@ -481,13 +474,6 @@ fn load_inputs(
 }
 
 impl Schema {
-    /// The Shopify Admin schema bundled with this crate, for [`BUNDLED_API_VERSION`].
-    pub fn bundled() -> &'static Schema {
-        static BUNDLED: OnceLock<Schema> = OnceLock::new();
-        BUNDLED
-            .get_or_init(|| Schema::from_json(BUNDLED_SCHEMA).expect("the bundled schema is valid"))
-    }
-
     /// Reads the form written by [`Schema::to_json`].
     pub fn from_json(json: &str) -> Result<Self, SchemaError> {
         let format = serde_json::from_str::<Value>(json)
@@ -1076,7 +1062,7 @@ mod tests {
             bare.directives.keys().collect::<Vec<_>>(),
             ["include", "skip"]
         );
-        assert!(Schema::bundled().directive("idempotent").is_some());
+        assert!(admin().directive("idempotent").is_some());
     }
 
     #[test]
@@ -1129,10 +1115,15 @@ mod tests {
         );
     }
 
+    /// The Admin schema 2026-10 the tests of the workspace use.
+    fn admin() -> Schema {
+        Schema::from_json(include_str!("../../shopify_api/graphql/admin.schema.json")).unwrap()
+    }
+
     #[test]
-    fn the_bundled_schema_is_the_admin_api() {
-        let schema = Schema::bundled();
-        assert_eq!(schema.api_version, BUNDLED_API_VERSION);
+    fn the_test_schema_is_the_admin_api() {
+        let schema = admin();
+        assert_eq!(schema.api_version, "2026-10");
         assert_eq!(schema.query, "QueryRoot");
         assert_eq!(schema.mutation.as_deref(), Some("Mutation"));
         assert!(schema.types.len() > 1000);

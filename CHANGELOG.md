@@ -6,7 +6,7 @@ A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATIO
 
 - Add: `graphql!`, which checks a query or mutation against Shopify's Admin schema while the crate compiles and generates the types of its variables and result. Inline (`graphql!("…", first = 10)`), named (`graphql! { pub mod name = "…"; }`, with typed input objects) or read from a file (`file("…graphql")`).
 - Add: deprecated fields, arguments, input fields and enum values are compiler warnings with Shopify's reason.
-- Add: the Admin schema 2026-10 is bundled (`shopify_api_graphql`). Another version is one line of `Cargo.toml`, `api-version` in `[package.metadata.shopify_api]`: `graphql!` downloads its schema into `graphql/admin.schema.json` on the next build, and operations are sent to the version they were checked against. `shopify-api schema download` refreshes the file.
+- Add: no schema ships with the crates. `graphql!` downloads the schema of the crate's version into `graphql/admin.schema.json`: the latest stable version, or the one `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml` pins. It downloads again when the version changes, and operations are sent to the version they were checked against. `shopify-api schema download` refreshes the file, `--only` cuts it down to some operations.
 - Add: `shopify-api check` checks `.graphql` files against the schema.
 - Add: retries: a throttled request waits for what its cost needs, a `429` for its `Retry-After`; queries are retried after a `5xx` or a network failure, mutations never. `RetryPolicy`.
 - Add: tokens are renewed once for all the clones of a client, before they expire and when Shopify refuses one with a `401`. `Auth::expiring_token` with a `TokenStore`.

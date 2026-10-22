@@ -1,16 +1,20 @@
-//! `shopify-api`: downloads the Shopify Admin schema of the version a crate
-//! declares in its `Cargo.toml`, and checks `.graphql` files against it.
+//! `shopify-api`: downloads the Shopify Admin schema of a crate's API version
+//! (the one its `Cargo.toml` declares, else the latest), and checks
+//! `.graphql` files against it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use shopify_api::{ApiVersion, Auth, Shopify};
+use std::sync::Arc;
+use std::time::SystemTime;
+
 use shopify_api_graphql::project::{
-    configured_api_version, download_schema_file, metadata_snippet, write_atomically,
+    configured_api_version, previous_api_version, up_to_date_schema, write_atomically,
 };
 use shopify_api_graphql::{
-    BUNDLED_API_VERSION, PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, SchemaSource, analyze,
+    PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, SchemaSource, analyze, latest_api_version,
     schema_source,
 };
 
@@ -38,13 +42,13 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum SchemaCommand {
-    /// Downloads the Admin schema of the version in `Cargo.toml` again, where
+    /// Downloads the Admin schema of the crate's version again, where
     /// `graphql!` reads it.
     ///
     /// The version is `api-version` in `[package.metadata.shopify_api]` of the
-    /// nearest package. `graphql!` downloads it by itself when the file is
-    /// missing or holds another version: this command refreshes it, or
-    /// downloads it through a shop with --shop.
+    /// nearest package, else the latest stable one. `graphql!` downloads it by
+    /// itself when the file is missing or holds another version: this command
+    /// refreshes it, or downloads it through a shop with --shop.
     Download(DownloadArgs),
 }
 
@@ -59,6 +63,10 @@ struct DownloadArgs {
     /// of the compact form `graphql!` reads.
     #[arg(long)]
     introspection: bool,
+    /// Keeps only what these `.graphql` files use: the types they reach, and
+    /// the fields they select. For a small schema to commit with a library.
+    #[arg(long, num_args = 1.., value_name = "FILES", conflicts_with = "introspection")]
+    only: Vec<PathBuf>,
     /// Downloads through this shop, with its token: the schema the token sees.
     #[arg(long, env = "SHOPIFY_SHOP")]
     shop: Option<String>,
@@ -105,46 +113,28 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
     let root = package_root().ok_or(
         "no Cargo.toml of a package in this directory or above: run it in the crate's directory",
     )?;
-    let declared = configured_api_version(&root)?.ok_or_else(|| {
-        format!(
-            "{} declares no Admin API version. Add:\n\n{}",
-            root.join("Cargo.toml").display(),
-            metadata_snippet(BUNDLED_API_VERSION)
-        )
-    })?;
-    let version = ApiVersion::new(&declared).map_err(|error| error.to_string())?;
-    let introspection = match &args.shop {
-        None => {
-            eprintln!("Downloading the Admin schema {version} from Shopify's public endpoint…");
-            shopify_api::schema::download_public_admin_schema(version)
-                .await
-                .map_err(|error| error.to_string())?
-        }
-        Some(shop) => {
-            let auth = match (&args.access_token, &args.client_id, &args.client_secret) {
-                (Some(token), _, _) => Auth::access_token(token),
-                (None, Some(id), Some(secret)) => Auth::client_credentials(id, secret),
-                _ => {
-                    return Err(
-                        "--shop needs --access-token, or --client-id and --client-secret"
-                            .to_string(),
-                    );
-                }
+    let declared = configured_api_version(&root)?;
+    let latest = declared.is_none();
+    let wanted = declared.unwrap_or_else(|| latest_api_version(SystemTime::now()));
+    if latest {
+        eprintln!(
+            "{} declares no Admin API version: the latest is {wanted}.",
+            root.join("Cargo.toml").display()
+        );
+    }
+    let mut version = ApiVersion::new(&wanted).map_err(|error| error.to_string())?;
+    let introspection = match fetch(&args, version).await {
+        Ok(introspection) => introspection,
+        // A new version may not be out on its first day.
+        Err(error) if latest && args.shop.is_none() => {
+            let Some(previous) = previous_api_version(&wanted) else {
+                return Err(error);
             };
-            let shopify = Shopify::builder(shop)
-                .auth(auth)
-                .api_version(version)
-                .build()
-                .map_err(|error| error.to_string())?;
-            eprintln!(
-                "Downloading the Admin schema {version} through {}…",
-                shopify.shop()
-            );
-            shopify
-                .download_admin_schema()
-                .await
-                .map_err(|error| error.to_string())?
+            eprintln!("{error}\nTrying the version before, {previous}.");
+            version = ApiVersion::new(&previous).map_err(|error| error.to_string())?;
+            fetch(&args, version).await?
         }
+        Err(error) => return Err(error),
     };
 
     let (out, project) = match &args.out {
@@ -168,8 +158,22 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
             serde_json::to_string_pretty(&introspection).map_err(|error| error.to_string())?;
         (format!("{pretty}\n"), types)
     } else {
-        let schema = Schema::from_introspection(&introspection, &version.to_string())
+        let mut schema = Schema::from_introspection(&introspection, &version.to_string())
             .map_err(|error| error.to_string())?;
+        if !args.only.is_empty() {
+            let texts = args
+                .only
+                .iter()
+                .map(|file| {
+                    std::fs::read_to_string(file)
+                        .map_err(|error| format!("cannot read {}: {error}", file.display()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+            schema = schema
+                .restricted_to(&texts)
+                .map_err(|error| error.to_string())?;
+        }
         (schema.to_json(), schema.types.len())
     };
     write_atomically(&out, &contents)?;
@@ -190,6 +194,39 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
         );
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The introspection result for `version`, from Shopify's public endpoint or
+/// through the shop of `args`.
+async fn fetch(args: &DownloadArgs, version: ApiVersion) -> Result<serde_json::Value, String> {
+    let Some(shop) = &args.shop else {
+        eprintln!("Downloading the Admin schema {version} from Shopify's public endpoint…");
+        return shopify_api::schema::download_public_admin_schema(version)
+            .await
+            .map_err(|error| error.to_string());
+    };
+    let auth = match (&args.access_token, &args.client_id, &args.client_secret) {
+        (Some(token), _, _) => Auth::access_token(token),
+        (None, Some(id), Some(secret)) => Auth::client_credentials(id, secret),
+        _ => {
+            return Err(
+                "--shop needs --access-token, or --client-id and --client-secret".to_string(),
+            );
+        }
+    };
+    let shopify = Shopify::builder(shop)
+        .auth(auth)
+        .api_version(version)
+        .build()
+        .map_err(|error| error.to_string())?;
+    eprintln!(
+        "Downloading the Admin schema {version} through {}…",
+        shopify.shop()
+    );
+    shopify
+        .download_admin_schema()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Cargo follows a schema file once `graphql!` read it, not before it
@@ -222,32 +259,44 @@ fn package_root() -> Option<PathBuf> {
 
 /// The schema `graphql!` would use for the nearest package, as it looks for it.
 fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
-    let read = |path: &Path| -> Result<Schema, String> {
+    let read = |path: &Path| -> Result<Arc<Schema>, String> {
         let json = std::fs::read_to_string(path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        Schema::from_json(&json).map_err(|error| format!("{}: {error}", path.display()))
+        Schema::from_json(&json)
+            .map(Arc::new)
+            .map_err(|error| format!("{}: {error}", path.display()))
     };
-    if let Some(path) = path {
-        return Ok((read(path)?, path.display().to_string()));
-    }
-    let named = std::env::var_os(SCHEMA_ENV);
-    match schema_source(package_root().as_deref(), named.as_deref())? {
-        SchemaSource::Bundled => Ok((Schema::bundled().clone(), "the bundled schema".to_string())),
-        SchemaSource::File(path) => Ok((read(&path)?, path.display().to_string())),
-        SchemaSource::Declared { path, version } => {
-            let schema = match read(&path) {
-                Ok(schema) if schema.api_version == version => schema,
-                _ => {
-                    eprintln!(
-                        "Downloading the Admin schema {version} into {}…",
-                        path.display()
-                    );
-                    download_schema_file(&path, &version)?
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let named = std::env::var_os(SCHEMA_ENV);
+            match schema_source(
+                package_root().as_deref(),
+                named.as_deref(),
+                SystemTime::now(),
+            )? {
+                SchemaSource::File(path) => path,
+                SchemaSource::Version {
+                    path,
+                    version,
+                    latest,
+                } => {
+                    let schema = up_to_date_schema(&path, &version, latest, |file| {
+                        if !file.is_file() || read(file).is_ok_and(|s| s.api_version != version) {
+                            eprintln!(
+                                "Downloading the Admin schema {version} into {}…",
+                                file.display()
+                            );
+                        }
+                        read(file)
+                    })?;
+                    return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
                 }
-            };
-            Ok((schema, path.display().to_string()))
+            }
         }
-    }
+    };
+    let schema = read(&path)?;
+    Ok((Arc::unwrap_or_clone(schema), path.display().to_string()))
 }
 
 fn check(args: CheckArgs) -> Result<ExitCode, String> {

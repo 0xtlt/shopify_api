@@ -33,7 +33,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::{Error, Result, ShopDomain, Shopify, UserError, graphql};
+use crate::{Error, Result, ShopDomain, Shopify, UserError};
+use shopify_api_macros::__graphql_internal as graphql;
 
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
 /// `body` with `secret`, the client secret of the app. Compares in constant time.
@@ -225,45 +226,15 @@ pub fn topic_enum(topic: &str) -> String {
 // ─── Subscriptions ───────────────────────────────────────────────────
 
 graphql! {
-    mod list = "#graphql
-        query WebhookSubscriptions($after: String) {
-          webhookSubscriptions(first: 250, after: $after) {
-            nodes { ...WebhookSubscriptionFields }
-            pageInfo { hasNextPage endCursor }
-          }
-        }
-        fragment WebhookSubscriptionFields on WebhookSubscription {
-          id topic uri format filter includeFields metafieldNamespaces name createdAt updatedAt
-          apiVersion { handle }
-        }";
+    mod list = file("graphql/operations/webhooks_list.graphql");
 }
 
 graphql! {
-    mod create = "#graphql
-        mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
-          webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
-            webhookSubscription { ...WebhookSubscriptionFields }
-            userErrors { field message }
-          }
-        }
-        fragment WebhookSubscriptionFields on WebhookSubscription {
-          id topic uri format filter includeFields metafieldNamespaces name createdAt updatedAt
-          apiVersion { handle }
-        }";
+    mod create = file("graphql/operations/webhooks_create.graphql");
 }
 
 graphql! {
-    mod update = "#graphql
-        mutation WebhookSubscriptionUpdate($id: ID!, $webhookSubscription: WebhookSubscriptionInput!) {
-          webhookSubscriptionUpdate(id: $id, webhookSubscription: $webhookSubscription) {
-            webhookSubscription { ...WebhookSubscriptionFields }
-            userErrors { field message }
-          }
-        }
-        fragment WebhookSubscriptionFields on WebhookSubscription {
-          id topic uri format filter includeFields metafieldNamespaces name createdAt updatedAt
-          apiVersion { handle }
-        }";
+    mod update = file("graphql/operations/webhooks_update.graphql");
 }
 
 /// The input of `create` or `update` for a spec. An update sends every
@@ -286,13 +257,7 @@ macro_rules! input {
 }
 
 graphql! {
-    mod delete = "#graphql
-        mutation WebhookSubscriptionDelete($id: ID!) {
-          webhookSubscriptionDelete(id: $id) {
-            deletedWebhookSubscriptionId
-            userErrors { field message }
-          }
-        }";
+    mod delete = file("graphql/operations/webhooks_delete.graphql");
 }
 
 /// A webhook subscription of a shop.

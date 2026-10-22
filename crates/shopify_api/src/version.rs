@@ -33,8 +33,10 @@ impl ApiVersion {
     pub const V2027_01: Self = Self::dated(2027, 1);
     pub const UNSTABLE: Self = Self(Repr::Unstable);
 
-    /// The version this crate calls when none is chosen: the one of the
-    /// schema bundled with it, which `graphql!` checks operations against.
+    /// The version untyped requests ([`Shopify::graphql`](crate::Shopify::graphql))
+    /// go to when none is chosen: the newest stable version this release of
+    /// the crate knows. A `graphql!` operation goes to the version of the
+    /// schema it was checked against.
     pub const DEFAULT: Self = Self::V2026_10;
 
     /// The oldest version this crate accepts: the first whose bulk operation

@@ -11,7 +11,23 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-include = ["src/**", "docs/**", "tests/**", "examples/**", "Cargo.toml"]
+# `graphql/admin.schema.json`, the whole Admin schema the tests use, stays
+# out: the crate's own operations need only `graphql/internal.schema.json`.
+include = [
+  "src/**",
+  "docs/**",
+  "tests/**",
+  "examples/**",
+  "graphql/internal.schema.json",
+  "graphql/operations/**",
+  "Cargo.toml",
+]
+
+# The version of the tests, the examples and `graphql/internal.schema.json`.
+# To move to another: change it, `shopify-api schema download` in this
+# directory, then `mise run schema:internal` and `mise run ui:bless`.
+[package.metadata.shopify_api]
+api-version = "2026-10"
 
 [package.metadata.docs.rs]
 all-features = true

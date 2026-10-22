@@ -45,10 +45,15 @@ description = "Rewrite the expected compiler errors of the `graphql!` compile-fa
 env = { TRYBUILD = "overwrite" }
 run = "cargo test -p shopify_api --all-features --locked --test compile_fail"
 
-[tasks."schema:bundle"]
-description = "Download the bundled Admin schema again, for the version in crates/shopify_api_graphql/Cargo.toml"
-dir = "crates/shopify_api_graphql"
-run = "cargo run -p shopify_api --features cli --locked -- schema download --out schema/admin.schema.json"
+[tasks."schema:test"]
+description = "Download the Admin schema the tests use again, for the version in crates/shopify_api/Cargo.toml"
+dir = "crates/shopify_api"
+run = "cargo run -p shopify_api --features cli --locked -- schema download"
+
+[tasks."schema:internal"]
+description = "Cut the test schema down to the operations of shopify_api, into crates/shopify_api/graphql/internal.schema.json"
+env = { SHOPIFY_API_BLESS = "1" }
+run = "cargo test -p shopify_api_graphql --locked --test internal_schema"
 
 [tasks."test:live"]
 description = "Run the tests against a real development store (needs SHOPIFY_TEST_SHOP and a token, see tests/live.rs)"

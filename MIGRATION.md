@@ -38,8 +38,8 @@ The shop must now be `<name>` or `<name>.myshopify.com` (with or without
 `https://`): 0.10 accepted any text and appended `.myshopify.com`.
 
 Without a pinned version, an operation of `graphql!` goes to the version its
-schema was checked against (2026-10, or the version of your
-`graphql/admin.schema.json`), and an untyped call to 2026-10. 0.10 sent
+schema was checked against (the `api-version` of your `Cargo.toml`, else the
+latest), and an untyped call to 2026-10. 0.10 sent
 everything to 2026-04 by default: pin it with `.api_version(ApiVersion::V2026_04)`
 to keep that.
 

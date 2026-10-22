@@ -1,16 +1,26 @@
-//! Operations checked against the bundled Shopify Admin schema: what is
+//! Operations checked against the Shopify Admin schema 2026-10: what is
 //! refused, with which message, and the shape of what is accepted.
+
+use std::sync::OnceLock;
 
 use shopify_api_graphql::{
     FieldBase, Operation, OperationKind, Scalar, Schema, Selection, VariableBase, analyze,
 };
 
+/// The Admin schema 2026-10 the tests of the workspace use.
+fn admin() -> &'static Schema {
+    static ADMIN: OnceLock<Schema> = OnceLock::new();
+    ADMIN.get_or_init(|| {
+        Schema::from_json(include_str!("../../shopify_api/graphql/admin.schema.json")).unwrap()
+    })
+}
+
 fn check(source: &str) -> Operation {
-    analyze(Schema::bundled(), source).unwrap_or_else(|error| panic!("{error}\n{source}"))
+    analyze(admin(), source).unwrap_or_else(|error| panic!("{error}\n{source}"))
 }
 
 fn refusal(source: &str) -> String {
-    match analyze(Schema::bundled(), source) {
+    match analyze(admin(), source) {
         Ok(_) => panic!("accepted: {source}"),
         Err(error) => error.to_string(),
     }
@@ -584,7 +594,7 @@ fn reports_deprecated_enum_values_written_in_the_operation() {
     let operation =
         check("{ shop { name } discountNodes(first: 1, query: \"x\") { nodes { id } } }");
     assert!(operation.deprecations.is_empty());
-    let deprecated = Schema::bundled()
+    let deprecated = admin()
         .types
         .iter()
         .find_map(|(name, definition)| match definition {

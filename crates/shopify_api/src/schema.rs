@@ -1,9 +1,9 @@
 //! Downloading Shopify's Admin GraphQL schema, as an introspection result.
 //!
 //! [`graphql!`](crate::graphql!) checks operations against the schema of
-//! [`ApiVersion::DEFAULT`], bundled with this crate, or against the version
-//! a crate declares in its `Cargo.toml`, which it downloads by itself. These
-//! functions return the raw introspection result, for other tools.
+//! the version a crate declares in its `Cargo.toml`, else of the latest
+//! version, and downloads it by itself. These functions return the raw
+//! introspection result, for other tools.
 
 use serde_json::{Value, json};
 

@@ -57,7 +57,9 @@ shopify_api = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Rust 1.88 or newer. The bundled schema is the Admin API **2026-10**.
+Rust 1.88 or newer. The first build downloads the Admin schema of the latest
+stable version into `graphql/admin.schema.json`, next to your `Cargo.toml`:
+commit it.
 
 ## Operations
 
@@ -128,20 +130,23 @@ The full reference of `graphql!`, with the mapping of every GraphQL type, is
 ## API versions
 
 Every operation is checked against a schema, and **sent to the version of that
-schema**. Out of the box that is the bundled 2026-10. To work with another
-version, declare it in your `Cargo.toml`:
+schema**. No schema ships with the crate: `graphql!` downloads the one of your
+version into `graphql/admin.schema.json`, and downloads again when the version
+changes. Commit the file, so that builds without network access have it.
+
+Out of the box, the version is **the latest stable one**: when Shopify
+releases a new version (each quarter), the next build that recompiles your
+crate moves to it, and a field Shopify removed becomes a compile error. To
+stay on one version, declare it in your `Cargo.toml`:
 
 ```toml
 [package.metadata.shopify_api]
 api-version = "2026-07"
 ```
 
-The next build downloads the 2026-07 schema into `graphql/admin.schema.json`,
-checks your operations against it, and the client sends them to the 2026-07
-endpoint: nothing else to change. Commit the file, so that builds without
-network access have it. Changing `api-version` downloads the new version on
-the next build. `ShopifyBuilder::api_version` pins every request to one
-version instead.
+Your operations are then checked against 2026-07, and the client sends them to
+the 2026-07 endpoint: nothing else to change. `ShopifyBuilder::api_version`
+pins every request to one version instead.
 
 The `shopify-api` command (`cargo install shopify_api --features cli`)
 refreshes the file (`shopify-api schema download`, or `--shop` for the schema
@@ -308,7 +313,8 @@ The toolchain and the tasks are in `mise.toml`:
 ```bash
 mise install
 mise run check          # what CI runs: fmt, clippy, tests, docs
-mise run schema:bundle  # download the bundled schema again (version in crates/shopify_api_graphql/Cargo.toml)
+mise run schema:test     # download the schema the tests use again (version in crates/shopify_api/Cargo.toml)
+mise run schema:internal # cut it down to the crate's own operations, graphql/internal.schema.json
 mise tasks              # every task
 ```
 

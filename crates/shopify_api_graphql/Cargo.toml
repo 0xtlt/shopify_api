@@ -11,7 +11,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-include = ["src/**", "schema/**", "Cargo.toml", "README.md"]
+include = ["src/**", "Cargo.toml", "README.md"]
 
 [dependencies]
 graphql-parser.workspace = true
@@ -23,13 +23,8 @@ toml.workspace = true
 ureq = { workspace = true, optional = true }
 
 [features]
-## `project::download_public_schema` and `project::download_schema_file`.
+## `project::download_public_schema`, `project::download_schema_file` and `project::up_to_date_schema`.
 download = ["dep:ureq"]
-
-# The version of the bundled schema, `schema/admin.schema.json`: change it
-# with `BUNDLED_API_VERSION`, then `mise run schema:bundle`.
-[package.metadata.shopify_api]
-api-version = "2026-10"
 
 [package.metadata.docs.rs]
 all-features = true

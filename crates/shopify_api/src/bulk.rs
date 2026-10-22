@@ -42,81 +42,34 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 use crate::transport::{HttpRequest, Method};
-use crate::{Error, Page, Result, Shopify, UserError, graphql};
+use crate::{Error, Page, Result, Shopify, UserError};
+use shopify_api_macros::__graphql_internal as graphql;
 
 /// How long a download of results may take.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 graphql! {
-    mod run_query = "#graphql
-        mutation BulkOperationRunQuery($query: String!, $groupObjects: Boolean!) {
-          bulkOperationRunQuery(query: $query, groupObjects: $groupObjects) {
-            bulkOperation { ...BulkOperationFields }
-            userErrors { field message code }
-          }
-        }
-        fragment BulkOperationFields on BulkOperation {
-          id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
-        }";
+    mod run_query = file("graphql/operations/bulk_run_query.graphql");
 }
 
 graphql! {
-    mod run_mutation = "#graphql
-        mutation BulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!, $clientIdentifier: String) {
-          bulkOperationRunMutation(mutation: $mutation, stagedUploadPath: $stagedUploadPath, clientIdentifier: $clientIdentifier) {
-            bulkOperation { ...BulkOperationFields }
-            userErrors { field message code }
-          }
-        }
-        fragment BulkOperationFields on BulkOperation {
-          id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
-        }";
+    mod run_mutation = file("graphql/operations/bulk_run_mutation.graphql");
 }
 
 graphql! {
-    mod get = "#graphql
-        query BulkOperation($id: ID!) {
-          bulkOperation(id: $id) { ...BulkOperationFields }
-        }
-        fragment BulkOperationFields on BulkOperation {
-          id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
-        }";
+    mod get = file("graphql/operations/bulk_get.graphql");
 }
 
 graphql! {
-    mod list = "#graphql
-        query BulkOperations($first: Int!, $after: String, $query: String, $reverse: Boolean) {
-          bulkOperations(first: $first, after: $after, query: $query, reverse: $reverse, sortKey: CREATED_AT) {
-            nodes { ...BulkOperationFields }
-            pageInfo { hasNextPage endCursor }
-          }
-        }
-        fragment BulkOperationFields on BulkOperation {
-          id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
-        }";
+    mod list = file("graphql/operations/bulk_list.graphql");
 }
 
 graphql! {
-    mod cancel = "#graphql
-        mutation BulkOperationCancel($id: ID!) {
-          bulkOperationCancel(id: $id) {
-            bulkOperation { ...BulkOperationFields }
-            userErrors { field message }
-          }
-        }
-        fragment BulkOperationFields on BulkOperation {
-          id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
-        }";
+    mod cancel = file("graphql/operations/bulk_cancel.graphql");
 }
 
 graphql! {
-    mod staged_uploads = "#graphql
-        mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {
-          stagedUploadsCreate(input: $input) {
-            stagedTargets { url resourceUrl parameters { name value } }
-            userErrors { field message }
-          }
-        }";
+    mod staged_uploads = file("graphql/operations/bulk_staged_uploads.graphql");
 }
 
 /// A bulk operation, as Shopify last reported it.

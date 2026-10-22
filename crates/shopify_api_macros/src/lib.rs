@@ -12,18 +12,19 @@ use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::codegen::{
     DATA_TYPE, VARIABLES_TYPE, data_types, variable_type, variables_types,
 };
-use shopify_api_graphql::project::{download_schema_file, metadata_snippet};
+use shopify_api_graphql::project::{metadata_snippet, up_to_date_schema};
 use shopify_api_graphql::{
-    BUNDLED_API_VERSION, MINIMUM_API_VERSION, Operation, OperationKind, PROJECT_SCHEMA_PATH,
-    SCHEMA_ENV, Schema, SchemaSource, Variable, analyze, is_supported_api_version, schema_source,
+    MINIMUM_API_VERSION, Operation, OperationKind, PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema,
+    SchemaSource, Variable, analyze, is_supported_api_version, latest_api_version, schema_source,
 };
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, Ident, LitStr, Token, Visibility};
 
-/// The package whose own operations are always checked against the bundled
-/// schema: the schema a crate that depends on it selects is not its own.
-const RUNTIME_PACKAGE: &str = "shopify_api";
+/// The schema of `shopify_api`'s own operations, relative to its `Cargo.toml`:
+/// the Admin schema cut down to what they use. A crate that depends on
+/// `shopify_api` selects a version for its operations, not for these.
+const INTERNAL_SCHEMA_PATH: &str = "graphql/internal.schema.json";
 
 /// Where the text of an operation comes from.
 enum Source {
@@ -184,32 +185,35 @@ fn resolve(manifest_dir: Option<&Path>, path: &Path) -> PathBuf {
 /// Parsed schema files by path, with the modification time they were read at.
 type SchemaCache = HashMap<PathBuf, (Option<SystemTime>, Arc<Schema>)>;
 
-/// The schema operations are checked against.
-enum LoadedSchema {
-    /// The one bundled with `shopify_api_graphql`.
-    Bundled,
-    /// The one of the crate being compiled.
-    File { path: PathBuf, schema: Arc<Schema> },
+/// The schema operations are checked against, and its file.
+struct LoadedSchema {
+    path: PathBuf,
+    schema: Arc<Schema>,
 }
 
 impl LoadedSchema {
-    /// The schema of the crate being compiled, else the bundled one.
+    /// The schema of the crate being compiled.
     fn load() -> Result<Self, String> {
-        if std::env::var("CARGO_PKG_NAME").is_ok_and(|name| name == RUNTIME_PACKAGE) {
-            return Ok(Self::Bundled);
-        }
         // The variable is for the crates being built, not for their
         // dependencies, which ship their own schema files.
         let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
         let named = std::env::var_os(SCHEMA_ENV).filter(|_| primary);
-        let (path, schema) = match schema_source(manifest_dir().as_deref(), named.as_deref())? {
-            SchemaSource::Bundled => return Ok(Self::Bundled),
+        let source = schema_source(
+            manifest_dir().as_deref(),
+            named.as_deref(),
+            SystemTime::now(),
+        )?;
+        let (path, schema) = match source {
             SchemaSource::File(path) => {
                 let schema = read_schema(&path)?;
                 (path, schema)
             }
-            SchemaSource::Declared { path, version } => {
-                let schema = declared_schema(&path, &version)?;
+            SchemaSource::Version {
+                path,
+                version,
+                latest,
+            } => {
+                let schema = version_schema(&path, &version, latest)?;
                 (path, schema)
             }
         };
@@ -219,17 +223,21 @@ impl LoadedSchema {
                  declare another one in Cargo.toml:\n\n{}",
                 path.display(),
                 schema.api_version,
-                metadata_snippet(BUNDLED_API_VERSION)
+                metadata_snippet(&latest_api_version(SystemTime::now()))
             ));
         }
-        Ok(Self::File { schema, path })
+        Ok(Self { schema, path })
+    }
+
+    /// The schema of `shopify_api`'s own operations.
+    fn internal() -> Result<Self, String> {
+        let path = resolve(manifest_dir().as_deref(), Path::new(INTERNAL_SCHEMA_PATH));
+        let schema = read_schema(&path)?;
+        Ok(Self { schema, path })
     }
 
     fn schema(&self) -> &Schema {
-        match self {
-            Self::Bundled => Schema::bundled(),
-            Self::File { schema, .. } => schema,
-        }
+        &self.schema
     }
 
     /// Makes the compiler rebuild the crate when what the expansion depends on changes.
@@ -241,11 +249,7 @@ impl LoadedSchema {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // The manifest declares the API version, the schema file holds it.
         let manifest = manifest_dir().map(|dir| dir.join("Cargo.toml"));
-        let schema = match self {
-            Self::File { path, .. } => Some(path.clone()),
-            Self::Bundled => None,
-        };
-        let files = [manifest, schema]
+        let files = [manifest, Some(self.path.clone())]
             .into_iter()
             .flatten()
             .filter(|path| path.is_file());
@@ -287,27 +291,24 @@ impl LoadedSchema {
     }
 }
 
-/// The schema of the version the crate declares: its file when it holds that
-/// version, else downloaded into it, once for every operation of the build.
-fn declared_schema(path: &Path, version: &str) -> Result<Arc<Schema>, String> {
+/// The schema of `version`: its file when it holds that version, else
+/// downloaded into it, once for every operation of the build.
+fn version_schema(path: &Path, version: &str, latest: bool) -> Result<Arc<Schema>, String> {
     static DOWNLOAD: Mutex<()> = Mutex::new(());
     let _one_at_a_time = DOWNLOAD
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if path.is_file()
-        && let Ok(schema) = read_schema(path)
-        && schema.api_version == version
-    {
-        return Ok(schema);
-    }
-    download_schema_file(path, version).map_err(|error| {
+    up_to_date_schema(path, version, latest, read_schema).map_err(|error| {
+        let which = if latest {
+            format!("the latest Admin API version, {version} (Cargo.toml declares none)")
+        } else {
+            format!("the Admin API version in Cargo.toml, {version}")
+        };
         format!(
-            "{error}\n`graphql!` downloads the schema of the version in Cargo.toml once, into `{}`: \
-             build once with network access and commit the file",
-            PROJECT_SCHEMA_PATH
+            "{error}\n`graphql!` downloads the schema of {which} into `{PROJECT_SCHEMA_PATH}`: \
+             build once with network access and commit the file"
         )
-    })?;
-    read_schema(path)
+    })
 }
 
 /// Reads a schema file. One compilation expands many operations: each file is
@@ -548,9 +549,8 @@ fn expand_module(
     })
 }
 
-fn expand(input: Input) -> syn::Result<TokenStream> {
-    let schema =
-        LoadedSchema::load().map_err(|message| syn::Error::new(Span::call_site(), message))?;
+fn expand(input: Input, schema: Result<LoadedSchema, String>) -> syn::Result<TokenStream> {
+    let schema = schema.map_err(|message| syn::Error::new(Span::call_site(), message))?;
     match input {
         Input::Expression { source, variables } => expand_expression(&schema, &source, &variables),
         Input::Module {
@@ -566,7 +566,18 @@ fn expand(input: Input) -> syn::Result<TokenStream> {
 #[proc_macro]
 pub fn graphql(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as Input);
-    expand(input)
+    expand(input, LoadedSchema::load())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `graphql!` for the operations of `shopify_api` itself, checked against its
+/// `graphql/internal.schema.json`. Not for other crates.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __graphql_internal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as Input);
+    expand(input, LoadedSchema::internal())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

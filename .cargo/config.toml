@@ -1,0 +1,5 @@
+# The schema `graphql!` checks the operations of this workspace against,
+# tests and examples: the Admin schema 2026-10, without network access. It
+# also reaches the projects `trybuild` compiles for the compile-fail tests.
+[env]
+SHOPIFY_GRAPHQL_SCHEMA = { value = "crates/shopify_api/graphql/admin.schema.json", relative = true }

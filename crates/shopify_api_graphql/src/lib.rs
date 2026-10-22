@@ -4,26 +4,26 @@
 //! [`analyze`](fn@analyze) checks an operation against a [`Schema`] and describes the
 //! shape of its variables and of its result; [`codegen`] turns that
 //! description into Rust types. The `graphql!` macro is a thin layer over
-//! both. [`project`] finds the API version a crate declares in its
-//! `Cargo.toml`, and downloads that version's schema (with the `download`
-//! feature).
+//! both. [`project`] finds the API version of a crate (the one its
+//! `Cargo.toml` declares, else the latest), and downloads that version's
+//! schema (with the `download` feature). No schema is bundled.
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod analyze;
 pub mod codegen;
 pub mod project;
+mod restrict;
 pub mod schema;
 
 pub use analyze::{
     Deprecation, Error, FieldBase, Operation, OperationKind, Scalar, SelectedField, Selection,
     Variable, VariableBase, analyze,
 };
-pub use project::{PROJECT_SCHEMA_PATH, SCHEMA_ENV, SchemaSource, schema_source};
-pub use schema::{
-    BUNDLED_API_VERSION, Field, INTROSPECTION_QUERY, InputValue, Schema, SchemaError, TypeDef,
-    TypeRef,
+pub use project::{
+    PROJECT_SCHEMA_PATH, SCHEMA_ENV, SchemaSource, latest_api_version, schema_source,
 };
+pub use schema::{Field, INTROSPECTION_QUERY, InputValue, Schema, SchemaError, TypeDef, TypeRef};
 
 /// The oldest Admin API version `shopify_api` calls.
 pub const MINIMUM_API_VERSION: &str = "2026-04";
