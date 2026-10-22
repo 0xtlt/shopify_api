@@ -1,12 +1,18 @@
-//! `shopify-api`: downloads Shopify Admin schemas for `graphql!`, and checks
-//! `.graphql` files against them.
+//! `shopify-api`: downloads the Shopify Admin schema of the version a crate
+//! declares in its `Cargo.toml`, and checks `.graphql` files against it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use shopify_api::{ApiVersion, Auth, Shopify};
-use shopify_api_graphql::{PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, analyze};
+use shopify_api_graphql::project::{
+    configured_api_version, download_schema_file, metadata_snippet, write_atomically,
+};
+use shopify_api_graphql::{
+    BUNDLED_API_VERSION, PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, SchemaSource, analyze,
+    schema_source,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -32,17 +38,18 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum SchemaCommand {
-    /// Downloads the Admin schema of a version, where `graphql!` reads it.
+    /// Downloads the Admin schema of the version in `Cargo.toml` again, where
+    /// `graphql!` reads it.
     ///
-    /// From Shopify's public endpoint by default; through a shop with --shop.
+    /// The version is `api-version` in `[package.metadata.shopify_api]` of the
+    /// nearest package. `graphql!` downloads it by itself when the file is
+    /// missing or holds another version: this command refreshes it, or
+    /// downloads it through a shop with --shop.
     Download(DownloadArgs),
 }
 
 #[derive(Debug, Args)]
 struct DownloadArgs {
-    /// The Admin API version.
-    #[arg(long, default_value_t = ApiVersion::DEFAULT.to_string())]
-    api_version: String,
     /// Where to write it. By default, `graphql/admin.schema.json` next to the
     /// nearest `Cargo.toml` of a package, where `graphql!` reads it
     /// (`graphql/admin.introspection.json` with --introspection).
@@ -95,7 +102,17 @@ async fn main() -> ExitCode {
 }
 
 async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
-    let version = ApiVersion::new(&args.api_version).map_err(|error| error.to_string())?;
+    let root = package_root().ok_or(
+        "no Cargo.toml of a package in this directory or above: run it in the crate's directory",
+    )?;
+    let declared = configured_api_version(&root)?.ok_or_else(|| {
+        format!(
+            "{} declares no Admin API version. Add:\n\n{}",
+            root.join("Cargo.toml").display(),
+            metadata_snippet(BUNDLED_API_VERSION)
+        )
+    })?;
+    let version = ApiVersion::new(&declared).map_err(|error| error.to_string())?;
     let introspection = match &args.shop {
         None => {
             eprintln!("Downloading the Admin schema {version} from Shopify's public endpoint…");
@@ -133,9 +150,6 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
     let (out, project) = match &args.out {
         Some(out) => (out.clone(), false),
         None => {
-            let root = package_root().ok_or(
-                "no Cargo.toml of a package in this directory or above: run it in the crate's directory, or pass --out",
-            )?;
             let file = if args.introspection {
                 "graphql/admin.introspection.json"
             } else {
@@ -158,12 +172,7 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
             .map_err(|error| error.to_string())?;
         (schema.to_json(), schema.types.len())
     };
-    if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    }
-    std::fs::write(&out, contents)
-        .map_err(|error| format!("cannot write {}: {error}", out.display()))?;
+    write_atomically(&out, &contents)?;
     eprintln!("Wrote {} ({types} types).", out.display());
 
     if project {
@@ -171,8 +180,8 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
             touch_sources(root);
         }
         eprintln!(
-            "`graphql!` now checks the operations of this crate against the Admin API {version}, \
-             and sends them to that version. Commit the file: builds need it."
+            "`graphql!` checks the operations of this crate against the Admin API {version}, \
+             and sends them to that version. Commit the file: offline builds need it."
         );
     } else if !args.introspection {
         eprintln!(
@@ -213,29 +222,31 @@ fn package_root() -> Option<PathBuf> {
 
 /// The schema `graphql!` would use for the nearest package, as it looks for it.
 fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
-    let root = package_root();
-    let resolve = |path: PathBuf| match &root {
-        Some(root) if path.is_relative() => root.join(path),
-        _ => path,
+    let read = |path: &Path| -> Result<Schema, String> {
+        let json = std::fs::read_to_string(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        Schema::from_json(&json).map_err(|error| format!("{}: {error}", path.display()))
     };
-    let named = std::env::var_os(SCHEMA_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(resolve);
-    let project = root
-        .as_ref()
-        .map(|root| root.join(PROJECT_SCHEMA_PATH))
-        .filter(|path| path.is_file());
-    let path = path.map(Path::to_path_buf).or(named).or(project);
-    match path {
-        Some(path) => {
-            let json = std::fs::read_to_string(&path)
-                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-            let schema =
-                Schema::from_json(&json).map_err(|error| format!("{}: {error}", path.display()))?;
+    if let Some(path) = path {
+        return Ok((read(path)?, path.display().to_string()));
+    }
+    let named = std::env::var_os(SCHEMA_ENV);
+    match schema_source(package_root().as_deref(), named.as_deref())? {
+        SchemaSource::Bundled => Ok((Schema::bundled().clone(), "the bundled schema".to_string())),
+        SchemaSource::File(path) => Ok((read(&path)?, path.display().to_string())),
+        SchemaSource::Declared { path, version } => {
+            let schema = match read(&path) {
+                Ok(schema) if schema.api_version == version => schema,
+                _ => {
+                    eprintln!(
+                        "Downloading the Admin schema {version} into {}…",
+                        path.display()
+                    );
+                    download_schema_file(&path, &version)?
+                }
+            };
             Ok((schema, path.display().to_string()))
         }
-        None => Ok((Schema::bundled().clone(), "the bundled schema".to_string())),
     }
 }
 

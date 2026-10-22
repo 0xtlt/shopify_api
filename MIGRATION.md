@@ -132,10 +132,9 @@ Topics are accepted as `orders/create` or `ORDERS_CREATE`.
 | --- | --- |
 | `download_public_admin_schema("2026-04")` | `schema::download_public_admin_schema(ApiVersion::V2026_04)` |
 | `shopify.download_admin_schema()` | The same |
-| `shopify-api schema download --public --out file` | `shopify-api schema download` (public by default), `--introspection` for the raw result |
+| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it. `shopify-api schema download` refreshes it, `--introspection` for the raw result |
 
-`graphql!` reads the compact form the command writes by default, in
-`graphql/admin.schema.json`.
+`graphql!` reads the compact form it downloads, in `graphql/admin.schema.json`.
 
 ## Removed
 

@@ -1,10 +1,9 @@
 //! Downloading Shopify's Admin GraphQL schema, as an introspection result.
 //!
 //! [`graphql!`](crate::graphql!) checks operations against the schema of
-//! [`ApiVersion::DEFAULT`], bundled with this crate. For another version,
-//! the `shopify-api schema download` command stores the schema where
-//! `graphql!` reads it; these functions return the raw introspection result,
-//! for other tools.
+//! [`ApiVersion::DEFAULT`], bundled with this crate, or against the version
+//! a crate declares in its `Cargo.toml`, which it downloads by itself. These
+//! functions return the raw introspection result, for other tools.
 
 use serde_json::{Value, json};
 
@@ -125,10 +124,14 @@ fn check(value: Value) -> Result<Value> {
 #[cfg(all(test, feature = "cli"))]
 mod tests {
     #[test]
-    fn the_query_is_the_one_graphql_reads() {
+    fn the_query_and_the_endpoint_are_the_ones_graphql_uses() {
         assert_eq!(
             super::INTROSPECTION_QUERY,
             shopify_api_graphql::INTROSPECTION_QUERY
+        );
+        assert_eq!(
+            super::PUBLIC_ADMIN_SCHEMA_ENDPOINT,
+            shopify_api_graphql::project::PUBLIC_ADMIN_SCHEMA_ENDPOINT
         );
     }
 }

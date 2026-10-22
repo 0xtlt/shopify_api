@@ -3,7 +3,6 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -13,9 +12,10 @@ use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::codegen::{
     DATA_TYPE, VARIABLES_TYPE, data_types, variable_type, variables_types,
 };
+use shopify_api_graphql::project::{download_schema_file, metadata_snippet};
 use shopify_api_graphql::{
-    MINIMUM_API_VERSION, Operation, OperationKind, PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema,
-    Variable, analyze, is_supported_api_version,
+    BUNDLED_API_VERSION, MINIMUM_API_VERSION, Operation, OperationKind, PROJECT_SCHEMA_PATH,
+    SCHEMA_ENV, Schema, SchemaSource, Variable, analyze, is_supported_api_version, schema_source,
 };
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -202,23 +202,27 @@ impl LoadedSchema {
         // dependencies, which ship their own schema files.
         let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
         let named = std::env::var_os(SCHEMA_ENV).filter(|_| primary);
-        Ok(
-            match schema_file(manifest_dir().as_deref(), named.as_deref())? {
-                Some(path) => {
-                    let schema = read_schema(&path)?;
-                    if !is_supported_api_version(&schema.api_version) {
-                        return Err(format!(
-                            "`{}` is the schema of `{}`, a version shopify_api does not call (from {MINIMUM_API_VERSION}, or `unstable`): \
-                             download another one with `shopify-api schema download --api-version …`",
-                            path.display(),
-                            schema.api_version
-                        ));
-                    }
-                    Self::File { schema, path }
-                }
-                None => Self::Bundled,
-            },
-        )
+        let (path, schema) = match schema_source(manifest_dir().as_deref(), named.as_deref())? {
+            SchemaSource::Bundled => return Ok(Self::Bundled),
+            SchemaSource::File(path) => {
+                let schema = read_schema(&path)?;
+                (path, schema)
+            }
+            SchemaSource::Declared { path, version } => {
+                let schema = declared_schema(&path, &version)?;
+                (path, schema)
+            }
+        };
+        if !is_supported_api_version(&schema.api_version) {
+            return Err(format!(
+                "`{}` is the schema of `{}`, a version shopify_api does not call (from {MINIMUM_API_VERSION}, or `unstable`): \
+                 declare another one in Cargo.toml:\n\n{}",
+                path.display(),
+                schema.api_version,
+                metadata_snippet(BUNDLED_API_VERSION)
+            ));
+        }
+        Ok(Self::File { schema, path })
     }
 
     fn schema(&self) -> &Schema {
@@ -230,26 +234,34 @@ impl LoadedSchema {
 
     /// Makes the compiler rebuild the crate when what the expansion depends on changes.
     fn tracking(&self) -> TokenStream {
-        // One operation of the crate is enough to track the file, which is large.
+        // One operation of the crate is enough to track a file, which may be large.
         static TRACKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-        let file = match self {
-            Self::File { path, .. } => {
-                let mut tracked = TRACKED
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                (!tracked.contains(path)).then(|| {
-                    tracked.push(path.clone());
-                    let path = path.to_string_lossy().to_string();
-                    quote!(
-                        const _: &[u8] = ::core::include_bytes!(#path);
-                    )
-                })
-            }
+        let mut tracked = TRACKED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The manifest declares the API version, the schema file holds it.
+        let manifest = manifest_dir().map(|dir| dir.join("Cargo.toml"));
+        let schema = match self {
+            Self::File { path, .. } => Some(path.clone()),
             Self::Bundled => None,
         };
+        let files = [manifest, schema]
+            .into_iter()
+            .flatten()
+            .filter(|path| path.is_file());
+        let files: Vec<String> = files
+            .filter(|path| {
+                let new = !tracked.contains(path);
+                if new {
+                    tracked.push(path.clone());
+                }
+                new
+            })
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
         quote! {
             const _: ::core::option::Option<&str> = ::core::option_env!(#SCHEMA_ENV);
-            #file
+            #(const _: &[u8] = ::core::include_bytes!(#files);)*
         }
     }
 
@@ -275,27 +287,27 @@ impl LoadedSchema {
     }
 }
 
-/// The schema file of the crate being compiled, if it has one: the file named
-/// by `SHOPIFY_GRAPHQL_SCHEMA`, else `graphql/admin.schema.json` next to its
-/// `Cargo.toml` when that file exists.
-fn schema_file(
-    manifest_dir: Option<&Path>,
-    named: Option<&OsStr>,
-) -> Result<Option<PathBuf>, String> {
-    match named.filter(|value| !value.is_empty()) {
-        Some(named) => {
-            let path = resolve(manifest_dir, Path::new(named));
-            if !path.is_file() {
-                return Err(format!(
-                    "{SCHEMA_ENV} names `{}`, which is not a file",
-                    path.display()
-                ));
-            }
-            Ok(Some(path))
-        }
-        None => Ok(Some(resolve(manifest_dir, Path::new(PROJECT_SCHEMA_PATH)))
-            .filter(|path| path.is_file())),
+/// The schema of the version the crate declares: its file when it holds that
+/// version, else downloaded into it, once for every operation of the build.
+fn declared_schema(path: &Path, version: &str) -> Result<Arc<Schema>, String> {
+    static DOWNLOAD: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = DOWNLOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if path.is_file()
+        && let Ok(schema) = read_schema(path)
+        && schema.api_version == version
+    {
+        return Ok(schema);
     }
+    download_schema_file(path, version).map_err(|error| {
+        format!(
+            "{error}\n`graphql!` downloads the schema of the version in Cargo.toml once, into `{}`: \
+             build once with network access and commit the file",
+            PROJECT_SCHEMA_PATH
+        )
+    })?;
+    read_schema(path)
 }
 
 /// Reads a schema file. One compilation expands many operations: each file is
@@ -318,7 +330,7 @@ fn read_schema(file: &Path) -> Result<Arc<Schema>, String> {
         .map_err(|error| format!("Cannot read the schema `{}`: {error}", file.display()))?;
     let schema = Schema::from_json(&json).map(Arc::new).map_err(|error| {
         format!(
-            "`{}`: {error}. Run `shopify-api schema download` to download it again.",
+            "`{}`: {error}. Delete it, or run `shopify-api schema download`, to download it again.",
             file.display()
         )
     })?;
@@ -595,42 +607,6 @@ mod tests {
     }
 
     #[test]
-    fn a_crate_without_a_schema_file_uses_the_bundled_schema() {
-        let project = Project::new("bundled");
-        assert_eq!(schema_file(Some(&project.0), None), Ok(None));
-        assert_eq!(
-            schema_file(Some(&project.0), Some(OsStr::new(""))),
-            Ok(None)
-        );
-        assert_eq!(schema_file(None, None), Ok(None));
-    }
-
-    #[test]
-    fn the_crate_file_and_the_environment_select_another_schema() {
-        let project = Project::new("selected");
-        let downloaded = project.write("graphql/admin.schema.json", SCHEMA);
-        let other = project.write("schemas/unstable.json", SCHEMA);
-
-        assert_eq!(schema_file(Some(&project.0), None), Ok(Some(downloaded)));
-        // The environment wins, relative to the manifest or absolute.
-        let named = OsStr::new("schemas/unstable.json");
-        assert_eq!(
-            schema_file(Some(&project.0), Some(named)),
-            Ok(Some(other.clone()))
-        );
-        assert_eq!(schema_file(None, Some(other.as_os_str())), Ok(Some(other)));
-
-        let missing = project.0.join("missing.json");
-        assert_eq!(
-            schema_file(Some(&project.0), Some(OsStr::new("missing.json"))),
-            Err(format!(
-                "SHOPIFY_GRAPHQL_SCHEMA names `{}`, which is not a file",
-                missing.display()
-            ))
-        );
-    }
-
-    #[test]
     fn schema_files_are_read_once_and_again_when_they_change() {
         let project = Project::new("read");
         let file = project.write("graphql/admin.schema.json", SCHEMA);
@@ -662,7 +638,9 @@ mod tests {
             "{error}"
         );
         assert!(
-            error.ends_with(". Run `shopify-api schema download` to download it again."),
+            error.ends_with(
+                ". Delete it, or run `shopify-api schema download`, to download it again."
+            ),
             "{error}"
         );
 

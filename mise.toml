@@ -46,9 +46,9 @@ env = { TRYBUILD = "overwrite" }
 run = "cargo test -p shopify_api --all-features --locked --test compile_fail"
 
 [tasks."schema:bundle"]
-description = "Download the Admin schema bundled with the crates, for the version given (2026-10 by default)"
-usage = 'arg "[version]" default="2026-10"'
-run = "cargo run -p shopify_api --features cli --locked -- schema download --api-version ${usage_version} --out crates/shopify_api_graphql/schema/admin-${usage_version}.json"
+description = "Download the bundled Admin schema again, for the version in crates/shopify_api_graphql/Cargo.toml"
+dir = "crates/shopify_api_graphql"
+run = "cargo run -p shopify_api --features cli --locked -- schema download --out schema/admin.schema.json"
 
 [tasks."test:live"]
 description = "Run the tests against a real development store (needs SHOPIFY_TEST_SHOP and a token, see tests/live.rs)"

@@ -55,7 +55,7 @@ oauth = ["dep:hmac", "dep:sha2", "dep:base64", "dep:hex"]
 ## `MockTransport`, to test code that calls Shopify without the network.
 testing = []
 ## The `shopify-api` command: downloads Admin schemas, checks `.graphql` files.
-cli = ["dep:clap", "dep:shopify_api_graphql", "rustls", "tokio/macros", "tokio/rt-multi-thread", "tokio/fs"]
+cli = ["dep:clap", "dep:shopify_api_graphql", "shopify_api_graphql/download", "rustls", "tokio/macros", "tokio/rt-multi-thread", "tokio/fs"]
 full = ["webhooks", "oauth", "testing", "cli"]
 
 [[bin]]

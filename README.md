@@ -46,8 +46,8 @@ async fn main() -> shopify_api::Result<()> {
   then goes again. Queries are retried after a server error; mutations never
   run twice.
 - **The rest of an app's Admin API work**: pagination, bulk operations,
-  webhooks, OAuth and session tokens, a mock transport for tests, and a
-  command that downloads the schema of any API version.
+  webhooks, OAuth and session tokens, a mock transport for tests, and any
+  API version from one line of `Cargo.toml`.
 
 ## Install
 
@@ -129,19 +129,24 @@ The full reference of `graphql!`, with the mapping of every GraphQL type, is
 
 Every operation is checked against a schema, and **sent to the version of that
 schema**. Out of the box that is the bundled 2026-10. To work with another
-version, download its schema into your crate:
+version, declare it in your `Cargo.toml`:
 
-```bash
-cargo install shopify_api --features cli
-shopify-api schema download --api-version 2026-07   # writes graphql/admin.schema.json
+```toml
+[package.metadata.shopify_api]
+api-version = "2026-07"
 ```
 
-`graphql!` then checks your operations against 2026-07, and the client sends
-them to the 2026-07 endpoint: nothing else to change. Commit the file.
-`ShopifyBuilder::api_version` pins every request to one version instead.
+The next build downloads the 2026-07 schema into `graphql/admin.schema.json`,
+checks your operations against it, and the client sends them to the 2026-07
+endpoint: nothing else to change. Commit the file, so that builds without
+network access have it. Changing `api-version` downloads the new version on
+the next build. `ShopifyBuilder::api_version` pins every request to one
+version instead.
 
-`shopify-api check graphql/*.graphql` checks `.graphql` files the same way,
-for CI or for operations used by other tools.
+The `shopify-api` command (`cargo install shopify_api --features cli`)
+refreshes the file (`shopify-api schema download`, or `--shop` for the schema
+a token sees), and `shopify-api check graphql/*.graphql` checks `.graphql`
+files the same way, for CI or for operations used by other tools.
 
 ## Tokens
 
@@ -303,7 +308,7 @@ The toolchain and the tasks are in `mise.toml`:
 ```bash
 mise install
 mise run check          # what CI runs: fmt, clippy, tests, docs
-mise run schema:bundle  # download the bundled schema again (another version as argument)
+mise run schema:bundle  # download the bundled schema again (version in crates/shopify_api_graphql/Cargo.toml)
 mise tasks              # every task
 ```
 

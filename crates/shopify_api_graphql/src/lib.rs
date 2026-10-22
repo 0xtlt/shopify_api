@@ -4,19 +4,22 @@
 //! [`analyze`](fn@analyze) checks an operation against a [`Schema`] and describes the
 //! shape of its variables and of its result; [`codegen`] turns that
 //! description into Rust types. The `graphql!` macro is a thin layer over
-//! both, and the `shopify-api schema download` command uses
-//! [`Schema::from_introspection`] and [`Schema::to_json`] to store the schema
-//! of another API version.
+//! both. [`project`] finds the API version a crate declares in its
+//! `Cargo.toml`, and downloads that version's schema (with the `download`
+//! feature).
 #![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod analyze;
 pub mod codegen;
+pub mod project;
 pub mod schema;
 
 pub use analyze::{
     Deprecation, Error, FieldBase, Operation, OperationKind, Scalar, SelectedField, Selection,
     Variable, VariableBase, analyze,
 };
+pub use project::{PROJECT_SCHEMA_PATH, SCHEMA_ENV, SchemaSource, schema_source};
 pub use schema::{
     BUNDLED_API_VERSION, Field, INTROSPECTION_QUERY, InputValue, Schema, SchemaError, TypeDef,
     TypeRef,
@@ -39,11 +42,3 @@ pub fn is_supported_api_version(version: &str) -> bool {
     // Same length and form: the text orders as the dates do.
     well_formed && version >= MINIMUM_API_VERSION
 }
-
-/// Where a crate keeps the schema of another API version than the bundled
-/// one, relative to its `Cargo.toml`. `graphql!` uses it when it exists.
-pub const PROJECT_SCHEMA_PATH: &str = "graphql/admin.schema.json";
-
-/// The environment variable naming another schema file for `graphql!`,
-/// relative to the `Cargo.toml` of the crate being compiled, or absolute.
-pub const SCHEMA_ENV: &str = "SHOPIFY_GRAPHQL_SCHEMA";

@@ -159,7 +159,7 @@ fn warn_mismatch(pinned: ApiVersion, checked: &'static str) {
         warned.push((pinned, checked));
         tracing::warn!(
             "an operation checked against the Admin API {checked} is sent to {pinned}: \
-             download the schema of {pinned} with `shopify-api schema download --api-version {pinned}`, \
+             set `api-version = \"{pinned}\"` in `[package.metadata.shopify_api]` of Cargo.toml, \
              or let the client follow the schema by not pinning a version"
         );
     }

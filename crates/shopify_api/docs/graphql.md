@@ -193,21 +193,29 @@ graphql! {
 The schema bundled with the crate is the one of [`ApiVersion::DEFAULT`],
 2026-10. Nothing has to be downloaded to use `graphql!`.
 
-For another version, download its schema next to your `Cargo.toml`:
+For another version, declare it in your `Cargo.toml`:
 
-```bash
-cargo install shopify_api --features cli
-shopify-api schema download --api-version 2026-07
+```toml
+[package.metadata.shopify_api]
+api-version = "2026-07"
 ```
 
-This writes `graphql/admin.schema.json` (from Shopify's public endpoint, or
-through a shop with `--shop`), and `graphql!` then checks every operation of
-the crate against it. Commit the file: builds need it.
+On the next build, `graphql!` downloads that version's schema from Shopify's
+public endpoint into `graphql/admin.schema.json`, and checks every operation
+of the crate against it. Later builds read the file; a new `api-version`
+downloads again. Commit the file: builds without network access (CI
+sandboxes, docs.rs) need it, and so does a published crate.
+
+The `shopify-api` command (`cargo install shopify_api --features cli`)
+downloads the file again on demand: `shopify-api schema download`, or
+`shopify-api schema download --shop my-shop` for the schema a shop's token
+sees.
 
 | Source, in order | |
 | --- | --- |
 | `SHOPIFY_GRAPHQL_SCHEMA` | Path of a schema file, relative to `Cargo.toml` or absolute. It applies to the packages cargo builds, not to their dependencies, which keep their own schema. |
-| `graphql/admin.schema.json` | Written by `shopify-api schema download`. |
+| `api-version` in `[package.metadata.shopify_api]` | Kept in `graphql/admin.schema.json`, downloaded when the file is missing or holds another version. The bundled version needs no file. |
+| `graphql/admin.schema.json` | Used as it is when `Cargo.toml` declares no version. |
 | The bundled schema | [`ApiVersion::DEFAULT`]. |
 
 An operation goes to the version of the schema it was checked against: a

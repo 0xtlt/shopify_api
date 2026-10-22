@@ -17,7 +17,7 @@ include = ["src/**", "Cargo.toml", "README.md"]
 proc-macro = true
 
 [dependencies]
-shopify_api_graphql.workspace = true
+shopify_api_graphql = { workspace = true, features = ["download"] }
 
 proc-macro2.workspace = true
 quote.workspace = true

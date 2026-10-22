@@ -12,8 +12,8 @@
 //! - **The rest of the Admin API work:** cursor [pagination](Shopify::paginate),
 //!   [bulk operations](crate::bulk), [webhooks] and
 //!   [OAuth](oauth), a [`MockTransport`](testing::MockTransport)
-//!   for tests, and the `shopify-api` command, which downloads the schema of
-//!   another API version.
+//!   for tests, and the `shopify-api` command, which refreshes the schema
+//!   and checks `.graphql` files.
 //!
 //! ```no_run
 //! use shopify_api::{Auth, Shopify, graphql};

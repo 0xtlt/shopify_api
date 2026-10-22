@@ -58,7 +58,7 @@ fragment TypeRef on __Type {
 pub const BUNDLED_API_VERSION: &str = "2026-10";
 
 /// Shopify's Admin GraphQL schema for [`BUNDLED_API_VERSION`].
-const BUNDLED_SCHEMA: &str = include_str!("../schema/admin-2026-10.json");
+const BUNDLED_SCHEMA: &str = include_str!("../schema/admin.schema.json");
 
 /// The version of the stored form written by [`Schema::to_json`].
 const FORMAT: u32 = 1;
