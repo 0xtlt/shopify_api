@@ -72,8 +72,9 @@ graphql! {
     mod staged_uploads = file("graphql/operations/bulk_staged_uploads.graphql");
 }
 
-/// A bulk operation, as Shopify last reported it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A bulk operation, as Shopify last reported it. `Debug` leaves out the
+/// query string of `url` and `partial_data_url`: their signature.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct BulkOperation {
     pub id: String,
@@ -94,6 +95,27 @@ pub struct BulkOperation {
     /// Where to download what was written before a failure.
     pub partial_data_url: Option<String>,
     pub query: String,
+}
+
+impl std::fmt::Debug for BulkOperation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unsigned = |url: &Option<String>| url.as_deref().map(crate::error::without_query);
+        formatter
+            .debug_struct("BulkOperation")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("status", &self.status)
+            .field("error_code", &self.error_code)
+            .field("created_at", &self.created_at)
+            .field("completed_at", &self.completed_at)
+            .field("object_count", &self.object_count)
+            .field("root_object_count", &self.root_object_count)
+            .field("file_size", &self.file_size)
+            .field("url", &unsigned(&self.url))
+            .field("partial_data_url", &unsigned(&self.partial_data_url))
+            .field("query", &self.query)
+            .finish()
+    }
 }
 
 /// The status of a bulk operation. A status Shopify adds later is `Other`.
@@ -664,6 +686,36 @@ fn multipart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_hides_the_signature_of_the_download_addresses() {
+        let operation = BulkOperation {
+            id: "gid://shopify/BulkOperation/1".to_string(),
+            kind: BulkOperationType::Query,
+            status: BulkOperationStatus::Completed,
+            error_code: None,
+            created_at: "2026-10-22T10:00:00Z".to_string(),
+            completed_at: None,
+            object_count: 0,
+            root_object_count: 0,
+            file_size: None,
+            url: Some("https://storage.googleapis.com/a.jsonl?X-Goog-Signature=SECRET".to_string()),
+            partial_data_url: Some(
+                "https://storage.googleapis.com/b.jsonl?X-Goog-Signature=SECRET".to_string(),
+            ),
+            query: "{ shop { name } }".to_string(),
+        };
+        let shown = format!("{operation:?}");
+        assert!(!shown.contains("SECRET"), "{shown}");
+        assert!(
+            shown.contains("https://storage.googleapis.com/a.jsonl"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("https://storage.googleapis.com/b.jsonl"),
+            "{shown}"
+        );
+    }
 
     #[test]
     fn parses_jsonl_and_names_the_line_at_fault() {

@@ -52,7 +52,8 @@ enum SchemaCommand {
     Download(DownloadArgs),
 }
 
-#[derive(Debug, Args)]
+/// `Debug` hides the access token and the client secret.
+#[derive(Args)]
 struct DownloadArgs {
     /// Where to write it. By default, `graphql/admin.schema.json` next to the
     /// nearest `Cargo.toml` of a package, where `graphql!` reads it
@@ -76,6 +77,22 @@ struct DownloadArgs {
     client_id: Option<String>,
     #[arg(long, env = "SHOPIFY_CLIENT_SECRET", hide_env_values = true)]
     client_secret: Option<String>,
+}
+
+impl std::fmt::Debug for DownloadArgs {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = |secret: &Option<String>| secret.as_ref().map(|_| "[redacted]");
+        formatter
+            .debug_struct("DownloadArgs")
+            .field("out", &self.out)
+            .field("introspection", &self.introspection)
+            .field("only", &self.only)
+            .field("shop", &self.shop)
+            .field("access_token", &hidden(&self.access_token))
+            .field("client_id", &self.client_id)
+            .field("client_secret", &hidden(&self.client_secret))
+            .finish()
+    }
 }
 
 #[derive(Debug, Args)]

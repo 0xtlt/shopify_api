@@ -160,8 +160,9 @@ impl Transport for MockTransport {
     }
 }
 
-/// A GraphQL request, as a [`MockTransport`] received it.
-#[derive(Debug, Clone, PartialEq)]
+/// A GraphQL request, as a [`MockTransport`] received it. `Debug` hides
+/// the access token.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GraphqlRequest {
     pub url: String,
@@ -172,6 +173,23 @@ pub struct GraphqlRequest {
     pub variables: Value,
     pub operation_name: Option<String>,
     pub access_token: Option<String>,
+}
+
+impl std::fmt::Debug for GraphqlRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GraphqlRequest")
+            .field("url", &self.url)
+            .field("api_version", &self.api_version)
+            .field("query", &self.query)
+            .field("variables", &self.variables)
+            .field("operation_name", &self.operation_name)
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl GraphqlRequest {
@@ -209,4 +227,26 @@ pub fn client(mock: &MockTransport) -> Shopify {
         )
         .build()
         .expect("a valid test client")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::Method;
+
+    #[test]
+    fn a_graphql_request_debug_hides_the_access_token() {
+        let request = HttpRequest::new(
+            Method::Post,
+            "https://shop.myshopify.com/admin/api/2026-10/graphql.json",
+        )
+        .with_header("X-Shopify-Access-Token", "shpat_SECRET")
+        .with_body(r#"{"query":"{ shop { name } }"}"#);
+        let request = GraphqlRequest::read(&request).unwrap();
+        assert_eq!(request.access_token.as_deref(), Some("shpat_SECRET"));
+        let shown = format!("{request:?}");
+        assert!(!shown.contains("shpat_SECRET"), "{shown}");
+        assert!(shown.contains("[redacted]"), "{shown}");
+        assert!(shown.contains("{ shop { name } }"), "{shown}");
+    }
 }

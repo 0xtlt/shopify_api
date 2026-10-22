@@ -10,7 +10,34 @@ use std::time::Duration;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Header names whose value is a secret, hidden by `Debug`.
-const SECRET_HEADERS: [&str; 3] = ["x-shopify-access-token", "authorization", "cookie"];
+const SECRET_HEADERS: [&str; 5] = [
+    "x-shopify-access-token",
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+];
+
+/// Headers as `Debug` shows them: secret values hidden, and the query
+/// string of a `Location`, which may be a signed address, left out.
+fn shown_headers(headers: &[(String, String)]) -> Vec<(&str, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let shown = if SECRET_HEADERS
+                .iter()
+                .any(|secret| name.eq_ignore_ascii_case(secret))
+            {
+                "[redacted]".to_string()
+            } else if name.eq_ignore_ascii_case("location") {
+                crate::error::without_query(value)
+            } else {
+                value.clone()
+            };
+            (name.as_str(), shown)
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -21,8 +48,9 @@ pub enum Method {
 
 /// A request this crate sends.
 ///
-/// `Debug` hides the value of secret headers and the body, which may hold a
-/// client secret or a refresh token.
+/// `Debug` hides the value of secret headers, the query string of the
+/// address, which may sign it, and the body, which may hold a client secret
+/// or a refresh token.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HttpRequest {
@@ -90,24 +118,12 @@ impl HttpRequest {
 
 impl fmt::Debug for HttpRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let headers: Vec<(&str, &str)> = self
-            .headers
-            .iter()
-            .map(|(name, value)| {
-                let secret = SECRET_HEADERS
-                    .iter()
-                    .any(|secret| name.eq_ignore_ascii_case(secret));
-                (
-                    name.as_str(),
-                    if secret { "[redacted]" } else { value.as_str() },
-                )
-            })
-            .collect();
         formatter
             .debug_struct("HttpRequest")
             .field("method", &self.method)
-            .field("url", &self.url)
-            .field("headers", &headers)
+            // A signed address (a bulk download) carries its credential in its query string.
+            .field("url", &crate::error::without_query(&self.url))
+            .field("headers", &shown_headers(&self.headers))
             .field("body", &format_args!("[{} bytes]", self.body.len()))
             .field("timeout", &self.timeout)
             .finish()
@@ -130,7 +146,7 @@ impl fmt::Debug for HttpResponse {
         formatter
             .debug_struct("HttpResponse")
             .field("status", &self.status)
-            .field("headers", &self.headers)
+            .field("headers", &shown_headers(&self.headers))
             .field("body", &format_args!("[{} bytes]", self.body.len()))
             .finish()
     }
@@ -358,6 +374,31 @@ mod tests {
             request.form(),
             [("client_secret".to_string(), "very-secret".to_string())]
         );
+    }
+
+    /// A signed download address carries its credential in its query string.
+    #[test]
+    fn debug_hides_the_query_string_of_the_url() {
+        let request = HttpRequest::new(
+            Method::Get,
+            "https://storage.googleapis.com/export.jsonl?X-Goog-Signature=SECRET#frag",
+        );
+        let shown = format!("{request:?}");
+        assert!(!shown.contains("SECRET"), "{shown}");
+        assert!(
+            shown.contains("https://storage.googleapis.com/export.jsonl"),
+            "{shown}"
+        );
+        assert_eq!(
+            request.url,
+            "https://storage.googleapis.com/export.jsonl?X-Goog-Signature=SECRET#frag"
+        );
+
+        let response = HttpResponse::new(302, "")
+            .with_header("Set-Cookie", "session=SECRET")
+            .with_header("Location", "https://storage.googleapis.com/x?sig=SECRET");
+        let shown = format!("{response:?}");
+        assert!(!shown.contains("SECRET"), "{shown}");
     }
 
     #[test]
