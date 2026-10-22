@@ -349,11 +349,20 @@ fn redact_tokens(text: &str) -> String {
 
 fn looks_like_a_credential(word: &str) -> bool {
     let bytes = word.as_bytes();
-    let shopify = bytes.len() > 6
-        && bytes.starts_with(b"shp")
-        && bytes[3..5].iter().all(u8::is_ascii_lowercase)
-        && bytes[5] == b'_';
-    let jwt = word.starts_with("eyJ") && word.matches('.').count() >= 2;
+    // Anywhere in the word after a separator: `key=shpat_…`, `/eyJ….….…`.
+    let starts =
+        (0..bytes.len()).filter(|&index| index == 0 || !bytes[index - 1].is_ascii_alphanumeric());
+    let shopify = starts.clone().any(|index| {
+        let rest = &bytes[index..];
+        rest.len() > 6
+            && rest.starts_with(b"shp")
+            && rest[3..5].iter().all(u8::is_ascii_lowercase)
+            && rest[5] == b'_'
+    });
+    let jwt = starts.into_iter().any(|index| {
+        bytes[index..].starts_with(b"eyJ")
+            && bytes[index..].iter().filter(|byte| **byte == b'.').count() >= 2
+    });
     let mixed = word.len() >= 32
         && word.bytes().any(|byte| byte.is_ascii_alphabetic())
         && word.bytes().any(|byte| byte.is_ascii_digit())
@@ -454,7 +463,8 @@ mod tests {
             "random 4f9a8c7e6d5b4a39281706f5e4d3c2b1a0 ",
             "Authorization: Bearer abc.DEF-123 next ",
             "<StringToSign>GOOG4-RSA-SHA256</StringToSign> X-Goog-Signature=CCC&b=1 ",
-            "id gid://shopify/Product/1 request a1b2c3d4-e5f6",
+            "id gid://shopify/Product/1 request a1b2c3d4-e5f6 ",
+            "glued x=shpat_GLUED1 /eyJhbGciOiJIUzI1NiJ9.eyJzdWIi.GLUED2 ",
         );
         let shown = http_body(body.as_bytes());
         for secret in [
@@ -467,6 +477,8 @@ mod tests {
             "4f9a8c7e6d5b4a39281706f5e4d3c2b1a0",
             "abc.DEF-123",
             "CCC",
+            "GLUED1",
+            "GLUED2",
         ] {
             assert!(!shown.contains(secret), "{secret} in {shown}");
         }
