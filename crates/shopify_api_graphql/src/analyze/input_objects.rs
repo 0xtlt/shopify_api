@@ -4,6 +4,8 @@
 //! the first and the analyzer never sees it, while the text Shopify receives
 //! still holds both. The check reads the text itself.
 
+use std::collections::HashSet;
+
 use graphql_parser::Pos;
 
 /// The first input field given twice in one input object of `source`, with
@@ -23,7 +25,7 @@ pub(super) fn duplicate_field(source: &str) -> Option<(&str, Pos)> {
                 let object = matches!(previous, Some(Token::Punctuator(b':' | b'=')))
                     || matches!(frames.last(), Some(Frame::List));
                 frames.push(if object {
-                    Frame::Object(Vec::new())
+                    Frame::Object(HashSet::new())
                 } else {
                     Frame::Other
                 });
@@ -38,11 +40,9 @@ pub(super) fn duplicate_field(source: &str) -> Option<(&str, Pos)> {
                 // of one (an enum value, `true`, `null`) or of a variable.
                 if let Some(Frame::Object(fields)) = frames.last_mut()
                     && !matches!(previous, Some(Token::Punctuator(b':' | b'$')))
+                    && !fields.insert(name)
                 {
-                    if fields.contains(&name) {
-                        return Some((name, position_of(source, start)));
-                    }
-                    fields.push(name);
+                    return Some((name, position_of(source, start)));
                 }
             }
             _ => {}
@@ -54,7 +54,7 @@ pub(super) fn duplicate_field(source: &str) -> Option<(&str, Pos)> {
 
 enum Frame<'a> {
     /// An input object, with the fields given so far.
-    Object(Vec<&'a str>),
+    Object(HashSet<&'a str>),
     List,
     /// A selection set or arguments.
     Other,
@@ -209,5 +209,27 @@ mod tests {
         ] {
             assert_eq!(duplicate(source), None, "{source}");
         }
+    }
+
+    #[test]
+    fn a_large_input_object_is_scanned_in_linear_time() {
+        // Looking each field up among the previous ones took about 50 s for this
+        // object in a debug build; a set takes well under one.
+        let fields: Vec<String> = (0..100_000)
+            .map(|index| format!("f{index}: {index}"))
+            .collect();
+        let source = format!("{{ a(x: {{{}}}) {{ id }} }}", fields.join(", "));
+        let started = std::time::Instant::now();
+        assert_eq!(duplicate(&source), None);
+        let duplicated = format!("{{ a(x: {{{}, f99999: 0}}) {{ id }} }}", fields.join(", "));
+        assert_eq!(
+            duplicate(&duplicated).map(|(name, ..)| name),
+            Some("f99999")
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }
