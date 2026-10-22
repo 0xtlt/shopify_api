@@ -332,11 +332,7 @@ impl std::error::Error for Error {
 
 /// `version` when it is written `YYYY-MM`: digits cannot be a token.
 fn shown_version(version: &str) -> Option<&str> {
-    let bytes = version.as_bytes();
-    (bytes.len() == 7
-        && bytes[4] == b'-'
-        && bytes[..4].iter().chain(&bytes[5..]).all(u8::is_ascii_digit))
-    .then_some(version)
+    crate::version::is_dated(version).then_some(version)
 }
 
 /// The kind of content of an answer, from this crate's list.

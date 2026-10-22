@@ -310,7 +310,7 @@ impl TokenResponse {
     }
 }
 
-pub(crate) fn token_url(shop: &ShopDomain) -> String {
+fn token_url(shop: &ShopDomain) -> String {
     format!("https://{shop}/admin/oauth/access_token")
 }
 
@@ -336,7 +336,7 @@ pub(crate) async fn request_token(
     let request = HttpRequest::new(Method::Post, &url)
         .with_header("Accept", "application/json")
         .with_header("User-Agent", user_agent)
-        .with_timeout(std::time::Duration::from_secs(30));
+        .with_timeout(Duration::from_secs(30));
     let request = match encoding {
         Encoding::Form => request.with_form(fields),
         Encoding::Json => {
@@ -354,17 +354,12 @@ pub(crate) async fn request_token(
     if !response.is_success() {
         // What the endpoint wrote is kept apart: it may echo what it was sent.
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-        let code = body
-            .get("error")
-            .and_then(serde_json::Value::as_str)
-            .map(oauth_error_code);
+        let error = body.get("error").and_then(serde_json::Value::as_str);
+        let code = error.map(oauth_error_code);
         let description = body
             .get("error_description")
             .and_then(serde_json::Value::as_str);
-        let detail = match (
-            body.get("error").and_then(serde_json::Value::as_str),
-            description,
-        ) {
+        let detail = match (error, description) {
             (Some(code), Some(description)) => format!("{code}: {description}"),
             (Some(code), None) => code.to_string(),
             _ => String::from_utf8_lossy(&response.body).into_owned(),
@@ -394,11 +389,11 @@ pub(crate) async fn request_token(
 
 /// How long a failed renewal ahead of expiry holds back the next one, while
 /// the current token still works.
-pub(crate) const RENEWAL_BACKOFF: Duration = Duration::from_secs(30);
+const RENEWAL_BACKOFF: Duration = Duration::from_secs(30);
 
 /// How long a failed renewal is the answer of the requests that wait for a
 /// token, instead of each asking Shopify again.
-pub(crate) const FAILURE_HOLD: Duration = Duration::from_secs(5);
+const FAILURE_HOLD: Duration = Duration::from_secs(5);
 
 /// What the client needs to ask for a token.
 pub(crate) struct Endpoint {

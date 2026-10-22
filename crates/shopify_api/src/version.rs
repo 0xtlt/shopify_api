@@ -57,11 +57,7 @@ impl ApiVersion {
         if version == "unstable" {
             return Ok(Self::UNSTABLE);
         }
-        let bytes = version.as_bytes();
-        let well_formed = bytes.len() == 7
-            && bytes[4] == b'-'
-            && bytes[..4].iter().chain(&bytes[5..]).all(u8::is_ascii_digit);
-        if !well_formed {
+        if !is_dated(version) {
             return Err(invalid(
                 "expected `YYYY-MM`, such as `2026-10`, or `unstable`",
             ));
@@ -89,6 +85,14 @@ impl Default for ApiVersion {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// Written `YYYY-MM`.
+pub(crate) fn is_dated(version: &str) -> bool {
+    let bytes = version.as_bytes();
+    bytes.len() == 7
+        && bytes[4] == b'-'
+        && bytes[..4].iter().chain(&bytes[5..]).all(u8::is_ascii_digit)
 }
 
 impl fmt::Display for ApiVersion {

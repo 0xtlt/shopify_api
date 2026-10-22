@@ -17,8 +17,6 @@ use crate::error::GraphqlErrors;
 use crate::transport::{HttpRequest, Method};
 use crate::{ApiVersion, Error, Result, Shopify};
 
-pub(crate) use response::decode;
-
 impl Shopify {
     /// Runs an operation and returns its typed `data`.
     ///
@@ -55,7 +53,7 @@ impl Shopify {
         let raw = self.send_graphql(version, &body, operation.kind()).await?;
         let (data, extensions) = into_data(raw)?;
         Ok(Response {
-            data: decode(data)?,
+            data: crate::decode::from_value(data)?,
             extensions,
         })
     }
@@ -86,7 +84,7 @@ impl Shopify {
         query: &str,
         variables: impl Serialize,
     ) -> Result<T> {
-        decode(self.graphql(query, variables).await?)
+        crate::decode::from_value(self.graphql(query, variables).await?)
     }
 
     /// Runs any query or mutation and returns the answer as Shopify sent

@@ -197,13 +197,8 @@ impl RawResponse {
 
     /// The `data` read as `T`, the path of the first mismatch in the error.
     pub fn data_as<T: DeserializeOwned>(&self) -> crate::Result<T> {
-        decode(self.data.clone().unwrap_or(Value::Null))
+        crate::decode::from_value(self.data.clone().unwrap_or(Value::Null))
     }
-}
-
-/// Reads `value` as `T`, naming the path of the first field that does not fit.
-pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> crate::Result<T> {
-    crate::decode::from_value(value)
 }
 
 #[cfg(test)]
@@ -266,7 +261,8 @@ mod tests {
             name: String,
         }
         let error =
-            decode::<Data>(json!({ "orders": [{ "name": "#1" }, { "id": 2 }] })).unwrap_err();
+            crate::decode::from_value::<Data>(json!({ "orders": [{ "name": "#1" }, { "id": 2 }] }))
+                .unwrap_err();
         assert_eq!(
             error.to_string(),
             "Shopify's answer does not match the operation at `orders[1]`: missing field `name`"
