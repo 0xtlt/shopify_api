@@ -1,6 +1,8 @@
 //! Checks a GraphQL operation against a schema and describes the shape of
 //! its variables and of its result.
 
+mod input_objects;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -178,6 +180,14 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
             ));
         }
     };
+
+    // Checked on the text: the parser keeps only the last of the two.
+    if let Some((field, position)) = input_objects::duplicate_field(source) {
+        return error_at(
+            position,
+            format!("The input field `{field}` is given twice in the same input object"),
+        );
+    }
 
     let mut operations = Vec::new();
     let mut fragments = BTreeMap::new();

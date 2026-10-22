@@ -240,6 +240,20 @@ fn accepts_literals_of_every_kind() {
 
 // ─── Refused ─────────────────────────────────────────────────────────
 
+/// Input Object Field Uniqueness: the parser would keep one, Shopify gets both.
+#[test]
+fn refuses_an_input_field_given_twice() {
+    assert_eq!(
+        refusal(
+            r#"mutation { productUpdate(product: {id: "1", title: "old", title: "new"}) { product { id } } }"#
+        ),
+        "The input field `title` is given twice in the same input object (line 1, column 59)"
+    );
+    check(
+        r#"mutation { productUpdate(product: {id: "1", title: "new"}) { product { id title } } }"#,
+    );
+}
+
 /// Only a default other than `null` lets a nullable variable fill a non-null place.
 #[test]
 fn refuses_a_null_default_for_a_non_null_place() {
