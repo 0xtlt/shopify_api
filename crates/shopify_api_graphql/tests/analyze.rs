@@ -703,3 +703,42 @@ fn directives_come_from_the_schema() {
         "Variable `$flag` of type `String!` cannot be used for argument `if` of `@include`, which expects `Boolean!` (line 1, column 37)"
     );
 }
+
+/// FieldsInSetCanMerge: on two different object types, one key may name
+/// different fields, or the same field with other arguments, as long as the
+/// shapes of the answers agree. On the same type, or an interface, it may not.
+#[test]
+fn one_key_may_name_different_fields_on_different_object_types() {
+    let operation = check(
+        "query($id: ID!) { node(id: $id) { ... on Product { label: title } ... on Order { label: name } } }",
+    );
+    assert_eq!(fields(child(&operation.data, "node")), ["label?: String!"]);
+
+    // Same type of object below: their subfields merge.
+    let operation = check(
+        "query($id: ID!) { node(id: $id) { ...P ...O } }
+         fragment P on ProductVariant { owner: image { url } }
+         fragment O on Collection { owner: image { url } }",
+    );
+    assert_eq!(fields(child(&operation.data, "node")), ["owner?: Image"]);
+
+    let operation = check(
+        "query($id: ID!) { node(id: $id) { ... on Product { m: metafield(key: \"a\") { value } } ... on Order { m: metafield(key: \"b\") { value } } } }",
+    );
+    assert_eq!(fields(child(&operation.data, "node")), ["m?: Metafield"]);
+
+    // The same object type: the fields must be the same.
+    assert!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on Product { label: title } ... on Order { label: name } ... on Product { label: handle } } }"
+        )
+        .contains("`label` is selected twice with different fields or types (`title: String!` and `handle: String!`)")
+    );
+    // Shapes that differ, even on different types.
+    assert!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on Product { label: title } ... on Order { label: email } } }"
+        )
+        .contains("`label` is selected twice with different fields or types")
+    );
+}

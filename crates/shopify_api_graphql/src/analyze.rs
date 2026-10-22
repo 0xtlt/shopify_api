@@ -369,8 +369,10 @@ struct Pending<'a> {
     key: String,
     field: String,
     ty: TypeRef,
-    /// The arguments, written the same way for every place that gives the same ones.
-    arguments: String,
+    /// Where the key was selected: on which parent type, which field, with
+    /// which arguments (written the same way for every place that gives the
+    /// same ones).
+    origins: Vec<Origin>,
     /// The field may be absent from a value of the parent.
     conditional: bool,
     /// The subfields selected at each place, with whether that place may
@@ -380,6 +382,13 @@ struct Pending<'a> {
     /// the field unconditionally.
     unconditional_in: BTreeSet<usize>,
     position: Pos,
+}
+
+/// One place a response key is selected at.
+struct Origin {
+    parent: String,
+    field: String,
+    arguments: String,
 }
 
 /// Which of the sets merged into one selection a field comes from.
@@ -534,7 +543,8 @@ impl<'a> Analyzer<'a> {
 
                     match pending.iter_mut().find(|existing| existing.key == key) {
                         Some(existing) => {
-                            if existing.field != field.name || existing.ty != ty {
+                            // The answer holds one value under the key: one type.
+                            if existing.ty != ty {
                                 return error_at(
                                     field.position,
                                     format!(
@@ -543,15 +553,39 @@ impl<'a> Analyzer<'a> {
                                     ),
                                 );
                             }
-                            if existing.arguments != arguments {
-                                return error_at(
-                                    field.position,
-                                    format!(
-                                        "`{key}` is selected twice with different arguments (`({})` and `({arguments})`); give one of them an alias",
-                                        existing.arguments
-                                    ),
-                                );
+                            // FieldsInSetCanMerge: on two different object
+                            // types, never both there, the fields and their
+                            // arguments may differ; elsewhere they may not.
+                            for origin in &existing.origins {
+                                let exclusive = origin.parent != parent
+                                    && self.is_object(parent)
+                                    && self.is_object(&origin.parent);
+                                if !exclusive {
+                                    if origin.field != field.name {
+                                        return error_at(
+                                            field.position,
+                                            format!(
+                                                "`{key}` is selected twice with different fields or types (`{}: {}` and `{}: {ty}`); give one of them an alias",
+                                                origin.field, existing.ty, field.name
+                                            ),
+                                        );
+                                    }
+                                    if origin.arguments != arguments {
+                                        return error_at(
+                                            field.position,
+                                            format!(
+                                                "`{key}` is selected twice with different arguments (`({})` and `({arguments})`); give one of them an alias",
+                                                origin.arguments
+                                            ),
+                                        );
+                                    }
+                                }
                             }
+                            existing.origins.push(Origin {
+                                parent: parent.to_string(),
+                                field: field.name.clone(),
+                                arguments,
+                            });
                             existing.conditional &= conditional;
                             existing.sets.extend(sets);
                             if !conditional {
@@ -562,7 +596,11 @@ impl<'a> Analyzer<'a> {
                             key,
                             field: field.name.clone(),
                             ty,
-                            arguments,
+                            origins: vec![Origin {
+                                parent: parent.to_string(),
+                                field: field.name.clone(),
+                                arguments,
+                            }],
                             conditional,
                             sets: sets.into_iter().collect(),
                             unconditional_in: (!conditional)
@@ -634,6 +672,11 @@ impl<'a> Analyzer<'a> {
 
     /// Whether every value of type `parent` matches a fragment on `condition`.
     /// Fails when none can.
+    /// An object type, as opposed to an interface or a union.
+    fn is_object(&self, name: &str) -> bool {
+        matches!(self.schema.get(name), Some(TypeDef::Object { .. }))
+    }
+
     fn fragment_always_applies(
         &self,
         parent: &str,
