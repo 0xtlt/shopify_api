@@ -257,7 +257,7 @@ fn rfc850_date(
     value: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
-    use chrono::{Datelike, Months, NaiveDateTime};
+    use chrono::{Datelike, Months, NaiveDateTime, Timelike};
     let (weekday, rest) = value.split_once(", ")?;
     let (day, rest) = rest.split_once('-')?;
     let (month, rest) = rest.split_once('-')?;
@@ -266,20 +266,23 @@ fn rfc850_date(
         return None;
     }
     let two_digits: i32 = year.parse().ok()?;
+    // The day, month and time, read in a leap year so that 29 February
+    // reads: the century is chosen before the date is checked.
+    let parts = NaiveDateTime::parse_from_str(
+        &format!("{day}-{month}-2000 {time}"),
+        "%d-%b-%Y %H:%M:%S GMT",
+    )
+    .ok()?;
     let latest = now.checked_add_months(Months::new(50 * 12))?;
+    let at = |date: &NaiveDateTime| (date.month(), date.day(), date.num_seconds_from_midnight());
     // The latest year ending in these digits that is not more than 50 years ahead.
     let mut full_year = now.year() - now.year().rem_euclid(100) + 100 + two_digits;
-    loop {
-        let text = format!("{day}-{month}-{full_year} {time}");
-        let date = NaiveDateTime::parse_from_str(&text, "%d-%b-%Y %H:%M:%S GMT")
-            .ok()?
-            .and_utc();
-        if date <= latest {
-            let named = date.format("%A").to_string();
-            return (named == weekday).then_some(date);
-        }
+    while (full_year, at(&parts)) > (latest.year(), at(&latest.naive_utc())) {
         full_year -= 100;
     }
+    let date = parts.with_year(full_year)?.and_utc();
+    let named = date.format("%A").to_string();
+    (named == weekday).then_some(date)
 }
 /// The `data` and `extensions` of an answer without errors.
 fn into_data(raw: RawResponse) -> Result<(Value, Option<Value>)> {
@@ -337,6 +340,15 @@ mod tests {
         assert_eq!(year("Saturday, 06-Nov-99 08:49:37 GMT"), Some(1999));
         assert_eq!(year("Thursday, 06-Nov-70 08:49:37 GMT"), Some(2070));
         assert_eq!(year("Monday, 06-Nov-00 08:49:37 GMT"), Some(2000));
+        // 29 February: the century first (2100 is no leap year, 2000 is).
+        assert_eq!(year("Tuesday, 29-Feb-00 08:49:37 GMT"), Some(2000));
+        assert_eq!(
+            retry_after_from("Tuesday, 29-Feb-00 08:49:37 GMT", in_2026),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(year("Saturday, 29-Feb-76 08:49:37 GMT"), Some(2076));
+        // No year ending in `01` has a 29 February.
+        assert_eq!(year("Thursday, 29-Feb-01 08:49:37 GMT"), None);
         // A weekday that does not match its date is no date.
         assert_eq!(year("Monday, 06-Nov-69 08:49:37 GMT"), None);
         assert_eq!(year("Sunday, 06-Nov-1994 08:49:37 GMT"), None);
