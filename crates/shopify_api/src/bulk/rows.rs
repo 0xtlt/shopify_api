@@ -73,7 +73,6 @@ impl Lines {
         }
     }
 
-    /// Stops reading: what is left of the body is dropped.
     fn finish(&mut self) {
         self.done = true;
         self.body = None;
@@ -278,7 +277,6 @@ impl<T: DeserializeOwned> FusedStream for BulkRows<T> {
     }
 }
 
-/// What [`BulkGroups`] reads of each line to place it.
 #[derive(Deserialize)]
 struct Keys {
     id: Option<String>,
@@ -500,7 +498,6 @@ mod tests {
         out
     }
 
-    /// The rows and errors as text: what a split must not change.
     fn shown(results: &[Result<serde_json::Value>]) -> Vec<String> {
         results
             .iter()
@@ -511,7 +508,6 @@ mod tests {
             .collect()
     }
 
-    /// What `parse_jsonl` gives line by line: each line on its own, numbered.
     fn buffered(body: &[u8]) -> Vec<String> {
         body.split(|byte| *byte == b'\n')
             .enumerate()
@@ -617,7 +613,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_line_longer_than_the_limit_ends_the_stream() {
-        // Too long whether its newline comes with it or not.
         for parts in [
             vec![b"{\"a\":1}\n{\"b\":\"0123456789\"}\n{\"c\":3}\n".to_vec()],
             vec![
@@ -705,7 +700,6 @@ mod tests {
         );
         let chunk = line.repeat(64).into_bytes();
         let chunk_len = chunk.len();
-        // About 20 MB, generated as it is read.
         let count = 20_000_000 / chunk_len;
         let body = std::iter::repeat_n(chunk, count).map(Ok);
         let mut rows: BulkRows<serde::de::IgnoredAny> =
@@ -883,7 +877,6 @@ mod tests {
             "bulk operation: line 4 of the results is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
         );
 
-        // Before any top-level object, or to an unknown parent.
         for body in [
             "{\"id\":\"V1\",\"__parentId\":\"P1\"}\n{\"id\":\"P1\"}\n",
             "{\"id\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P9\"}\n",
@@ -898,17 +891,14 @@ mod tests {
     async fn a_parent_without_id_is_named_as_the_cause() {
         const MISSING: &str = "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections";
         for (body, line) in [
-            // A top-level object without `id`.
             (
                 "{\"title\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
                 2,
             ),
-            // A first-level child without `id`, parent of the second level.
             (
                 "{\"id\":\"P1\"}\n{\"sku\":\"V1\",\"__parentId\":\"P1\"}\n{\"id\":\"L1\",\"__parentId\":\"V1\"}\n",
                 3,
             ),
-            // An aliased `id`.
             (
                 "{\"productId\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
                 2,

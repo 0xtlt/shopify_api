@@ -102,7 +102,6 @@ async fn an_operation_without_results_streams_nothing() {
 async fn a_refused_download_keeps_the_first_mib_of_its_body_and_hides_the_signature() {
     let mock = MockTransport::new();
     let chunk = vec![b'x'; 256 * 1024];
-    // 8 MiB of error body: the error keeps 1 MiB, the rest is not read.
     let read = Arc::new(Mutex::new(0));
     let counter = read.clone();
     mock.push_chunks(
@@ -122,7 +121,6 @@ async fn a_refused_download_keeps_the_first_mib_of_its_body_and_hides_the_signat
     assert!(!shown.contains("SECRET"), "{shown}");
 }
 
-/// A transport written before `send_streaming`: it implements `send` only.
 struct Buffered(Vec<u8>);
 
 impl Transport for Buffered {
@@ -153,7 +151,6 @@ async fn a_transport_that_only_sends_streams_through_the_default() {
     assert_eq!(collected, parse_jsonl::<Product>(&body).unwrap());
 }
 
-/// A body that gives `chunks`, then fails.
 struct FailsAfter(Vec<Vec<u8>>);
 
 impl futures_core::Stream for FailsAfter {
@@ -266,7 +263,6 @@ async fn a_child_out_of_place_only_asks_for_grouping_when_it_may_be_off() {
     );
 }
 
-/// Shopify reserves an upload target; the storage server takes the file.
 fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
     let mock = MockTransport::new();
     let uploads = Arc::new(Mutex::new(Vec::new()));
@@ -298,7 +294,6 @@ fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
     (mock, uploads)
 }
 
-/// The JSONL part of a multipart body.
 fn uploaded_file(request: &HttpRequest) -> String {
     let body = String::from_utf8(request.body.clone()).unwrap();
     let start = body.find("Content-Type: text/jsonl\r\n\r\n").unwrap() + 28;
@@ -374,7 +369,6 @@ async fn an_item_that_does_not_serialize_stops_the_upload() {
     assert!(uploads.lock().unwrap().is_empty(), "nothing uploaded");
 }
 
-/// The default transport against a server on this machine.
 #[cfg(feature = "rustls")]
 mod reqwest_transport {
     use super::*;
@@ -423,7 +417,6 @@ mod reqwest_transport {
                 b"{\"id\":\"1\",\"title\":\"A\"}\n{\"id\":\"2\",",
             )
             .await;
-            // The rest waits until the first row was read.
             released.await.unwrap();
             write_chunk(&mut socket, b"\"title\":\"B\"}\n").await;
             socket.write_all(b"0\r\n\r\n").await.unwrap();
@@ -449,7 +442,6 @@ mod reqwest_transport {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            // A slow body, each chunk within the timeout.
             let (mut socket, _) = listener.accept().await.unwrap();
             read_request(&mut socket).await;
             socket.write_all(HEAD).await.unwrap();
@@ -459,7 +451,6 @@ mod reqwest_transport {
             }
             socket.write_all(b"0\r\n\r\n").await.unwrap();
             drop(socket);
-            // Then a body that stalls.
             let (mut socket, _) = listener.accept().await.unwrap();
             read_request(&mut socket).await;
             socket.write_all(HEAD).await.unwrap();

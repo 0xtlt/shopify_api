@@ -262,7 +262,6 @@ impl StreamingResponse {
     }
 }
 
-/// The whole body as one chunk.
 impl From<HttpResponse> for StreamingResponse {
     fn from(response: HttpResponse) -> Self {
         let body = (!response.body.is_empty()).then_some(Ok(response.body));
@@ -521,7 +520,6 @@ impl Transport for ReqwestTransport {
     }
 }
 
-/// The chunk being read, with the answer it is read from.
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 type PendingChunk =
     BoxFuture<'static, (reqwest::Response, Result<Option<Vec<u8>>, TransportError>)>;
@@ -553,7 +551,6 @@ impl Stream for ReqwestBody {
                         Some(Ok(chunk))
                     }
                     Ok(None) => None,
-                    // The answer is dropped: the stream ends after its error.
                     Err(error) => Some(Err(error)),
                 });
             }
