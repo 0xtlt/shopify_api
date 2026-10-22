@@ -1,5 +1,17 @@
 //! Checks a GraphQL operation against a schema and describes the shape of
 //! its variables and of its result.
+//!
+//! # Stricter than the specification, on purpose
+//!
+//! Where Shopify's server (GraphQL Ruby) refuses what the specification
+//! accepts, the analyzer refuses it too, so that an operation it accepts is
+//! one Shopify runs. One response key selected twice must have the fields of
+//! each input object of its arguments in the same order: the specification
+//! says input fields are unordered (`{a: 1, b: 2}` is `{b: 2, a: 1}`), but
+//! GraphQL Ruby compares their text and answers `fieldConflict`. An alias
+//! spelled like its field (`draftOrderCreate: draftOrderCreate(...)`) is an
+//! alias all the same. When the order cannot be read, the operation is
+//! refused rather than guessed.
 
 mod input_objects;
 

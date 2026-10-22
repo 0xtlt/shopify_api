@@ -1,0 +1,6 @@
+error: `draftOrderCreate` is selected twice with the fields of an input object in another order (`(input: {note: "x", tags: ["y"]})`), which Shopify refuses; write them in the same order, or give one of them an alias (line 1, column 91)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/same_name_alias_field_order.rs:5:9
+  |
+5 | ...   r#"mutation { draftOrderCreate:draftOrderCreate(input:{note:"x" tags:["y"]}){draftOrder{id}} draftOrderCreate:draftOrderCreate(input:{tags:["y"] note:"x"}){draftOrder{id}} }"#
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

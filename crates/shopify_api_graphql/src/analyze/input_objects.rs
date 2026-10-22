@@ -78,15 +78,15 @@ pub(super) fn argument_orders<'a>(
         return None;
     };
     let mut after = lexer.next();
-    if first != name {
-        // `alias: name`
-        if after.map(|(token, _)| token) != Some(Token::Punctuator(b':')) {
-            return None;
-        }
+    // `alias: name`, the alias spelled like the name or not: the colon says
+    // which it is.
+    if after.map(|(token, _)| token) == Some(Token::Punctuator(b':')) {
         if lexer.next().map(|(token, _)| token) != Some(Token::Name(name)) {
             return None;
         }
         after = lexer.next();
+    } else if first != name {
+        return None;
     }
     let mut arguments = Vec::new();
     if after.map(|(token, _)| token) != Some(Token::Punctuator(b'(')) {

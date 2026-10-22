@@ -802,6 +802,31 @@ fn the_order_of_input_fields_is_found_after_any_text() {
     ));
 }
 
+/// An alias spelled like its field is still an alias: the arguments after it
+/// are read for the order of their input fields (round 4 review: Shopify's
+/// GraphQL Ruby refuses this operation with `fieldConflict`).
+#[test]
+fn an_alias_spelled_like_its_field_keeps_the_order_of_input_fields() {
+    let refused = refusal(
+        "mutation { draftOrderCreate:draftOrderCreate(input:{note:\"x\" tags:[\"y\"]}){draftOrder{id}} draftOrderCreate:draftOrderCreate(input:{tags:[\"y\"] note:\"x\"}){draftOrder{id}} }",
+    );
+    assert!(
+        refused.contains(
+            "`draftOrderCreate` is selected twice with the fields of an input object in another order"
+        ),
+        "{refused}"
+    );
+    // In the same order, with spaces around the colon or none: one field.
+    check(
+        "mutation { draftOrderCreate : draftOrderCreate(input:{note:\"x\" tags:[\"y\"]}){draftOrder{id}} draftOrderCreate:draftOrderCreate(input:{note:\"x\" tags:[\"y\"]}){draftOrder{id}} }",
+    );
+    // The alias of one, the bare name of the other.
+    let refused = refusal(
+        "mutation { draftOrderCreate(input:{note:\"x\" tags:[\"y\"]}){draftOrder{id}} draftOrderCreate:draftOrderCreate(input:{tags:[\"y\"] note:\"x\"}){draftOrder{id}} }",
+    );
+    assert!(refused.contains("in another order"), "{refused}");
+}
+
 #[test]
 fn directives_come_from_the_schema() {
     // Shopify's `@idempotent`, on a mutation field.
