@@ -192,12 +192,47 @@ pub(crate) fn without_query(url: &str) -> String {
 }
 
 /// The `errors` of a GraphQL answer, and its `data` when it had some.
-#[derive(Debug, Clone)]
+///
+/// Its `Debug` shows the names of the fields of `data`, not their values,
+/// which may be secret: the signed address of a bulk operation's results.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct GraphqlErrors {
     pub errors: Vec<GraphqlError>,
     /// GraphQL may answer part of a query and fail another part.
     pub data: Option<serde_json::Value>,
+}
+
+impl fmt::Debug for GraphqlErrors {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GraphqlErrors")
+            .field("errors", &self.errors)
+            .field("data", &self.data.as_ref().map(DataShape))
+            .finish()
+    }
+}
+
+/// The top-level keys of partial `data`, without their values.
+struct DataShape<'a>(&'a serde_json::Value);
+
+impl fmt::Debug for DataShape<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            serde_json::Value::Object(fields) => {
+                write!(formatter, "{{")?;
+                for (index, key) in fields.keys().enumerate() {
+                    if index > 0 {
+                        write!(formatter, ", ")?;
+                    }
+                    write!(formatter, "{key:?}: ..")?;
+                }
+                write!(formatter, "}}")
+            }
+            serde_json::Value::Null => formatter.write_str("null"),
+            _ => formatter.write_str(".."),
+        }
+    }
 }
 
 impl fmt::Display for GraphqlErrors {
@@ -254,6 +289,36 @@ mod tests {
         assert_eq!(error.status(), Some(500));
         assert_eq!(error.request_id(), Some("a1b2"));
         assert!(!error.is_unauthorized());
+    }
+
+    #[test]
+    fn graphql_errors_debug_hides_partial_data() {
+        let errors: Vec<GraphqlError> = serde_json::from_value(serde_json::json!([{
+            "message": "Access denied for orders field",
+            "path": ["orders"],
+            "extensions": { "code": "ACCESS_DENIED" },
+        }]))
+        .unwrap();
+        let error = Error::Graphql(GraphqlErrors {
+            errors,
+            data: Some(serde_json::json!({
+                "bulkOperation": {
+                    "id": "gid://shopify/BulkOperation/1",
+                    "url": "https://storage.googleapis.com/r.jsonl?X-Goog-Signature=SIGNED_SECRET",
+                },
+                "orders": null,
+            })),
+        });
+        let shown = format!("{error:?} {error} {error:#?}");
+        assert!(!shown.contains("SIGNED_SECRET"), "{shown}");
+        assert!(!shown.contains("storage.googleapis.com"), "{shown}");
+        assert!(shown.contains("\"bulkOperation\": .."), "{shown}");
+        assert!(shown.contains("ACCESS_DENIED"), "{shown}");
+        // The data itself stays available to the caller.
+        let Error::Graphql(errors) = &error else {
+            unreachable!()
+        };
+        assert!(errors.data.as_ref().unwrap()["bulkOperation"]["url"].is_string());
     }
 
     #[test]
