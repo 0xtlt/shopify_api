@@ -1,11 +1,18 @@
 //! What a GraphQL answer holds besides `data`: errors, user errors, cost.
 
+use std::fmt;
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// An entry of the `errors` of an answer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Its `Debug` shows `extensions.code` and the names of the other entries of
+/// `extensions`, not their values: Shopify puts the whole value of a variable
+/// that does not validate in `extensions.value`, a signed address included.
+/// The fields themselves stay available.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GraphqlError {
     pub message: String,
@@ -16,6 +23,37 @@ pub struct GraphqlError {
     pub path: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extensions: Option<Value>,
+}
+
+impl fmt::Debug for GraphqlError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GraphqlError")
+            .field("message", &self.message)
+            .field("locations", &self.locations)
+            .field("path", &self.path)
+            .field("extensions", &self.extensions.as_ref().map(ExtensionsShape))
+            .finish()
+    }
+}
+
+/// `extensions.code`, and the names of the other entries without their values.
+struct ExtensionsShape<'a>(&'a Value);
+
+impl fmt::Debug for ExtensionsShape<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Value::Object(entries) = self.0 else {
+            return formatter.write_str("..");
+        };
+        let mut shown = formatter.debug_map();
+        for (key, value) in entries {
+            match value {
+                Value::String(code) if key == "code" => shown.entry(key, code),
+                _ => shown.entry(key, &format_args!("..")),
+            };
+        }
+        shown.finish()
+    }
 }
 
 impl GraphqlError {
@@ -112,7 +150,8 @@ pub struct RawResponse {
 }
 
 /// `errors` is a list of errors; Shopify answers a few refusals with a
-/// string instead (`"errors": "Not Found"`).
+/// string instead (`"errors": "Not Found"`). Anything else is one error whose
+/// `extensions.value` holds it.
 fn errors<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<GraphqlError>, D::Error> {
@@ -132,11 +171,12 @@ fn errors<'de, D: serde::Deserializer<'de>>(
             path: None,
             extensions: None,
         }],
+        // Kept in `extensions.value`, out of the message an error displays.
         Some(Errors::Other(value)) => vec![GraphqlError {
-            message: value.to_string(),
+            message: "Shopify answered `errors` that are neither a list nor a string".to_string(),
             locations: None,
             path: None,
-            extensions: None,
+            extensions: Some(serde_json::json!({ "value": value })),
         }],
     })
 }
@@ -198,6 +238,20 @@ mod tests {
         let raw: RawResponse =
             serde_json::from_str(r#"{"data":{"shop":{"name":"x"}},"errors":null}"#).unwrap();
         assert!(raw.errors.is_empty());
+    }
+
+    #[test]
+    fn errors_of_another_shape_keep_their_value_out_of_the_message() {
+        let raw: RawResponse =
+            serde_json::from_str(r#"{"errors":{"token":"shpat_SECRET"}}"#).unwrap();
+        assert_eq!(raw.errors.len(), 1);
+        let error = &raw.errors[0];
+        assert!(!error.message.contains("SECRET"), "{}", error.message);
+        assert!(!format!("{error:?}").contains("SECRET"), "{error:?}");
+        assert_eq!(
+            error.extensions.as_ref().unwrap()["value"]["token"],
+            "shpat_SECRET"
+        );
     }
 
     #[test]

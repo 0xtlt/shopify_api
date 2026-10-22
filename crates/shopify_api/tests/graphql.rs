@@ -239,6 +239,54 @@ async fn graphql_errors_fail_the_operation_and_keep_partial_data() {
 }
 
 #[tokio::test]
+async fn an_error_shows_no_value_shopify_echoes_in_its_extensions() {
+    // What GraphQL Ruby answers to a variable that does not validate: the
+    // whole value, a signed address included, under `extensions.value`.
+    let mock = MockTransport::new();
+    mock.push_json(json!({ "errors": [{
+        "message": "Variable $media of type [CreateMediaInput!] was provided invalid value for 0.mediaContentType (Expected \"INVALID\" to be one of: IMAGE, VIDEO)",
+        "locations": [{ "line": 1, "column": 10 }],
+        "extensions": {
+            "value": [{
+                "originalSource": "https://storage.test/image.jpg?X-Goog-Signature=SIGNED_SECRET",
+                "mediaContentType": "INVALID",
+            }],
+            "problems": [{ "path": [0, "mediaContentType"], "explanation": "Expected \"INVALID\" to be one of: IMAGE, VIDEO" }],
+            "code": "INVALID_VARIABLE",
+        },
+    }] }));
+    let shopify = client(&mock);
+
+    let error = shopify
+        .graphql(
+            "mutation($media: [CreateMediaInput!]) { productCreate(media: $media) { product { id } } }",
+            json!({ "media": [{
+                "originalSource": "https://storage.test/image.jpg?X-Goog-Signature=SIGNED_SECRET",
+                "mediaContentType": "INVALID",
+            }] }),
+        )
+        .await
+        .unwrap_err();
+    for shown in [
+        format!("{error}"),
+        format!("{error:?}"),
+        format!("{error:#?}"),
+        format!("{:?}", error.graphql_errors()),
+    ] {
+        assert!(!shown.contains("SIGNED_SECRET"), "{shown}");
+        assert!(!shown.contains("storage.test"), "{shown}");
+    }
+    let debug = format!("{error:?}");
+    assert!(debug.contains(r#""code": "INVALID_VARIABLE""#), "{debug}");
+    assert!(debug.contains(r#""value": .."#), "{debug}");
+    assert!(debug.contains(r#""problems": .."#), "{debug}");
+    assert!(debug.contains("Variable $media"), "{debug}");
+    // The values stay available to the caller.
+    let extensions = error.graphql_errors()[0].extensions.as_ref().unwrap();
+    assert!(extensions["value"][0]["originalSource"].is_string());
+}
+
+#[tokio::test]
 async fn an_answer_that_does_not_fit_names_the_path() {
     let mock = MockTransport::new();
     mock.push_data(json!({ "shop": {} }));
