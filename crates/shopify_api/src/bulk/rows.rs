@@ -17,6 +17,10 @@ use crate::{Error, Result};
 /// The longest line [`BulkRows`] and [`BulkGroups`] read by default: 64 MiB.
 pub const DEFAULT_MAX_LINE_LENGTH: usize = 64 * 1024 * 1024;
 
+/// What the buffer may keep, whatever it holds: a buffer more than four
+/// times what it holds, and than this, shrinks after a long line.
+const KEPT_CAPACITY: usize = 64 * 1024;
+
 /// A line: its number, from 1, and where it is in the buffer.
 type Line = (usize, Range<usize>);
 
@@ -115,13 +119,17 @@ impl Lines {
                     return Poll::Ready(Some(Err(Error::transport(&self.url, source))));
                 }
                 Poll::Ready(Some(Ok(chunk))) => {
-                    // What was taken goes: the buffer holds the line being read.
                     self.buffer.drain(..self.start);
                     self.start = 0;
+                    let needed = (self.buffer.len() + chunk.len()).max(KEPT_CAPACITY);
+                    if self.buffer.capacity() > 4 * needed {
+                        self.buffer.shrink_to(needed);
+                    }
                     self.buffer.extend_from_slice(&chunk);
                 }
             }
         }
+        self.buffer = Vec::new();
         Poll::Ready(None)
     }
 
@@ -656,6 +664,41 @@ mod tests {
             largest <= 2 * (chunk_len + line.len()),
             "{largest} bytes held"
         );
+    }
+
+    #[tokio::test]
+    async fn the_buffer_of_a_huge_line_is_released_once_it_is_read() {
+        let huge = format!("{{\"a\":\"{}\"}}\n", "x".repeat(16 * 1024 * 1024));
+        let tiny = b"{\"b\":1}\n".to_vec();
+        let parts = vec![huge.into_bytes(), tiny.clone(), tiny.clone(), tiny.clone()];
+        let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
+        rows.next_row().await.unwrap().unwrap();
+        assert!(rows.lines.capacity() > 16 * 1024 * 1024);
+        rows.next_row().await.unwrap().unwrap();
+        assert!(
+            rows.lines.capacity() <= 1024 * 1024,
+            "{} bytes held after a tiny line",
+            rows.lines.capacity()
+        );
+        while let Some(row) = rows.next_row().await {
+            row.unwrap();
+        }
+        assert_eq!(rows.lines.capacity(), 0);
+    }
+
+    /// A buffer a few times larger than its chunks is kept: no
+    /// reallocation on each chunk.
+    #[tokio::test]
+    async fn the_buffer_is_kept_while_lines_stay_alike() {
+        let line = format!("{{\"a\":\"{}\"}}\n", "x".repeat(300 * 1024));
+        let parts: Vec<Vec<u8>> = std::iter::repeat_n(line.into_bytes(), 8).collect();
+        let mut rows = rows_of::<serde::de::IgnoredAny>(parts);
+        rows.next_row().await.unwrap().unwrap();
+        let first = rows.lines.buffer.as_ptr();
+        for _ in 0..7 {
+            rows.next_row().await.unwrap().unwrap();
+            assert_eq!(rows.lines.buffer.as_ptr(), first);
+        }
     }
 
     fn groups_of<P, C>(body: &str) -> BulkGroups<P, C> {
