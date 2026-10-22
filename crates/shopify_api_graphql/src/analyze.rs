@@ -247,6 +247,7 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
         fragments,
         variables: Vec::new(),
         used_variables: BTreeSet::new(),
+        null_defaults: BTreeSet::new(),
         used_fragments: BTreeSet::new(),
         fragment_stack: Vec::new(),
         deprecations: Vec::new(),
@@ -298,6 +299,9 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
             base,
         });
         if let Some(default) = &definition.default_value {
+            if matches!(default, ast::Value::Null) {
+                analyzer.null_defaults.insert(definition.name.clone());
+            }
             // The parser refuses a variable here.
             let expected = InputValue::of(ty);
             let place = format!("the default value of `${}`", definition.name);
@@ -416,6 +420,9 @@ struct Analyzer<'a> {
     /// The declared variables, in the order of the operation.
     variables: Vec<Variable>,
     used_variables: BTreeSet<String>,
+    /// The variables whose default value is `null`: it does not stand in for
+    /// a value where `null` is not allowed.
+    null_defaults: BTreeSet<String>,
     used_fragments: BTreeSet<&'a str>,
     fragment_stack: Vec<&'a str>,
     deprecations: Vec<Deprecation>,
@@ -963,8 +970,9 @@ impl<'a> Analyzer<'a> {
         }
         match value {
             ast::Value::Variable(name) => {
+                let null_default = self.null_defaults.contains(name);
                 let variable = self.variable(name, position)?;
-                if !variable_fits(variable, expected) {
+                if !variable_fits(variable, null_default, expected) {
                     return error_at(
                         position,
                         format!(
@@ -1121,8 +1129,10 @@ fn fits_int(number: &ast::Number) -> bool {
         .is_some_and(|number| i32::try_from(number).is_ok())
 }
 
-/// The rule of the GraphQL specification for using a variable at a location.
-fn variable_fits(variable: &Variable, location: &InputValue) -> bool {
+/// The rule of the GraphQL specification for using a variable at a location
+/// ("All Variable Usages Are Allowed"). `null_default`: the default value of
+/// the variable is `null`.
+fn variable_fits(variable: &Variable, null_default: bool, location: &InputValue) -> bool {
     fn compatible(variable: &TypeRef, location: &TypeRef) -> bool {
         match (variable, location) {
             (TypeRef::NonNull(variable), TypeRef::NonNull(location)) => {
@@ -1136,8 +1146,9 @@ fn variable_fits(variable: &Variable, location: &InputValue) -> bool {
         }
     }
     if location.ty.is_non_null() && !variable.ty.is_non_null() {
-        // A nullable variable is accepted when a default value fills the gap.
-        return (variable.has_default || location.has_default)
+        // A nullable variable is accepted when a default value other than
+        // `null` fills the gap.
+        return ((variable.has_default && !null_default) || location.has_default)
             && compatible(&variable.ty, location.ty.nullable());
     }
     compatible(&variable.ty, &location.ty)

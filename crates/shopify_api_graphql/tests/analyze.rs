@@ -232,11 +232,28 @@ fn accepts_literals_of_every_kind() {
     );
     // An integer where an ID is expected, and a variable with a default for a non-null argument.
     check("query($id: ID = 1) { product(id: $id) { id } node(id: 2) { id } }");
+    check(r#"query($id: ID = "gid://shopify/Product/1") { product(id: $id) { id } }"#);
+    check(r#"query($ids: [ID!] = ["gid://shopify/Product/1"]) { nodes(ids: $ids) { id } }"#);
     // A single value where a list is expected.
     check("{ nodes(ids: \"gid://shopify/Product/1\") { id } }");
 }
 
 // ─── Refused ─────────────────────────────────────────────────────────
+
+/// Only a default other than `null` lets a nullable variable fill a non-null place.
+#[test]
+fn refuses_a_null_default_for_a_non_null_place() {
+    assert_eq!(
+        refusal("query($id: ID = null) { product(id: $id) { id } }"),
+        "Variable `$id` of type `ID` cannot be used for argument `id` of `QueryRoot.product`, which expects `ID!` (line 1, column 25)"
+    );
+    assert!(
+        refusal("query($ids: [ID!] = null) { nodes(ids: $ids) { id } }")
+            .starts_with("Variable `$ids` of type `[ID!]` cannot be used"),
+    );
+    // Where `null` is allowed, a `null` default is fine.
+    check("query($after: String = null) { products(first: 1, after: $after) { nodes { id } } }");
+}
 
 #[test]
 fn refuses_unknown_fields_and_arguments_with_a_suggestion() {
