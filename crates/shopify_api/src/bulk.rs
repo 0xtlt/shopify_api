@@ -443,7 +443,37 @@ impl Shopify {
         mutation: &str,
         variables: &[T],
     ) -> Result<BulkOperation> {
-        let path = self.stage_bulk_variables(variables).await?;
+        self.run_bulk_mutation_iter(mutation, variables).await
+    }
+
+    /// [`Shopify::run_bulk_mutation`] over the items of an iterator, each
+    /// serialized as it is taken: the items need not all be in memory, only
+    /// the JSONL file, which Shopify caps at 100 MB.
+    ///
+    /// ```no_run
+    /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// let rows = (1..=50_000).map(|id| {
+    ///     serde_json::json!({ "product": { "id": format!("gid://shopify/Product/{id}"), "status": "ARCHIVED" } })
+    /// });
+    /// let operation = shopify
+    ///     .run_bulk_mutation_iter(
+    ///         "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
+    ///         rows,
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn run_bulk_mutation_iter<I>(
+        &self,
+        mutation: &str,
+        variables: I,
+    ) -> Result<BulkOperation>
+    where
+        I: IntoIterator,
+        I::Item: Serialize,
+    {
+        let path = self.stage_bulk_variables_iter(variables).await?;
         self.run_bulk_mutation_staged(mutation, &path, None).await
     }
 
@@ -476,13 +506,19 @@ impl Shopify {
     /// Uploads `variables` as the JSONL file of a bulk mutation, one item per
     /// line, and returns its staged upload path.
     pub async fn stage_bulk_variables<T: Serialize>(&self, variables: &[T]) -> Result<String> {
-        let mut jsonl = Vec::new();
-        for item in variables {
-            serde_json::to_writer(&mut jsonl, item)
-                .map_err(|error| Error::variables(None, &error))?;
-            jsonl.push(b'\n');
-        }
+        self.stage_bulk_variables_iter(variables).await
+    }
 
+    /// [`Shopify::stage_bulk_variables`] over the items of an iterator,
+    /// written straight into the body of the upload as they are taken.
+    ///
+    /// The upload target is reserved first: an item that does not
+    /// serialize fails after it, and the target goes unused.
+    pub async fn stage_bulk_variables_iter<I>(&self, variables: I) -> Result<String>
+    where
+        I: IntoIterator,
+        I::Item: Serialize,
+    {
         let data = self
             .execute(staged_uploads::operation(staged_uploads::Variables {
                 input: vec![staged_uploads::StagedUploadInput {
@@ -526,8 +562,17 @@ impl Shopify {
                 Error::Bulk("the staged upload target has no `key` parameter".to_string())
             })?;
 
+        // The storage server wants the length of the body up front: the
+        // file is built in memory, once, in the body itself.
         let (content_type, body) =
-            multipart(&parameters, "bulk_op_vars.jsonl", "text/jsonl", &jsonl);
+            multipart(&parameters, "bulk_op_vars.jsonl", "text/jsonl", |body| {
+                for item in variables {
+                    serde_json::to_writer(&mut *body, &item)
+                        .map_err(|error| Error::variables(None, &error))?;
+                    body.push(b'\n');
+                }
+                Ok(())
+            })?;
         let request = HttpRequest::new(Method::Post, &url)
             .with_header("Content-Type", content_type)
             .with_body(body)
@@ -838,14 +883,14 @@ pub fn parse_jsonl<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>> {
         .collect()
 }
 
-/// A `multipart/form-data` body: the fields, then the file. Returns its
-/// `Content-Type` and its bytes.
+/// A `multipart/form-data` body: the fields, then the file `write_file`
+/// writes. Returns its `Content-Type` and its bytes.
 fn multipart(
     fields: &[(String, String)],
     filename: &str,
     mime: &str,
-    file: &[u8],
-) -> (String, Vec<u8>) {
+    write_file: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<(String, Vec<u8>)> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
@@ -869,9 +914,9 @@ fn multipart(
         )
         .as_bytes(),
     );
-    body.extend_from_slice(file);
+    write_file(&mut body)?;
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    (format!("multipart/form-data; boundary={boundary}"), body)
+    Ok((format!("multipart/form-data; boundary={boundary}"), body))
 }
 
 #[cfg(test)]
@@ -929,7 +974,11 @@ mod tests {
     #[test]
     fn builds_a_multipart_body() {
         let fields = vec![("key".to_string(), "tmp/1/bulk".to_string())];
-        let (content_type, body) = multipart(&fields, "vars.jsonl", "text/jsonl", b"{}\n");
+        let (content_type, body) = multipart(&fields, "vars.jsonl", "text/jsonl", |body| {
+            body.extend_from_slice(b"{}\n");
+            Ok(())
+        })
+        .unwrap();
         let boundary = content_type
             .strip_prefix("multipart/form-data; boundary=")
             .unwrap();

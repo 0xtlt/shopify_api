@@ -1,4 +1,4 @@
-//! Bulk results read as they download.
+//! Bulk results read as they download, and bulk variables uploaded from an iterator.
 #![cfg(feature = "testing")]
 
 use std::pin::Pin;
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shopify_api::bulk::{BulkWaitOptions, parse_jsonl};
 use shopify_api::testing::{MockTransport, client};
@@ -17,6 +17,7 @@ use shopify_api::{Error, Shopify};
 
 const RESULTS_URL: &str =
     "https://storage.googleapis.com/bulk-operation-outputs/1.jsonl?X-Goog-Signature=SECRET";
+const UPLOAD_URL: &str = "https://shopify-staged-uploads.storage.googleapis.com/";
 
 fn operation(status: &str, url: Option<&str>) -> Value {
     json!({
@@ -232,6 +233,114 @@ async fn a_grouped_bulk_query_asks_for_grouping_and_yields_each_parent_with_its_
     assert!(groups.next_group().await.is_none());
 
     assert_eq!(mock.graphql_requests()[0].variables["groupObjects"], true);
+}
+
+/// Shopify reserves an upload target; the storage server takes the file.
+fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
+    let mock = MockTransport::new();
+    let uploads = Arc::new(Mutex::new(Vec::new()));
+    let seen = uploads.clone();
+    mock.respond_with(move |request| {
+        if request.url == UPLOAD_URL {
+            seen.lock().unwrap().push(request.clone());
+            return Ok(HttpResponse::new(201, ""));
+        }
+        let name = request.json().unwrap()["operationName"].as_str().unwrap().to_string();
+        let data = match name.as_str() {
+            "StagedUploadsCreate" => json!({ "stagedUploadsCreate": {
+                "stagedTargets": [{
+                    "url": UPLOAD_URL,
+                    "resourceUrl": null,
+                    "parameters": [{ "name": "key", "value": "tmp/1/bulk/vars.jsonl" }],
+                }],
+                "userErrors": [],
+            } }),
+            "BulkOperationRunMutation" => {
+                let mut started = operation("CREATED", None);
+                started["type"] = json!("MUTATION");
+                json!({ "bulkOperationRunMutation": { "bulkOperation": started, "userErrors": [] } })
+            }
+            other => panic!("unexpected operation {other}"),
+        };
+        Ok(HttpResponse::json(200, &json!({ "data": data })))
+    });
+    (mock, uploads)
+}
+
+/// The JSONL part of a multipart body.
+fn uploaded_file(request: &HttpRequest) -> String {
+    let body = String::from_utf8(request.body.clone()).unwrap();
+    let start = body.find("Content-Type: text/jsonl\r\n\r\n").unwrap() + 28;
+    let end = body.rfind("\r\n--").unwrap();
+    body[start..end].to_string()
+}
+
+#[tokio::test]
+async fn bulk_variables_upload_from_an_iterator_as_from_a_slice() {
+    let (mock, uploads) = upload_mock();
+    let shopify = client(&mock);
+    let mutation = "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }";
+
+    #[derive(Serialize)]
+    struct Row {
+        product: Value,
+    }
+    let taken = Arc::new(Mutex::new(0));
+    let counter = taken.clone();
+    let rows = (1..=1000).map(move |id| {
+        *counter.lock().unwrap() += 1;
+        Row {
+            product: json!({ "id": format!("gid://shopify/Product/{id}"), "title": "é\n\"" }),
+        }
+    });
+    let started = shopify
+        .run_bulk_mutation_iter(mutation, rows)
+        .await
+        .unwrap();
+    assert_eq!(started.kind, shopify_api::bulk::BulkOperationType::Mutation);
+    assert_eq!(*taken.lock().unwrap(), 1000);
+
+    let slice: Vec<Row> = (1..=1000)
+        .map(|id| Row {
+            product: json!({ "id": format!("gid://shopify/Product/{id}"), "title": "é\n\"" }),
+        })
+        .collect();
+    shopify.run_bulk_mutation(mutation, &slice).await.unwrap();
+
+    let uploads = uploads.lock().unwrap();
+    assert_eq!(uploads.len(), 2);
+    let from_iter = uploaded_file(&uploads[0]);
+    assert_eq!(from_iter, uploaded_file(&uploads[1]));
+    let lines: Vec<Value> = parse_jsonl(from_iter.as_bytes()).unwrap();
+    assert_eq!(lines.len(), 1000);
+    assert_eq!(lines[999]["product"]["id"], "gid://shopify/Product/1000");
+    assert_eq!(from_iter.matches('\n').count(), 1000, "one line per item");
+
+    let graphql = mock.graphql_requests();
+    assert_eq!(
+        graphql[1].variables["stagedUploadPath"],
+        "tmp/1/bulk/vars.jsonl"
+    );
+}
+
+#[tokio::test]
+async fn an_item_that_does_not_serialize_stops_the_upload() {
+    struct Leaky;
+    impl Serialize for Leaky {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("cannot serialize shpat_SECRET"))
+        }
+    }
+    let (mock, uploads) = upload_mock();
+    let shopify = client(&mock);
+
+    let error = shopify
+        .stage_bulk_variables_iter([Leaky])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Variables { .. }), "{error:?}");
+    assert!(!format!("{error}{error:?}").contains("SECRET"));
+    assert!(uploads.lock().unwrap().is_empty(), "nothing uploaded");
 }
 
 /// The default transport against a server on this machine.
