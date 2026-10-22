@@ -1,7 +1,7 @@
 //! Running GraphQL operations: typed ones from [`graphql!`](crate::graphql!),
 //! untyped ones from any text.
 
-mod operation;
+pub(crate) mod operation;
 mod response;
 
 use serde::Serialize;
@@ -93,17 +93,7 @@ impl Shopify {
     /// it, `errors` included: for an operation whose partial `data` matters.
     /// A throttled request is still retried.
     pub async fn graphql_raw(&self, query: &str, variables: impl Serialize) -> Result<RawResponse> {
-        let variables = match serde_json::to_value(variables)
-            .map_err(|error| Error::Variables(crate::redact::serde_message(&error.to_string())))?
-        {
-            Value::Null => Map::new(),
-            Value::Object(variables) => variables,
-            _ => {
-                return Err(Error::Variables(
-                    "the variables must serialize to an object".to_string(),
-                ));
-            }
-        };
+        let variables = crate::graphql::operation::variables_of(variables)?;
         let mut body = Map::new();
         body.insert("query".to_string(), Value::String(query.to_string()));
         if !variables.is_empty() {
@@ -123,7 +113,7 @@ impl Shopify {
         kind: OperationKind,
     ) -> Result<RawResponse> {
         let url = self.graphql_url(version);
-        let body = serde_json::to_vec(body)?;
+        let body = serde_json::to_vec(body).map_err(|error| Error::variables(None, &error))?;
         let endpoint = self.endpoint();
         let mut token = self.shared.tokens.get(endpoint).await?;
         let mut retries = 0;
@@ -193,7 +183,8 @@ impl Shopify {
                 _ => return Err(Error::http(&url, &response)),
             }
 
-            let raw: RawResponse = serde_json::from_slice(&response.body)?;
+            let raw: RawResponse = crate::decode::from_slice(&response.body)
+                .map_err(|failure| failure.into_error())?;
             if raw.is_throttled() {
                 let cost = raw.cost();
                 if !may_retry {

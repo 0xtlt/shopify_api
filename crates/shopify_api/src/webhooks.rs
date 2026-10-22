@@ -207,9 +207,7 @@ impl Webhook {
 
     /// The body read as `T`, the path of the first mismatch in the error.
     pub fn payload<T: DeserializeOwned>(&self) -> Result<T> {
-        let mut deserializer = serde_json::Deserializer::from_slice(&self.body);
-        serde_path_to_error::deserialize(&mut deserializer)
-            .map_err(|error| Error::decode(error.path().to_string(), &error.inner().to_string()))
+        crate::decode::from_slice(&self.body).map_err(|failure| failure.into_error())
     }
 }
 
@@ -301,7 +299,7 @@ struct WireVersion {
 }
 
 fn subscription_of(selection: &impl Serialize) -> Result<WebhookSubscription> {
-    let wire: Wire = crate::graphql::decode(serde_json::to_value(selection)?)?;
+    let wire: Wire = crate::decode::reserialize(selection)?;
     Ok(WebhookSubscription {
         id: wire.id,
         topic: wire.topic,
@@ -318,7 +316,7 @@ fn subscription_of(selection: &impl Serialize) -> Result<WebhookSubscription> {
 }
 
 fn refused(mutation: &'static str, errors: &impl Serialize) -> Result<()> {
-    let errors: Vec<UserError> = crate::graphql::decode(serde_json::to_value(errors)?)?;
+    let errors: Vec<UserError> = crate::decode::reserialize(errors)?;
     if errors.is_empty() {
         Ok(())
     } else {
@@ -468,16 +466,20 @@ impl Shopify {
                 webhook_subscription: input,
             }))
             .await?;
-        let payload = data
-            .webhook_subscription_create
-            .ok_or_else(|| Error::Decode {
-                path: "webhookSubscriptionCreate".to_string(),
-                message: "Shopify returned nothing".to_string(),
-            })?;
+        let payload = data.webhook_subscription_create.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionCreate".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
         refused("webhookSubscriptionCreate", &payload.user_errors)?;
-        let subscription = payload.webhook_subscription.ok_or_else(|| Error::Decode {
-            path: "webhookSubscriptionCreate.webhookSubscription".to_string(),
-            message: "Shopify returned no subscription".to_string(),
+        let subscription = payload.webhook_subscription.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionCreate.webhookSubscription".to_string(),
+                "Shopify returned no subscription".to_string(),
+                None,
+            )
         })?;
         subscription_of(&subscription)
     }
@@ -486,12 +488,13 @@ impl Shopify {
         let data = self
             .execute(delete::operation(delete::Variables { id: id.to_string() }))
             .await?;
-        let payload = data
-            .webhook_subscription_delete
-            .ok_or_else(|| Error::Decode {
-                path: "webhookSubscriptionDelete".to_string(),
-                message: "Shopify returned nothing".to_string(),
-            })?;
+        let payload = data.webhook_subscription_delete.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionDelete".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
         refused("webhookSubscriptionDelete", &payload.user_errors)
     }
 
@@ -508,16 +511,20 @@ impl Shopify {
                 webhook_subscription: input!(update, spec, true),
             }))
             .await?;
-        let payload = data
-            .webhook_subscription_update
-            .ok_or_else(|| Error::Decode {
-                path: "webhookSubscriptionUpdate".to_string(),
-                message: "Shopify returned nothing".to_string(),
-            })?;
+        let payload = data.webhook_subscription_update.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionUpdate".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
         refused("webhookSubscriptionUpdate", &payload.user_errors)?;
-        let subscription = payload.webhook_subscription.ok_or_else(|| Error::Decode {
-            path: "webhookSubscriptionUpdate.webhookSubscription".to_string(),
-            message: "Shopify returned no subscription".to_string(),
+        let subscription = payload.webhook_subscription.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionUpdate.webhookSubscription".to_string(),
+                "Shopify returned no subscription".to_string(),
+                None,
+            )
         })?;
         subscription_of(&subscription)
     }

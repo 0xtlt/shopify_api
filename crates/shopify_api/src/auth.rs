@@ -353,28 +353,40 @@ pub(crate) async fn request_token(
         .await
         .map_err(|source| Error::transport(&url, source))?;
     if !response.is_success() {
+        // What the endpoint wrote is kept apart: it may echo what it was sent.
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
-        let code = body.get("error").and_then(serde_json::Value::as_str);
+        let code = body
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .map(oauth_error_code);
         let description = body
             .get("error_description")
             .and_then(serde_json::Value::as_str);
-        let detail = match (code, description) {
-            (Some(code), Some(description)) => {
-                crate::redact::http_body(format!("{code}: {description}").as_bytes())
-            }
-            (Some(code), None) => crate::redact::http_body(code.as_bytes()),
-            _ => crate::redact::http_body(&response.body),
+        let detail = match (
+            body.get("error").and_then(serde_json::Value::as_str),
+            description,
+        ) {
+            (Some(code), Some(description)) => format!("{code}: {description}"),
+            (Some(code), None) => code.to_string(),
+            _ => String::from_utf8_lossy(&response.body).into_owned(),
         };
-        return Err(Error::Auth(format!(
-            "the token endpoint of {shop} answered {}: {detail}",
-            response.status
-        )));
+        let message = match code {
+            Some(code) => format!(
+                "the token endpoint of {shop} answered {} ({code})",
+                response.status
+            ),
+            None => format!("the token endpoint of {shop} answered {}", response.status),
+        };
+        return Err(Error::auth_with_detail(message, detail));
     }
-    let parsed: TokenResponse = serde_json::from_slice(&response.body).map_err(|error| {
-        Error::Auth(format!(
-            "the token endpoint of {shop} answered an invalid token: {}",
-            crate::redact::serde_message(&error.to_string())
-        ))
+    let parsed: TokenResponse = crate::decode::from_slice(&response.body).map_err(|failure| {
+        Error::auth_with_detail(
+            format!(
+                "the token endpoint of {shop} answered an invalid token: {} at `{}`",
+                failure.message, failure.path
+            ),
+            failure.detail,
+        )
     })?;
     Ok(parsed.into_token())
 }
@@ -429,7 +441,7 @@ impl State {
     fn held_failure(&self) -> Option<Error> {
         let (at, message) = self.failure.as_ref()?;
         (at.elapsed() < FAILURE_HOLD)
-            .then(|| Error::Auth(format!("{message} (asked again in a few seconds)")))
+            .then(|| Error::auth(format!("{message} (asked again in a few seconds)")))
     }
 }
 
@@ -526,7 +538,7 @@ impl Tokens {
                 .token
                 .as_ref()
                 .map(|token| token.access_token.clone())
-                .ok_or_else(|| Error::Auth("no access token".to_string()));
+                .ok_or_else(|| Error::auth("no access token"));
         }
         let kind = self.kind.clone();
         let endpoint = endpoint.clone();
@@ -556,16 +568,40 @@ impl Tokens {
             saved.map(|()| access_token)
         });
         renewal.await.map_err(|stopped| {
-            Error::Auth(format!("the renewal of the token stopped: {stopped}"))
+            // A panic's message is not this crate's to show.
+            Error::auth(if stopped.is_panic() {
+                "the renewal of the token panicked"
+            } else {
+                "the renewal of the token was cancelled"
+            })
         })?
     }
+}
+
+/// An OAuth error code (RFC 6749, 5.2, and Shopify's) as an error shows it.
+fn oauth_error_code(code: &str) -> &'static str {
+    const CODES: [&str; 8] = [
+        "shop_not_permitted",
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "invalid_scope",
+        "invalid_subject_token",
+    ];
+    CODES
+        .iter()
+        .find(|known| **known == code)
+        .copied()
+        .unwrap_or("an error code this crate does not know")
 }
 
 /// Asks Shopify for a new token, as `kind` does.
 async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<TokenData> {
     let transport = endpoint.transport.as_ref();
     match kind {
-        Kind::Static => Err(Error::Auth("a static token is not renewed".to_string())),
+        Kind::Static => Err(Error::auth("a static token is not renewed")),
         Kind::ClientCredentials {
             client_id,
             client_secret,
@@ -594,7 +630,7 @@ async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<Token
                 .filter(|token| token.can_refresh())
                 .and_then(|token| token.refresh_token.clone())
                 .ok_or_else(|| {
-                    Error::Auth(format!(
+                    Error::auth(format!(
                         "the token of {} expired and its refresh token is missing or expired: \
                          the app must get a new token (token exchange or OAuth)",
                         endpoint.shop

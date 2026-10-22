@@ -8,10 +8,11 @@ use serde_json::Value;
 
 /// An entry of the `errors` of an answer.
 ///
-/// Its `Debug` shows `extensions.code` and the names of the other entries of
-/// `extensions`, not their values: Shopify puts the whole value of a variable
-/// that does not validate in `extensions.value`, a signed address included.
-/// The fields themselves stay available.
+/// Its `Debug` shows `message`, `locations`, `path` and `extensions.code`,
+/// and how many other entries `extensions` has, not their names or values:
+/// Shopify puts the whole value of a variable that does not validate in
+/// `extensions.value`, a signed address included. The fields themselves stay
+/// available.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GraphqlError {
@@ -37,7 +38,7 @@ impl fmt::Debug for GraphqlError {
     }
 }
 
-/// `extensions.code`, and the names of the other entries without their values.
+/// `extensions.code`, and how many other entries there are.
 struct ExtensionsShape<'a>(&'a Value);
 
 impl fmt::Debug for ExtensionsShape<'_> {
@@ -45,14 +46,15 @@ impl fmt::Debug for ExtensionsShape<'_> {
         let Value::Object(entries) = self.0 else {
             return formatter.write_str("..");
         };
-        let mut shown = formatter.debug_map();
-        for (key, value) in entries {
-            match value {
-                Value::String(code) if key == "code" => shown.entry(key, code),
-                _ => shown.entry(key, &format_args!("..")),
-            };
+        let code = entries.get("code").and_then(Value::as_str);
+        let others = entries.len() - usize::from(entries.contains_key("code"));
+        let mut shown = formatter.debug_struct("Extensions");
+        if let Some(code) = code {
+            shown.field("code", &code);
         }
-        shown.finish()
+        shown
+            .field("others", &format_args!("{others} entries"))
+            .finish()
     }
 }
 
@@ -201,8 +203,7 @@ impl RawResponse {
 
 /// Reads `value` as `T`, naming the path of the first field that does not fit.
 pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> crate::Result<T> {
-    serde_path_to_error::deserialize(value)
-        .map_err(|error| crate::Error::decode(error.path().to_string(), &error.inner().to_string()))
+    crate::decode::from_value(value)
 }
 
 #[cfg(test)]

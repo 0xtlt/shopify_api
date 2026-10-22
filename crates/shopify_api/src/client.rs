@@ -400,9 +400,7 @@ impl ShopifyBuilder {
     pub fn build(self) -> Result<Shopify> {
         let shop = ShopDomain::new(&self.shop)?;
         let auth = self.auth.ok_or_else(|| {
-            Error::Auth(
-                "no credentials: call `access_token`, `client_credentials` or `auth`".to_string(),
-            )
+            Error::auth("no credentials: call `access_token`, `client_credentials` or `auth`")
         })?;
         let transport = match self.transport {
             Some(transport) => transport,
@@ -504,7 +502,7 @@ mod tests {
         ));
         assert!(matches!(
             Shopify::builder("shop").build(),
-            Err(Error::Auth(_))
+            Err(Error::Auth { .. })
         ));
     }
 }

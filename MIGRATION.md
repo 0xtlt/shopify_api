@@ -50,12 +50,12 @@ to keep that.
 | 0.10 | 1.0 |
 | --- | --- |
 | `ConnectionFailed(reqwest::Error)` | `Transport { url, source }` |
-| An `error_for_status` failure | `Http { status, url, body, .. }`: `body` is cut at 1 KiB and redacted; `error.raw_http_body()` gives the whole body, secrets included; `error.status()`, `error.is_unauthorized()` |
+| An `error_for_status` failure | `Http { status, url, content_type, request_id, raw_body }`: it displays the status, the address, the content type and the length of the body, never the body; `error.raw_http_body()` gives the whole body, secrets included; `error.status()`, `error.is_unauthorized()` |
 | `Throttled` | `Throttled { retries, cost, retry_after }`, once the retries are spent or when `Retry-After` exceeds `max_retry_after` |
 | `GraphqlErrors(Vec<GraphqlError>)` | `Graphql(GraphqlErrors { errors, data })` |
-| `JsonParseError` | `Json`, or `Decode { path, message }` when `data` does not fit its type: the path and the kinds of value, not the value |
-| `NotWantedJsonFormat`, `NotJson`, `ResponseBroken` | `Decode` |
-| `Authentication(text)` | `Auth(text)` |
+| `JsonParseError`, `NotWantedJsonFormat`, `NotJson`, `ResponseBroken` | `Decode { path, message, detail }`: a body that is not JSON, or `data` that does not fit its type. `path` and `message` hold no text of the answer (a map key is `[key]`); serde's message is `error.sensitive_detail()` |
+| Variables that do not serialize | `Variables { message, detail }`: what a `Serialize` implementation wrote is `error.sensitive_detail()`, not the message |
+| `Authentication(text)` | `Auth { message, detail }`: what the token endpoint wrote is `error.sensitive_detail()` |
 | `MissingGraphqlData`, `InvalidHeaderValue`, `Other` | Gone |
 
 ## GraphQL calls

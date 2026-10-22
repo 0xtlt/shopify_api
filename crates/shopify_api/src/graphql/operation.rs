@@ -211,7 +211,7 @@ pub struct Operation<D> {
     name: Option<Cow<'static, str>>,
     /// The Admin API version of the schema the operation was checked against.
     checked_against: Option<&'static str>,
-    variables: std::result::Result<Map<String, Value>, String>,
+    variables: std::result::Result<Map<String, Value>, VariablesFailure>,
     data: PhantomData<fn() -> D>,
 }
 
@@ -288,7 +288,7 @@ impl<D> Operation<D> {
                 variables.insert(name.to_string(), value);
             }
             (Ok(_), Err(error)) => {
-                self.variables = Err(format!("invalid value for variable `${name}`: {error}"))
+                self.variables = Err(VariablesFailure::of(Error::variables(Some(name), &error)))
             }
             (Err(_), _) => {}
         }
@@ -308,12 +308,7 @@ impl<D> Operation<D> {
 
     /// Replaces the variables with the fields of a serializable struct or map.
     pub fn variables<V: Serialize>(mut self, variables: V) -> Self {
-        self.variables = match serde_json::to_value(variables) {
-            Ok(Value::Object(variables)) => Ok(variables),
-            Ok(Value::Null) => Ok(Map::new()),
-            Ok(_) => Err("the variables of an operation must serialize to an object".to_string()),
-            Err(error) => Err(format!("{error}")),
-        };
+        self.variables = variables_of(variables).map_err(VariablesFailure::of);
         self
     }
 
@@ -321,7 +316,7 @@ impl<D> Operation<D> {
     pub fn variables_json(&self) -> Result<&Map<String, Value>> {
         self.variables
             .as_ref()
-            .map_err(|message| Error::Variables(message.clone()))
+            .map_err(|failure| failure.to_error())
     }
 
     /// The body Shopify receives: `query`, `variables` and `operationName`.
@@ -336,6 +331,44 @@ impl<D> Operation<D> {
             body.insert("operationName".to_string(), Value::String(name.to_string()));
         }
         Ok(Value::Object(body))
+    }
+}
+
+/// The variables of a [`Shopify::graphql_raw`](crate::Shopify::graphql_raw)
+/// call or an [`Operation`]: one path, so that both fail the same way.
+pub(crate) fn variables_of(variables: impl Serialize) -> Result<Map<String, Value>> {
+    match serde_json::to_value(variables) {
+        Ok(Value::Object(variables)) => Ok(variables),
+        Ok(Value::Null) => Ok(Map::new()),
+        Ok(_) => Err(Error::variables_not_an_object()),
+        Err(error) => Err(Error::variables(None, &error)),
+    }
+}
+
+/// An [`Error::Variables`] kept until the operation is sent. Its `Debug` is
+/// the error's: the detail is not shown.
+#[derive(Clone, Debug)]
+struct VariablesFailure {
+    message: String,
+    detail: Option<crate::SensitiveDetail>,
+}
+
+impl VariablesFailure {
+    fn of(error: Error) -> Self {
+        match error {
+            Error::Variables { message, detail } => Self { message, detail },
+            other => Self {
+                message: other.to_string(),
+                detail: None,
+            },
+        }
+    }
+
+    fn to_error(&self) -> Error {
+        Error::Variables {
+            message: self.message.clone(),
+            detail: self.detail.clone(),
+        }
     }
 }
 
@@ -638,7 +671,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "invalid variables: the variables of an operation must serialize to an object"
+            "invalid variables: the variables must serialize to an object"
         );
     }
 
@@ -660,8 +693,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "invalid variables: invalid value for variable `$input`: no"
+            "invalid variables: variable `$input` does not serialize: a value's `Serialize` implementation failed"
         );
+        assert_eq!(error.sensitive_detail(), Some("no"));
     }
 
     #[test]

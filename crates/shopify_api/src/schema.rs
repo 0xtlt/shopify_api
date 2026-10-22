@@ -83,7 +83,8 @@ pub async fn download_public_admin_schema_with(
     if !response.is_success() {
         return Err(Error::http(&url, &response));
     }
-    let value: Value = serde_json::from_slice(&response.body)?;
+    let value: Value =
+        crate::decode::from_slice(&response.body).map_err(|failure| failure.into_error())?;
     check(value)
 }
 
@@ -109,14 +110,14 @@ fn check(value: Value) -> Result<Value> {
             200,
             PUBLIC_ADMIN_SCHEMA_ENDPOINT,
             message.as_bytes(),
-            None,
         ));
     }
     if value.pointer("/data/__schema/types").is_none() {
-        return Err(Error::Decode {
-            path: "data.__schema".to_string(),
-            message: "the answer is not an introspection result".to_string(),
-        });
+        return Err(Error::decode(
+            "data.__schema".to_string(),
+            "the answer is not an introspection result".to_string(),
+            None,
+        ));
     }
     Ok(value)
 }

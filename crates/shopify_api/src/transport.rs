@@ -285,7 +285,11 @@ impl ReqwestTransport {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| {
-                crate::Error::Config(format!("the HTTP client does not start: {error}"))
+                // A proxy's address may hold a password: errors leave it out.
+                crate::Error::Config(format!(
+                    "the HTTP client does not start: {}",
+                    error.without_url()
+                ))
             })?;
         Ok(Self { client })
     }

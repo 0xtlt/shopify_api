@@ -251,7 +251,7 @@ async fn an_expired_refresh_token_says_what_to_do() {
         .unwrap();
 
     let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
-    assert!(matches!(error, Error::Auth(_)), "{error:?}");
+    assert!(matches!(error, Error::Auth { .. }), "{error:?}");
     assert!(
         error
             .to_string()
@@ -277,7 +277,12 @@ async fn a_refused_grant_says_what_shopify_answered_and_never_the_secret() {
     let message = error.to_string();
     assert_eq!(
         message,
-        "authentication failed: the token endpoint of test-shop.myshopify.com answered 400: shop_not_permitted: Client credentials cannot be performed on this shop."
+        "authentication failed: the token endpoint of test-shop.myshopify.com answered 400 (shop_not_permitted)"
+    );
+    // What it wrote is there for code that asks.
+    assert_eq!(
+        error.sensitive_detail(),
+        Some("shop_not_permitted: Client credentials cannot be performed on this shop.")
     );
     assert!(!format!("{error:?}").contains("top-secret"));
 }
@@ -438,7 +443,7 @@ async fn a_failed_grant_answers_the_requests_that_wait_for_it() {
         .collect();
     for call in calls {
         let error = call.await.unwrap().unwrap_err();
-        assert!(matches!(error, Error::Auth(_)), "{error:?}");
+        assert!(matches!(error, Error::Auth { .. }), "{error:?}");
     }
     // One request to the token endpoint; the others got its failure.
     assert_eq!(token_requests(&mock).len(), 1);

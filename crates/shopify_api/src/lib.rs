@@ -59,10 +59,10 @@ extern crate self as shopify_api;
 mod auth;
 pub mod bulk;
 mod client;
+mod decode;
 mod error;
 mod graphql;
 mod pagination;
-mod redact;
 pub mod schema;
 mod shop;
 pub mod transport;
@@ -80,7 +80,7 @@ pub mod webhooks;
 
 pub use auth::{AssociatedUser, Auth, TokenData, TokenStore};
 pub use client::{RetryPolicy, Shopify, ShopifyBuilder, USER_AGENT};
-pub use error::{Error, GraphqlErrors, RawBody, Result};
+pub use error::{Error, GraphqlErrors, RawBody, Result, SensitiveDetail};
 pub use graphql::{
     Cost, GraphqlError, IntoVariable, Location, Operation, OperationKind, RawResponse, Response,
     ThrottleStatus, UserError,

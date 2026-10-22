@@ -133,6 +133,20 @@ pub enum BulkOperationStatus {
 }
 
 impl BulkOperationStatus {
+    /// The status as an error shows it: an unknown one is not quoted.
+    fn shown(&self) -> &'static str {
+        match self {
+            Self::Created => "Created",
+            Self::Running => "Running",
+            Self::Completed => "Completed",
+            Self::Canceling => "Canceling",
+            Self::Canceled => "Canceled",
+            Self::Failed => "Failed",
+            Self::Expired => "Expired",
+            Self::Other(_) => "with a status this crate does not know",
+        }
+    }
+
     fn parse(value: &str) -> Self {
         match value {
             "CREATED" => Self::Created,
@@ -198,7 +212,8 @@ impl Wire {
         let number = |field: &str, value: &str| {
             value
                 .parse::<u64>()
-                .map_err(|_| Error::Bulk(format!("`{field}` is not a number: {value}")))
+                // The value is not shown: it is the answer's.
+                .map_err(|_| Error::Bulk(format!("`{field}` is not an unsigned integer")))
         };
         Ok(BulkOperation {
             object_count: number("objectCount", &self.object_count)?,
@@ -221,15 +236,58 @@ impl Wire {
     }
 }
 
+/// The ID of a bulk operation as an error shows it: a `gid://` of Shopify,
+/// else nothing of the text.
+fn shown_id(id: &str) -> &str {
+    let shown = id
+        .strip_prefix("gid://shopify/BulkOperation/")
+        .is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    if shown { id } else { "[id not shown]" }
+}
+
+/// The error of an operation that ended without completing.
+pub(crate) fn not_completed(operation: &BulkOperation) -> Error {
+    Error::Bulk(format!(
+        "the bulk operation {} ended {}{}",
+        shown_id(&operation.id),
+        operation.status.shown(),
+        operation
+            .error_code
+            .as_deref()
+            .map(|code| format!(" ({})", shown_error_code(code)))
+            .unwrap_or_default()
+    ))
+}
+
+/// The error of a wait that ran out.
+pub(crate) fn timed_out(id: &str, timeout: Duration) -> Error {
+    Error::Timeout(format!(
+        "the bulk operation {} did not end within {timeout:?}",
+        shown_id(id)
+    ))
+}
+
+/// A `BulkOperationErrorCode` as an error shows it.
+fn shown_error_code(code: &str) -> &'static str {
+    match code {
+        "ACCESS_DENIED" => "ACCESS_DENIED",
+        "INTERNAL_SERVER_ERROR" => "INTERNAL_SERVER_ERROR",
+        "TIMEOUT" => "TIMEOUT",
+        _ => "an error code this crate does not know",
+    }
+}
+
 /// Reads the `BulkOperationFields` of a generated type.
-fn operation_of(selection: &impl Serialize) -> Result<BulkOperation> {
-    let wire: Wire = crate::graphql::decode(serde_json::to_value(selection)?)?;
+pub(crate) fn operation_of(selection: &impl Serialize) -> Result<BulkOperation> {
+    let wire: Wire = crate::decode::reserialize(selection)?;
     wire.into_operation()
 }
 
 /// The user errors of a generated payload.
 fn user_errors(errors: &impl Serialize) -> Result<Vec<UserError>> {
-    crate::graphql::decode(serde_json::to_value(errors)?)
+    crate::decode::reserialize(errors)
 }
 
 /// How [`Shopify::wait_for_bulk_operation`] polls.
@@ -406,7 +464,8 @@ impl Shopify {
     pub async fn stage_bulk_variables<T: Serialize>(&self, variables: &[T]) -> Result<String> {
         let mut jsonl = Vec::new();
         for item in variables {
-            serde_json::to_writer(&mut jsonl, item)?;
+            serde_json::to_writer(&mut jsonl, item)
+                .map_err(|error| Error::variables(None, &error))?;
             jsonl.push(b'\n');
         }
 
@@ -533,17 +592,17 @@ impl Shopify {
             if let Some(timeout) = options.timeout {
                 let elapsed = started.elapsed();
                 if elapsed >= timeout {
-                    return Err(Error::Timeout(format!(
-                        "the bulk operation {id} did not end within {timeout:?}"
-                    )));
+                    return Err(timed_out(id, timeout));
                 }
                 wait = wait.min(timeout - elapsed);
             }
             tokio::time::sleep(wait).await;
-            let operation = self
-                .bulk_operation(id)
-                .await?
-                .ok_or_else(|| Error::Bulk(format!("the bulk operation {id} does not exist")))?;
+            let operation = self.bulk_operation(id).await?.ok_or_else(|| {
+                Error::Bulk(format!(
+                    "the bulk operation {} does not exist",
+                    shown_id(id)
+                ))
+            })?;
             // A status this version does not know ends the wait too: it is
             // the caller's to read, rather than a loop that never ends.
             if operation.status.is_terminal()
@@ -569,15 +628,7 @@ impl Shopify {
         let operation = self.run_bulk_query(query).await?;
         let operation = self.wait_for_bulk_operation(&operation.id, options).await?;
         if operation.status != BulkOperationStatus::Completed {
-            return Err(Error::Bulk(format!(
-                "the bulk operation {} ended {:?}{}",
-                operation.id,
-                operation.status,
-                operation
-                    .error_code
-                    .map(|code| format!(" ({code})"))
-                    .unwrap_or_default()
-            )));
+            return Err(not_completed(&operation));
         }
         match &operation.url {
             Some(url) => self.download_bulk_results(url).await,
@@ -628,19 +679,7 @@ pub fn parse_jsonl<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>> {
     body.split(|byte| *byte == b'\n')
         .enumerate()
         .filter(|(_, line)| !line.iter().all(u8::is_ascii_whitespace))
-        .map(|(index, line)| {
-            let mut deserializer = serde_json::Deserializer::from_slice(line);
-            serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
-                // The position serde_json adds is within the line, not the file.
-                let inner = error.inner();
-                let position = format!(" at line {} column {}", inner.line(), inner.column());
-                let message = inner.to_string();
-                Error::decode(
-                    format!("line {}: {}", index + 1, error.path()),
-                    message.strip_suffix(&position).unwrap_or(&message),
-                )
-            })
-        })
+        .map(|(index, line)| crate::decode::from_jsonl_line(line, index + 1))
         .collect()
 }
 
@@ -728,7 +767,7 @@ mod tests {
         let error = parse_jsonl::<Row>(b"{\"id\":\"a\"}\n{\"id\":2}\n").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Shopify's answer does not match the operation at `line 2: id`: invalid type: integer, expected a string"
+            "Shopify's answer does not match the operation at `id`: invalid type: integer, expected a string at line 2 column 7"
         );
     }
 

@@ -86,10 +86,7 @@ impl Shopify {
             match current.end_cursor {
                 Some(next) if cursor.as_ref() != Some(&next) => cursor = Some(next),
                 _ => {
-                    return Err(Error::Decode {
-                        path: "pageInfo.endCursor".to_string(),
-                        message: "`hasNextPage` is true but the cursor does not move: select `pageInfo { hasNextPage endCursor }` and pass the cursor as `after`".to_string(),
-                    });
+                    return Err(Error::decode("pageInfo.endCursor".to_string(), "`hasNextPage` is true but the cursor does not move: select `pageInfo { hasNextPage endCursor }` and pass the cursor as `after`".to_string(), None));
                 }
             }
         }

@@ -329,9 +329,10 @@ async fn an_error_shows_no_value_shopify_echoes_in_its_extensions() {
         assert!(!shown.contains("storage.test"), "{shown}");
     }
     let debug = format!("{error:?}");
-    assert!(debug.contains(r#""code": "INVALID_VARIABLE""#), "{debug}");
-    assert!(debug.contains(r#""value": .."#), "{debug}");
-    assert!(debug.contains(r#""problems": .."#), "{debug}");
+    assert!(
+        debug.contains(r#"Extensions { code: "INVALID_VARIABLE", others: 2 entries }"#),
+        "{debug}"
+    );
     assert!(debug.contains("Variable $media"), "{debug}");
     // The values stay available to the caller.
     let extensions = error.graphql_errors()[0].extensions.as_ref().unwrap();
@@ -352,7 +353,7 @@ async fn an_answer_that_does_not_fit_names_the_path() {
 }
 
 #[tokio::test]
-async fn http_errors_say_what_shopify_answered() {
+async fn http_errors_say_how_shopify_answered_and_keep_the_body_apart() {
     let mock = MockTransport::new();
     mock.push(shopify_api::transport::HttpResponse::new(
         403,
@@ -364,7 +365,11 @@ async fn http_errors_say_what_shopify_answered() {
     assert_eq!(error.status(), Some(403));
     assert_eq!(
         error.to_string(),
-        "Shopify answered 403 to https://test-shop.myshopify.com/admin/api/2026-10/graphql.json: [API] This action requires merchant approval for write_orders scope."
+        "Shopify answered 403 to https://test-shop.myshopify.com/admin/api/2026-10/graphql.json (no content type, 68 bytes)"
+    );
+    assert_eq!(
+        error.raw_http_body(),
+        Some(&b"[API] This action requires merchant approval for write_orders scope."[..])
     );
 }
 
