@@ -235,23 +235,61 @@ fn retry_after_from(
             std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX),
         );
     }
-    let date = http_date(value)?;
+    let date = http_date(value, now)?;
     Some((date - now).to_std().unwrap_or_default())
 }
 
 /// An HTTP date in any of its three forms: `Sun, 06 Nov 1994 08:49:37 GMT`,
 /// the obsolete `Sunday, 06-Nov-94 08:49:37 GMT` and `Sun Nov  6 08:49:37 1994`.
-fn http_date(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+///
+/// The two-digit year of the second form is read as RFC 9110 (§5.6.7) says:
+/// a date more than 50 years after `now` is the most recent past year with
+/// the same last two digits.
+fn http_date(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
     use chrono::{DateTime, NaiveDateTime, Utc};
     if let Ok(date) = DateTime::parse_from_rfc2822(value) {
         return Some(date.with_timezone(&Utc));
     }
-    ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
-        .iter()
-        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+    if let Some(date) = rfc850_date(value, now) {
+        return Some(date);
+    }
+    NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y")
+        .ok()
         .map(|date| date.and_utc())
 }
 
+/// `Sunday, 06-Nov-94 08:49:37 GMT`, its century chosen from `now`.
+fn rfc850_date(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Datelike, Months, NaiveDateTime};
+    let (weekday, rest) = value.split_once(", ")?;
+    let (day, rest) = rest.split_once('-')?;
+    let (month, rest) = rest.split_once('-')?;
+    let (year, time) = rest.split_once(' ')?;
+    if year.len() != 2 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let two_digits: i32 = year.parse().ok()?;
+    let latest = now.checked_add_months(Months::new(50 * 12))?;
+    // The latest year ending in these digits that is not more than 50 years ahead.
+    let mut full_year = now.year() - now.year().rem_euclid(100) + 100 + two_digits;
+    loop {
+        let text = format!("{day}-{month}-{full_year} {time}");
+        let date = NaiveDateTime::parse_from_str(&text, "%d-%b-%Y %H:%M:%S GMT")
+            .ok()?
+            .and_utc();
+        if date <= latest {
+            let named = date.format("%A").to_string();
+            return (named == weekday).then_some(date);
+        }
+        full_year -= 100;
+    }
+}
 /// The `data` and `extensions` of an answer without errors.
 fn into_data(raw: RawResponse) -> Result<(Value, Option<Value>)> {
     if !raw.errors.is_empty() {
@@ -290,6 +328,43 @@ mod tests {
         assert_eq!(
             read("Sun Nov  6 08:49:37 1994"),
             Some(Duration::from_secs(120))
+        );
+        // RFC 850's two-digit years: never more than 50 years ahead (RFC
+        // 9110 §5.6.7).
+        let in_2026 = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let year = |value| {
+            use chrono::Datelike;
+            super::http_date(value, in_2026).map(|date| date.year())
+        };
+        assert_eq!(year("Friday, 06-Nov-26 08:49:37 GMT"), Some(2026));
+        assert_eq!(year("Wednesday, 06-Nov-69 08:49:37 GMT"), Some(2069));
+        assert_eq!(year("Wednesday, 21-Oct-76 08:49:37 GMT"), Some(2076));
+        // A day after `now` plus 50 years is in the past century.
+        assert_eq!(year("Saturday, 23-Oct-76 08:49:37 GMT"), Some(1976));
+        assert_eq!(year("Saturday, 06-Nov-99 08:49:37 GMT"), Some(1999));
+        assert_eq!(year("Thursday, 06-Nov-70 08:49:37 GMT"), Some(2070));
+        assert_eq!(year("Monday, 06-Nov-00 08:49:37 GMT"), Some(2000));
+        // A weekday that does not match its date is no date.
+        assert_eq!(year("Monday, 06-Nov-69 08:49:37 GMT"), None);
+        assert_eq!(year("Sunday, 06-Nov-1994 08:49:37 GMT"), None);
+        // In 2069, `69` is this year, not a century ahead: an hour from now.
+        let in_2069 = chrono::DateTime::parse_from_rfc3339("2069-11-06T07:49:37Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(
+            retry_after_from("Wednesday, 06-Nov-69 08:49:37 GMT", in_2069),
+            Some(Duration::from_secs(3600))
+        );
+        // In 2099, `01` is two years ahead, not 98 years ago.
+        let in_2099 = chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(
+            super::http_date("Saturday, 01-Jan-01 00:00:00 GMT", in_2099)
+                .map(|date| date.to_rfc3339()),
+            Some("2101-01-01T00:00:00+00:00".to_string())
         );
         // A date already past is no wait.
         assert_eq!(read("Sun, 06 Nov 1994 08:00:00 GMT"), Some(Duration::ZERO));
