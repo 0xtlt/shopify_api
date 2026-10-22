@@ -98,7 +98,7 @@ reference, or `()` for none.
 | `get_bulk_operation(id)` | `bulk_operation(id)` |
 | `list_bulk_operations(BulkOperationsFilter { .. })` | `bulk_operations(BulkOperationsFilter::new().first(10))`, a `Page<BulkOperation>` |
 | `wait_for_bulk(id, BulkWaitOptions { .. })` | `wait_for_bulk_operation(id, BulkWaitOptions::new().timeout(…))` |
-| `Shopify::download_bulk_jsonl(url)` | `shopify.download_bulk_results(url)`, or `bulk_query_rows` for the whole cycle |
+| `Shopify::download_bulk_jsonl(url)` | `shopify.download_bulk_results(url)`, or `bulk_query_rows` for the whole cycle; `download_bulk_results_stream(url)` and `bulk_query_stream` read the rows as they download |
 | `run_bulk_queries`, `run_bulk_mutations`, `BulkConcurrencyOptions` | Gone: call the single versions in a loop |
 | `ShopifyBulkOperation`, `ShopifyBulkStatus` | `bulk::BulkOperation`, `bulk::BulkOperationStatus` |
 

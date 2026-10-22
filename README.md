@@ -234,6 +234,50 @@ let operation = shopify.run_bulk_mutation(
 `run_bulk_query`, `wait_for_bulk_operation`, `bulk_operations`,
 `cancel_bulk_operation` and `download_bulk_results` give each step on its own.
 
+### Large exports: stream the rows
+
+`bulk_query_rows` holds every row in a `Vec`. For an export of gigabytes,
+`bulk_query_stream` reads the file line by line as it downloads: memory
+follows the longest line, not the file.
+
+```rust,ignore
+let mut products = shopify
+    .bulk_query_stream::<MyProduct>("{ products { edges { node { id title } } } }", BulkWaitOptions::default())
+    .await?;
+while let Some(product) = products.next_row().await {
+    let product = product?; // a line that does not read: skip it, or stop
+    save(product).await?;
+}
+```
+
+`BulkRows` is also a `futures_core::Stream`. A line that does not read as
+the type is an error and the stream goes on; a download that fails, or a
+line longer than `max_line_length` (64 MiB by default), ends it.
+
+Nested connections write their objects on lines of their own, after their
+parent. `bulk_query_grouped::<Product, Variant>` runs the query with
+`groupObjects` and yields each product with its variants, one product in
+memory at a time:
+
+```rust,ignore
+let mut products = shopify
+    .bulk_query_grouped::<MyProduct, MyVariant>(
+        "{ products { edges { node { id title variants { edges { node { id sku } } } } } } }",
+        BulkWaitOptions::default(),
+    )
+    .await?;
+while let Some(group) = products.next_group().await {
+    let (product, variants) = group?;
+}
+```
+
+`download_bulk_results_stream` and `download_bulk_results_grouped` read the
+results of an operation you ran yourself. For a bulk mutation over more
+items than you want in memory, `run_bulk_mutation_iter` takes an iterator:
+each item is serialized as it is taken.
+
+Use the `Vec` methods when the results fit in memory, the streams otherwise.
+
 ## Webhooks
 
 Feature `webhooks`:

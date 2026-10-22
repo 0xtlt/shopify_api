@@ -40,10 +40,13 @@ async fn main() -> shopify_api::Result<()> {
     // The client credentials grant: a store of the organization that owns the app.
     let shopify = Shopify::new(shop, Auth::client_credentials(client_id, client_secret))?;
 
-    let rows: Vec<Variant> = shopify
-        .bulk_query_rows(variants::QUERY, BulkWaitOptions::default())
+    // Read as the file downloads: an export of any size, in little memory.
+    let mut rows = shopify
+        .bulk_query_stream::<Variant>(variants::QUERY, BulkWaitOptions::default())
         .await?;
-    for variant in &rows {
+    let mut count = 0;
+    while let Some(variant) = rows.next_row().await {
+        let variant = variant?;
         println!(
             "{} {:<12} {:>8} {:>5?}  {}",
             variant.id,
@@ -52,7 +55,8 @@ async fn main() -> shopify_api::Result<()> {
             variant.inventory_quantity,
             variant.product.title
         );
+        count += 1;
     }
-    println!("{} variants", rows.len());
+    println!("{count} variants");
     Ok(())
 }
