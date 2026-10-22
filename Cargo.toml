@@ -21,7 +21,7 @@ shopify_api = { path = "crates/shopify_api", version = "=1.0.0" }
 shopify_api_graphql = { path = "crates/shopify_api_graphql", version = "=1.0.0" }
 shopify_api_macros = { path = "crates/shopify_api_macros", version = "=1.0.0" }
 
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 clap = { version = "4.6", features = ["derive", "env"] }
 graphql-parser = "0.4"
@@ -34,8 +34,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 sha2 = "0.11"
-subtle = "2.6"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
