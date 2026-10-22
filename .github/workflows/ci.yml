@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - check
+      - features
       - msrv
     steps:
       - run: exit 0
@@ -32,6 +33,18 @@ jobs:
       - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
       - run: mise run check
+
+  # In its own job, so the build of nothing else can lend the client a
+  # feature it does not declare (`mise run check` runs it too).
+  features:
+    name: no default features, each feature alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      # `cargo check -p shopify_api --no-default-features --lib --locked`, then each feature alone.
+      - run: mise run check:features
 
   msrv:
     name: Rust 1.88

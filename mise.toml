@@ -27,14 +27,23 @@ run = "cargo test --workspace --all-features --locked"
 description = "Build and test the client with its default features only"
 run = "cargo test -p shopify_api --locked"
 
+[tasks."check:features"]
+description = "Build the client without its default features, then with each feature alone: what feature unification in the workspace hides"
+run = [
+  "cargo check -p shopify_api --no-default-features --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features webhooks --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features oauth --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features testing --lib --locked",
+]
+
 [tasks.doc]
 description = "Build the documentation, warnings are errors"
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --all-features --no-deps --locked"
 
 [tasks.check]
-description = "What CI runs: fmt check, clippy, tests, docs"
-depends = ["fmt:check", "lint", "test", "test:min", "doc"]
+description = "What CI runs: fmt check, clippy, tests, docs, features alone"
+depends = ["fmt:check", "lint", "test", "test:min", "check:features", "doc"]
 
 [tasks.msrv]
 description = "Build the workspace with the minimum supported Rust version (1.88)"
