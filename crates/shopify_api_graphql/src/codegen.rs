@@ -150,13 +150,11 @@ impl DataTypes<'_> {
 
         let krate = self.krate;
         let serde = serde_path(krate);
+        let on = selection.types.join("` or `");
         let doc = if name == DATA_TYPE {
-            format!(
-                " The `data` of the operation, selected on `{}`.",
-                selection.type_name
-            )
+            format!(" The `data` of the operation, selected on `{on}`.")
         } else {
-            format!(" Selection on `{}`.", selection.type_name)
+            format!(" Selection on `{on}`.")
         };
         self.items.push(quote! {
             #[doc = #doc]

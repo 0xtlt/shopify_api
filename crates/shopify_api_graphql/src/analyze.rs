@@ -117,8 +117,16 @@ impl Variable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Selection {
+    /// The type the fields are selected on: of the first place, when one
+    /// response key names fields of different types (see `types`).
     pub type_name: String,
     pub fields: Vec<SelectedField>,
+    /// Every type the fields are selected on, `type_name` first. More than
+    /// one when a response key names fields of different object, interface or
+    /// union types below two exclusive object types (`price` is
+    /// `Product.priceRangeV2` and `Order.totalPriceSet`): the fields are then
+    /// those of every place, each conditional unless every place selects it.
+    pub types: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,7 +334,15 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
         OperationKind::Mutation => "MUTATION",
     };
     analyzer.check_directives(directives, location)?;
-    let data = analyzer.selection(root, &[(selection_set, false, Vec::new())], position)?;
+    let data = analyzer.selection(
+        &[SubSet {
+            set: selection_set,
+            conditional: false,
+            lineage: Vec::new(),
+            parent: root.to_string(),
+        }],
+        position,
+    )?;
 
     if let Some(unused) = analyzer
         .variables
@@ -390,8 +406,7 @@ struct Pending<'a> {
     origins: Vec<Origin<'a>>,
     /// The field may be absent from a value of the parent.
     conditional: bool,
-    /// The subfields selected at each place, with whether that place may
-    /// be absent when the field is present, and the place's [`Lineage`].
+    /// The subfields selected at each place that selects some.
     sets: Vec<SubSet<'a>>,
     /// The selections of the parent (see [`Analyzer::selection`]) that select
     /// the field unconditionally.
@@ -399,9 +414,17 @@ struct Pending<'a> {
     position: Pos,
 }
 
-/// A selection set, whether the place that selected it may be absent while
-/// the value is present, and the [`Lineage`] of that place.
-type SubSet<'a> = (&'a SelectionSet<'a>, bool, Lineage);
+/// The selection set of a field at one place.
+struct SubSet<'a> {
+    set: &'a SelectionSet<'a>,
+    /// The place may be absent while the value is present.
+    conditional: bool,
+    /// The [`Lineage`] of the place.
+    lineage: Lineage,
+    /// The type the set is selected on: the field's type at that place, which
+    /// may differ from one place to another (see [`Selection::types`]).
+    parent: String,
+}
 
 /// The parent type of a place and of each field above it, from the root:
 /// two places whose lineages differ by two object types at some depth are
@@ -413,8 +436,12 @@ struct Origin<'a> {
     /// Its parent type last.
     lineage: Lineage,
     field: String,
+    /// The type of the field there.
+    ty: TypeRef,
     arguments: &'a [(String, Value<'a>)],
     position: Pos,
+    /// The field has a selection set there.
+    selects: bool,
 }
 
 /// How the arguments of two places that select one response key compare.
@@ -547,10 +574,16 @@ impl<'a> Analyzer<'a> {
     /// others select is conditional. When none is, any of them may be the
     /// one that is there: a subfield is then certain only if every place
     /// selects it.
-    fn selection(&mut self, parent: &str, sets: &[SubSet<'a>], position: Pos) -> Result<Selection> {
-        let any_certain = sets.iter().any(|(_, conditional, _)| !conditional);
+    fn selection(&mut self, sets: &[SubSet<'a>], position: Pos) -> Result<Selection> {
+        let mut types: Vec<String> = Vec::new();
+        for sub in sets {
+            if !types.contains(&sub.parent) {
+                types.push(sub.parent.clone());
+            }
+        }
+        let any_certain = sets.iter().any(|sub| !sub.conditional);
         let mut pending = Vec::new();
-        for (index, (set, conditional, lineage)) in sets.iter().enumerate() {
+        for (index, sub) in sets.iter().enumerate() {
             let place = Place {
                 index,
                 // Several places that may each be the one there: what each
@@ -558,11 +591,11 @@ impl<'a> Analyzer<'a> {
                 uncertain: !any_certain && sets.len() > 1,
             };
             self.collect(
-                parent,
-                set,
-                any_certain && *conditional,
+                &sub.parent,
+                sub.set,
+                any_certain && sub.conditional,
                 place,
-                lineage,
+                &sub.lineage,
                 &mut pending,
             )?;
         }
@@ -572,7 +605,10 @@ impl<'a> Analyzer<'a> {
             }
         }
         if pending.is_empty() {
-            return error_at(position, format!("The selection on `{parent}` is empty"));
+            return error_at(
+                position,
+                format!("The selection on `{}` is empty", types.join("` and `")),
+            );
         }
 
         let mut fields = Vec::new();
@@ -580,24 +616,25 @@ impl<'a> Analyzer<'a> {
             let named = field.ty.name();
             let base = match self.schema.get(named) {
                 Some(definition) if definition.is_composite() => {
-                    if field.sets.is_empty() {
+                    // Every place selects subfields, not only one of them.
+                    if let Some(bare) = field.origins.iter().find(|origin| !origin.selects) {
                         return error_at(
-                            field.position,
+                            bare.position,
                             format!(
                                 "Field `{}` has the type `{}`: select the subfields you need, `{} {{ … }}`",
-                                field.field, field.ty, field.field
+                                bare.field, bare.ty, bare.field
                             ),
                         );
                     }
-                    FieldBase::Object(self.selection(named, &field.sets, field.position)?)
+                    FieldBase::Object(self.selection(&field.sets, field.position)?)
                 }
                 Some(_) => {
-                    if !field.sets.is_empty() {
+                    if let Some(selecting) = field.origins.iter().find(|origin| origin.selects) {
                         return error_at(
-                            field.position,
+                            selecting.position,
                             format!(
                                 "Field `{}` has the type `{}`, which has no subfields",
-                                field.field, field.ty
+                                selecting.field, selecting.ty
                             ),
                         );
                     }
@@ -619,8 +656,9 @@ impl<'a> Analyzer<'a> {
         }
 
         Ok(Selection {
-            type_name: parent.to_string(),
+            type_name: types[0].clone(),
             fields,
+            types,
         })
     }
 
@@ -642,29 +680,34 @@ impl<'a> Analyzer<'a> {
                         conditional | self.check_directives(&field.directives, "FIELD")?;
                     let ty = self.field_type(parent, field)?;
                     let key = field.alias.as_ref().unwrap_or(&field.name).clone();
+                    let selects = !field.selection_set.items.is_empty();
                     let origin = |lineage| Origin {
                         lineage,
                         field: field.name.clone(),
+                        ty: ty.clone(),
                         arguments: &field.arguments,
                         position: field.position,
+                        selects,
                     };
                     let origin_lineage: Lineage = lineage
                         .iter()
                         .cloned()
                         .chain([parent.to_string()])
                         .collect();
-                    let sets = (!field.selection_set.items.is_empty()).then(|| {
-                        (
-                            &field.selection_set,
-                            conditional || place.uncertain,
-                            origin_lineage.clone(),
-                        )
+                    let sets = selects.then(|| SubSet {
+                        set: &field.selection_set,
+                        conditional: conditional || place.uncertain,
+                        lineage: origin_lineage.clone(),
+                        parent: ty.name().to_string(),
                     });
 
                     match pending.iter_mut().find(|existing| existing.key == key) {
                         Some(existing) => {
-                            // The answer holds one value under the key: one type.
-                            if existing.ty != ty {
+                            // SameResponseShape: the answer holds one value
+                            // under the key, of one shape. Below, the
+                            // subfields of every place merge and are checked
+                            // the same way.
+                            if !self.same_shape(&existing.ty, &ty) {
                                 return error_at(
                                     field.position,
                                     format!(
@@ -722,7 +765,7 @@ impl<'a> Analyzer<'a> {
                         None => pending.push(Pending {
                             key,
                             field: field.name.clone(),
-                            ty,
+                            ty: ty.clone(),
                             origins: vec![origin(origin_lineage)],
                             conditional,
                             sets: sets.into_iter().collect(),
@@ -839,6 +882,22 @@ impl<'a> Analyzer<'a> {
             .entry((position.line, position.column))
             .or_insert_with(|| input_objects::argument_orders(source, position, name))
             .clone()
+    }
+
+    /// SameResponseShape, for the types of two fields: the same lists and
+    /// nullability, the same scalar or enum, or two types with subfields,
+    /// whose selections [`Analyzer::selection`] then merges.
+    fn same_shape(&self, left: &TypeRef, right: &TypeRef) -> bool {
+        match (left, right) {
+            (TypeRef::NonNull(left), TypeRef::NonNull(right))
+            | (TypeRef::List(left), TypeRef::List(right)) => self.same_shape(left, right),
+            (TypeRef::Named(left), TypeRef::Named(right)) => {
+                let composite =
+                    |name: &str| self.schema.get(name).is_some_and(TypeDef::is_composite);
+                left == right || (composite(left) && composite(right))
+            }
+            _ => false,
+        }
     }
 
     /// An object type, as opposed to an interface or a union.

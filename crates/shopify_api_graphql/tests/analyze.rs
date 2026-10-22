@@ -916,3 +916,137 @@ fn keys_below_exclusive_object_types_may_name_different_fields() {
         .contains("`a` is selected twice with different fields or types")
     );
 }
+
+/// SameResponseShape: below two exclusive object types, one key may name
+/// fields of different object types when what is selected below has the
+/// same shape. The subfields of both merge, each conditional unless both
+/// select it.
+#[test]
+fn keys_below_exclusive_object_types_may_name_fields_of_different_types() {
+    let operation = check(
+        "{ nodes(ids: []) {
+           ... on Product { price: priceRangeV2 { value: minVariantPrice { amount currencyCode } } }
+           ... on Order { price: totalPriceSet { value: shopMoney { amount currencyCode } } }
+         } }",
+    );
+    let nodes = child(&operation.data, "nodes");
+    assert_eq!(fields(nodes), ["price?: ProductPriceRangeV2!"]);
+    let price = child(nodes, "price");
+    assert_eq!(price.types, ["ProductPriceRangeV2", "MoneyBag"]);
+    assert_eq!(fields(price), ["value: MoneyV2!"]);
+    assert_eq!(
+        fields(child(price, "value")),
+        ["amount: Decimal!", "currencyCode: CurrencyCode!"]
+    );
+
+    // A subfield one side selects alone is conditional.
+    let operation = check(
+        "{ nodes(ids: []) {
+           ... on Product { price: priceRangeV2 { value: minVariantPrice { amount } min: minVariantPrice { amount } } }
+           ... on Order { price: totalPriceSet { value: shopMoney { amount currencyCode } } }
+         } }",
+    );
+    let price = child(child(&operation.data, "nodes"), "price");
+    assert_eq!(fields(price), ["value: MoneyV2!", "min?: MoneyV2!"]);
+    assert_eq!(
+        fields(child(price, "value")),
+        ["amount: Decimal!", "currencyCode?: CurrencyCode!"]
+    );
+
+    // Both nullable.
+    check(
+        "query($id: ID!) { node(id: $id) {
+           ... on Product { p: compareAtPriceRange { v: maxVariantCompareAtPrice { amount } } }
+           ... on Order { p: totalDiscountsSet { v: shopMoney { amount } } }
+         } }",
+    );
+}
+
+/// What does not have the same shape stays refused, at any depth: false
+/// accepts are worse than false refusals.
+#[test]
+fn keys_of_different_types_need_the_same_shape() {
+    let refused = |source: &str, expected: &str| {
+        let refused = refusal(source);
+        assert!(refused.contains(expected), "{source}\n{refused}");
+    };
+    let node = |product: &str, order: &str| {
+        format!(
+            "query($id: ID!) {{ node(id: $id) {{ ... on Product {{ {product} }} ... on Order {{ {order} }} }} }}"
+        )
+    };
+    // A leaf of another scalar, or of another enum, below.
+    refused(
+        &node(
+            "p: priceRangeV2 { v: minVariantPrice { amount } }",
+            "p: totalPriceSet { v: shopMoney { amount: currencyCode } }",
+        ),
+        "`amount` is selected twice with different fields or types (`amount: Decimal!` and `currencyCode: CurrencyCode!`)",
+    );
+    // A leaf on one side, subfields on the other.
+    refused(
+        &node(
+            "p: seo { t: title }",
+            "p: totalPriceSet { t: shopMoney { amount } }",
+        ),
+        "`t` is selected twice with different fields or types (`title: String` and `shopMoney: MoneyV2!`)",
+    );
+    refused(
+        &node("p: title", "p: totalPriceSet { shopMoney { amount } }"),
+        "`p` is selected twice with different fields or types (`title: String!` and `totalPriceSet: MoneyBag!`)",
+    );
+    // Non-null on one side only.
+    refused(
+        &node(
+            "p: priceRangeV2 { v: minVariantPrice { amount } }",
+            "p: totalDiscountsSet { v: shopMoney { amount } }",
+        ),
+        "`p` is selected twice with different fields or types (`priceRangeV2: ProductPriceRangeV2!` and `totalDiscountsSet: MoneyBag`)",
+    );
+    // A list on one side only.
+    refused(
+        &node(
+            "p: options { name }",
+            "p: totalPriceSet { name: shopMoney { amount } }",
+        ),
+        "`p` is selected twice with different fields or types (`options: [ProductOption!]!` and `totalPriceSet: MoneyBag!`)",
+    );
+    // The same parent type: the same field, whatever the types.
+    refused(
+        "query($id: ID!) { node(id: $id) { ... on Product { p: priceRangeV2 { v: maxVariantPrice { amount } } } ... on Product { p: compareAtPriceRange { v: maxVariantCompareAtPrice { amount } } } } }",
+        "`p` is selected twice with different fields or types",
+    );
+    // An interface on one side: both may be there.
+    refused(
+        "query($id: ID!) { node(id: $id) { ... on HasMetafields { p: metafield(key: \"a\") { id } } ... on Product { p: featuredMedia { id } } } }",
+        "`p` is selected twice with different fields or types",
+    );
+    // The same field named on two places must be selected the same way below.
+    refused(
+        &node(
+            "p: priceRangeV2 { v: minVariantPrice { amount } }",
+            "p: totalPriceSet { v: shopMoney { amount } v: presentmentMoney { amount } }",
+        ),
+        "`v` is selected twice with different fields or types (`shopMoney: MoneyV2!` and `presentmentMoney: MoneyV2!`)",
+    );
+}
+
+/// A field of an object type needs subfields at every place it is selected,
+/// a leaf at none.
+#[test]
+fn every_place_of_a_field_selects_subfields_or_none() {
+    assert_eq!(
+        refusal("{ shop { name } shop }"),
+        "Field `shop` has the type `Shop!`: select the subfields you need, `shop { … }` (line 1, column 17)"
+    );
+    assert_eq!(
+        refusal("{ shop { name name { x } } }"),
+        "Field `name` has the type `String!`, which has no subfields (line 1, column 15)"
+    );
+    assert_eq!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on Product { p: seo { title } } ... on Order { p: totalPriceSet } } }"
+        ),
+        "Field `totalPriceSet` has the type `MoneyBag!`: select the subfields you need, `totalPriceSet { … }` (line 1, column 86)"
+    );
+}

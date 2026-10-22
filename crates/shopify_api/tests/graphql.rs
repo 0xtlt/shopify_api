@@ -238,6 +238,58 @@ async fn graphql_errors_fail_the_operation_and_keep_partial_data() {
     assert_eq!(raw.data, Some(json!({ "shop": null })));
 }
 
+graphql! {
+    /// One key, `price`, on fields of two types below exclusive object types.
+    mod prices = "query Prices($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Product { price: priceRangeV2 { value: minVariantPrice { amount currencyCode } } }
+          ... on Order { price: totalPriceSet { value: shopMoney { amount currencyCode } } }
+        }
+      }";
+}
+
+#[tokio::test]
+async fn one_key_on_fields_of_different_types_reads_both() {
+    let mock = MockTransport::new();
+    let money = json!({ "value": { "amount": "10.0", "currencyCode": "EUR" } });
+    mock.push_data(json!({ "nodes": [
+        { "price": money },
+        { "price": { "value": { "amount": "25.5", "currencyCode": "USD" } } },
+        {},
+        null,
+    ] }));
+    let shopify = client(&mock);
+
+    let data = shopify
+        .execute(prices::operation(prices::Variables {
+            ids: vec![
+                "gid://shopify/Product/1".into(),
+                "gid://shopify/Order/2".into(),
+            ],
+        }))
+        .await
+        .unwrap();
+    let price = |index: usize| {
+        let node: &Option<prices::DataNodes> = &data.nodes[index];
+        node.as_ref()
+            .and_then(|node| node.price.as_ref())
+            .map(|price| {
+                let prices::DataNodesPrice {
+                    value:
+                        prices::DataNodesPriceValue {
+                            amount,
+                            currency_code,
+                        },
+                } = price;
+                (amount.as_str(), currency_code.as_str())
+            })
+    };
+    assert_eq!(price(0), Some(("10.0", "EUR")));
+    assert_eq!(price(1), Some(("25.5", "USD")));
+    assert_eq!(price(2), None);
+    assert!(data.nodes[3].is_none());
+}
+
 #[tokio::test]
 async fn an_error_shows_no_value_shopify_echoes_in_its_extensions() {
     // What GraphQL Ruby answers to a variable that does not validate: the
