@@ -238,7 +238,7 @@ let operation = shopify.run_bulk_mutation(
 
 `bulk_query_rows` holds every row in a `Vec`. For an export of gigabytes,
 `bulk_query_stream` reads the file line by line as it downloads: memory
-follows the longest line, not the file.
+follows the line being read, not the file.
 
 ```rust,ignore
 let mut products = shopify
@@ -257,7 +257,9 @@ line longer than `max_line_length` (64 MiB by default), ends it.
 Nested connections write their objects on lines of their own, after their
 parent. `bulk_query_grouped::<Product, Variant>` runs the query with
 `groupObjects` and yields each product with its variants, one product in
-memory at a time:
+memory at a time. Every object that has a nested connection must select
+`id`, without an alias: Shopify refuses the query otherwise.
+
 
 ```rust,ignore
 let mut products = shopify

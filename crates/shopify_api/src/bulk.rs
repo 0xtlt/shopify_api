@@ -708,8 +708,8 @@ impl Shopify {
     }
 
     /// Runs a bulk query to its end, then reads its results line by line
-    /// as they download: the memory it takes follows the longest line, not
-    /// the file. Fails when the operation does not complete.
+    /// as they download: the memory it takes follows the line being read,
+    /// not the file. Fails when the operation does not complete.
     ///
     /// The stream ends after some errors and goes on after others: see
     /// [`BulkRows`].
