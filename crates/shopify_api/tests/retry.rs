@@ -222,3 +222,27 @@ async fn a_mutation_after_a_comment_ended_by_a_carriage_return_is_not_sent_again
     assert_eq!(error.status(), Some(502));
     assert_eq!(mock.requests().len(), 1);
 }
+
+/// The test client retries a `429` at once, whatever its `Retry-After`; one
+/// beyond the limit still ends in an error.
+#[tokio::test(start_paused = true)]
+async fn the_test_client_does_not_wait_for_a_retry_after() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "300"))
+        .push_data(shop());
+    let shopify = client(&mock);
+
+    let started = tokio::time::Instant::now();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(mock.requests().len(), 2);
+
+    mock.clear();
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "301"));
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert!(
+        matches!(error, Error::Throttled { retry_after: Some(wait), .. } if wait == Duration::from_secs(301)),
+        "{error:?}"
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}

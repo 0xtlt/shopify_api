@@ -215,7 +215,9 @@ impl GraphqlRequest {
 }
 
 /// A client of `test-shop.myshopify.com` with the token `test-token`,
-/// sending through `mock`, retrying without waiting.
+/// sending through `mock`, retrying without waiting: neither backoff nor a
+/// scripted `Retry-After` is slept through. A `Retry-After` beyond
+/// [`RetryPolicy::max_retry_after`] still ends in [`Error::Throttled`](crate::Error::Throttled).
 pub fn client(mock: &MockTransport) -> Shopify {
     Shopify::builder("test-shop")
         .access_token("test-token")
@@ -223,7 +225,8 @@ pub fn client(mock: &MockTransport) -> Shopify {
         .retry(
             RetryPolicy::new(4)
                 .with_base_delay(Duration::ZERO)
-                .with_max_delay(Duration::ZERO),
+                .with_max_delay(Duration::ZERO)
+                .without_retry_after_waits(),
         )
         .build()
         .expect("a valid test client")

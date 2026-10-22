@@ -184,6 +184,8 @@ pub struct RetryPolicy {
     base_delay: Duration,
     max_delay: Duration,
     max_retry_after: Duration,
+    /// `false` only for `testing::client`: a `Retry-After` is not slept through.
+    wait_for_retry_after: bool,
 }
 
 impl RetryPolicy {
@@ -195,6 +197,7 @@ impl RetryPolicy {
             base_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(30),
             max_retry_after: Duration::from_secs(300),
+            wait_for_retry_after: true,
         }
     }
 
@@ -222,6 +225,24 @@ impl RetryPolicy {
     pub const fn with_max_retry_after(mut self, wait: Duration) -> Self {
         self.max_retry_after = wait;
         self
+    }
+
+    /// Retries a `429` at once instead of waiting for its `Retry-After`, for
+    /// tests with a mocked Shopify. A `Retry-After` beyond `max_retry_after`
+    /// still ends in [`Error::Throttled`](crate::Error::Throttled).
+    #[cfg_attr(not(feature = "testing"), allow(dead_code))]
+    pub(crate) const fn without_retry_after_waits(mut self) -> Self {
+        self.wait_for_retry_after = false;
+        self
+    }
+
+    /// The wait before retrying a `429` whose `Retry-After` asked for `wait`.
+    pub(crate) const fn retry_after_wait(&self, wait: Duration) -> Duration {
+        if self.wait_for_retry_after {
+            wait
+        } else {
+            Duration::ZERO
+        }
     }
 
     pub const fn max_retries(&self) -> u32 {

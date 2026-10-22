@@ -14,7 +14,7 @@ A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATIO
 - Add: bulk operations: `bulk_query_rows`, `run_bulk_mutation` (uploads the JSONL), `cancel_bulk_operation`, typed `BulkOperation` and statuses, adaptive polling.
 - Add: `webhooks`: `Webhook::verify` (headers, signature with secret rotation, payload), subscriptions with `sync_webhook_subscriptions`, which updates in place and creates before it deletes.
 - Add: `oauth`: `ShopifyApp` with install links, callback and admin launch verification, code exchange, session tokens and token exchange, app proxies.
-- Add: `Transport` trait, `ReqwestTransport` (redirections always off, `from_builder` for your own settings), and `testing::MockTransport`.
+- Add: `Transport` trait, `ReqwestTransport` (redirections always off, `from_builder` for your own settings), and `testing::MockTransport`, with `testing::client`, which retries without waiting, even for a scripted `Retry-After`.
 - Add: token renewals run in a task of their own: a cancelled request does not lose a rotated refresh token. A failed renewal answers the requests waiting for it.
 - Add: errors never hold a query string (signed bulk result addresses stay out of logs), and the `Debug` of `GraphqlErrors` names the fields of partial `data` without their values; `Error::Http` carries Shopify's `X-Request-Id`.
 - Add: `ShopDomain` refuses anything but `<name>` or `<name>.myshopify.com`.

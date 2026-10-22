@@ -176,7 +176,7 @@ impl Shopify {
                             tracing::debug!("Shopify answered 429 with a Retry-After of {wait:?}");
                             return Err(throttled);
                         }
-                        Some(wait) => wait,
+                        Some(wait) => self.retry.retry_after_wait(wait),
                         None => self.retry.backoff(retries),
                     };
                     tracing::debug!("Shopify answered 429: retrying in {wait:?}");
