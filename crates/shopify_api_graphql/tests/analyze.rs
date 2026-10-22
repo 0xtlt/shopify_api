@@ -773,3 +773,43 @@ fn one_key_may_name_different_fields_on_different_object_types() {
         .contains("`label` is selected twice with different fields or types")
     );
 }
+
+/// Below two exclusive object types, only the shapes must agree, at every
+/// depth: `a` may be `url` on one side and `originalSrc` on the other.
+/// Where both sides can be in one answer, the fields must still match.
+#[test]
+fn keys_below_exclusive_object_types_may_name_different_fields() {
+    let operation = check(
+        "query($id: ID!) { node(id: $id) { ... on ProductVariant { x: image { a: url } } ... on Collection { x: image { a: originalSrc } } } }",
+    );
+    let node = child(&operation.data, "node");
+    assert_eq!(fields(node), ["x?: Image"]);
+    assert_eq!(fields(child(node, "x")), ["a: URL!"]);
+
+    // Two levels down, the same.
+    check(
+        "query($id: ID!) { node(id: $id) { ... on Product { m: metafield(key: \"a\") { d: definition { n: name } } } ... on Order { m: metafield(key: \"b\") { d: definition { n: namespace } } } } }",
+    );
+
+    // The same object type on both sides: the subfields must match.
+    assert!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on ProductVariant { x: image { a: url } } ... on ProductVariant { x: image { a: originalSrc } } } }"
+        )
+        .contains("`a` is selected twice with different fields or types (`url: URL!` and `originalSrc: URL!`)")
+    );
+    // An interface on one side: both may be there.
+    assert!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on Node { x: id } ... on Product { x: handle } } }"
+        )
+        .contains("`x` is selected twice")
+    );
+    // Shapes still must agree below exclusive types.
+    assert!(
+        refusal(
+            "query($id: ID!) { node(id: $id) { ... on ProductVariant { x: image { a: url } } ... on Collection { x: image { a: altText } } } }"
+        )
+        .contains("`a` is selected twice with different fields or types")
+    );
+}

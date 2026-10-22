@@ -324,7 +324,7 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
         OperationKind::Mutation => "MUTATION",
     };
     analyzer.check_directives(directives, location)?;
-    let data = analyzer.selection(root, &[(selection_set, false)], position)?;
+    let data = analyzer.selection(root, &[(selection_set, false, Vec::new())], position)?;
 
     if let Some(unused) = analyzer
         .variables
@@ -390,17 +390,27 @@ struct Pending<'a> {
     /// The field may be absent from a value of the parent.
     conditional: bool,
     /// The subfields selected at each place, with whether that place may
-    /// be absent when the field is present.
-    sets: Vec<(&'a SelectionSet<'a>, bool)>,
+    /// be absent when the field is present, and the place's [`Lineage`].
+    sets: Vec<SubSet<'a>>,
     /// The selections of the parent (see [`Analyzer::selection`]) that select
     /// the field unconditionally.
     unconditional_in: BTreeSet<usize>,
     position: Pos,
 }
 
+/// A selection set, whether the place that selected it may be absent while
+/// the value is present, and the [`Lineage`] of that place.
+type SubSet<'a> = (&'a SelectionSet<'a>, bool, Lineage);
+
+/// The parent type of a place and of each field above it, from the root:
+/// two places whose lineages differ by two object types at some depth are
+/// never both in one answer.
+type Lineage = Vec<String>;
+
 /// One place a response key is selected at.
 struct Origin {
-    parent: String,
+    /// Its parent type last.
+    lineage: Lineage,
     field: String,
     arguments: String,
 }
@@ -456,15 +466,10 @@ impl<'a> Analyzer<'a> {
     /// others select is conditional. When none is, any of them may be the
     /// one that is there: a subfield is then certain only if every place
     /// selects it.
-    fn selection(
-        &mut self,
-        parent: &str,
-        sets: &[(&'a SelectionSet<'a>, bool)],
-        position: Pos,
-    ) -> Result<Selection> {
-        let any_certain = sets.iter().any(|(_, conditional)| !conditional);
+    fn selection(&mut self, parent: &str, sets: &[SubSet<'a>], position: Pos) -> Result<Selection> {
+        let any_certain = sets.iter().any(|(_, conditional, _)| !conditional);
         let mut pending = Vec::new();
-        for (index, (set, conditional)) in sets.iter().enumerate() {
+        for (index, (set, conditional, lineage)) in sets.iter().enumerate() {
             let place = Place {
                 index,
                 // Several places that may each be the one there: what each
@@ -476,6 +481,7 @@ impl<'a> Analyzer<'a> {
                 set,
                 any_certain && *conditional,
                 place,
+                lineage,
                 &mut pending,
             )?;
         }
@@ -545,6 +551,7 @@ impl<'a> Analyzer<'a> {
         set: &'a SelectionSet<'a>,
         conditional: bool,
         place: Place,
+        lineage: &[String],
         pending: &mut Vec<Pending<'a>>,
     ) -> Result<()> {
         for item in &set.items {
@@ -555,8 +562,18 @@ impl<'a> Analyzer<'a> {
                     let ty = self.field_type(parent, field)?;
                     let key = field.alias.as_ref().unwrap_or(&field.name).clone();
                     let arguments = arguments_key(&field.arguments);
-                    let sets = (!field.selection_set.items.is_empty())
-                        .then_some((&field.selection_set, conditional || place.uncertain));
+                    let origin_lineage: Lineage = lineage
+                        .iter()
+                        .cloned()
+                        .chain([parent.to_string()])
+                        .collect();
+                    let sets = (!field.selection_set.items.is_empty()).then(|| {
+                        (
+                            &field.selection_set,
+                            conditional || place.uncertain,
+                            origin_lineage.clone(),
+                        )
+                    });
 
                     match pending.iter_mut().find(|existing| existing.key == key) {
                         Some(existing) => {
@@ -572,12 +589,10 @@ impl<'a> Analyzer<'a> {
                             }
                             // FieldsInSetCanMerge: on two different object
                             // types, never both there, the fields and their
-                            // arguments may differ; elsewhere they may not.
+                            // arguments may differ, and so may those below
+                            // them; elsewhere they may not.
                             for origin in &existing.origins {
-                                let exclusive = origin.parent != parent
-                                    && self.is_object(parent)
-                                    && self.is_object(&origin.parent);
-                                if !exclusive {
+                                if !self.exclusive(&origin.lineage, &origin_lineage) {
                                     if origin.field != field.name {
                                         return error_at(
                                             field.position,
@@ -599,7 +614,7 @@ impl<'a> Analyzer<'a> {
                                 }
                             }
                             existing.origins.push(Origin {
-                                parent: parent.to_string(),
+                                lineage: origin_lineage,
                                 field: field.name.clone(),
                                 arguments,
                             });
@@ -614,7 +629,7 @@ impl<'a> Analyzer<'a> {
                             field: field.name.clone(),
                             ty,
                             origins: vec![Origin {
-                                parent: parent.to_string(),
+                                lineage: origin_lineage,
                                 field: field.name.clone(),
                                 arguments,
                             }],
@@ -643,6 +658,7 @@ impl<'a> Analyzer<'a> {
                         &fragment.selection_set,
                         conditional | !always,
                         place,
+                        lineage,
                         pending,
                     )?;
                 }
@@ -677,6 +693,7 @@ impl<'a> Analyzer<'a> {
                         &fragment.selection_set,
                         conditional | !always,
                         place,
+                        lineage,
                         pending,
                     );
                     self.fragment_stack.pop();
@@ -687,13 +704,21 @@ impl<'a> Analyzer<'a> {
         Ok(())
     }
 
-    /// Whether every value of type `parent` matches a fragment on `condition`.
-    /// Fails when none can.
     /// An object type, as opposed to an interface or a union.
     fn is_object(&self, name: &str) -> bool {
         matches!(self.schema.get(name), Some(TypeDef::Object { .. }))
     }
 
+    /// Two places never both in one answer: at some depth, their parents are
+    /// two different object types.
+    fn exclusive(&self, left: &[String], right: &[String]) -> bool {
+        left.iter()
+            .zip(right)
+            .any(|(left, right)| left != right && self.is_object(left) && self.is_object(right))
+    }
+
+    /// Whether every value of type `parent` matches a fragment on `condition`.
+    /// Fails when none can.
     fn fragment_always_applies(
         &self,
         parent: &str,
