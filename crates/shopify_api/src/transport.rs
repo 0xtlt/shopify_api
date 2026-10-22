@@ -247,11 +247,13 @@ impl StreamingResponse {
         let mut body = Vec::new();
         while body.len() < limit {
             match next_chunk(&mut self.body).await {
-                Some(Ok(chunk)) => body.extend_from_slice(&chunk),
+                Some(Ok(chunk)) => {
+                    let kept = chunk.len().min(limit - body.len());
+                    body.extend_from_slice(&chunk[..kept]);
+                }
                 Some(Err(_)) | None => break,
             }
         }
-        body.truncate(limit);
         HttpResponse {
             status: self.status,
             headers: self.headers,
@@ -649,5 +651,29 @@ mod tests {
         assert_eq!(response.header("content-type"), Some("application/json"));
         assert!(!response.is_success());
         assert_eq!(response.text(), "{\"errors\":\"Throttled\"}");
+    }
+
+    #[tokio::test]
+    async fn an_error_body_copies_only_what_it_keeps() {
+        let huge = vec![b'x'; 32 * 1024 * 1024];
+        let response = StreamingResponse::new(500, chunks([Ok(huge)]))
+            .into_response(1024)
+            .await;
+        assert_eq!(response.body.len(), 1024);
+        assert!(
+            response.body.capacity() <= 1024,
+            "{} bytes allocated",
+            response.body.capacity()
+        );
+
+        let parts = [
+            Ok(b"abc".to_vec()),
+            Ok(b"defgh".to_vec()),
+            Ok(b"ij".to_vec()),
+        ];
+        let response = StreamingResponse::new(500, chunks(parts))
+            .into_response(6)
+            .await;
+        assert_eq!(response.body, b"abcdef");
     }
 }
