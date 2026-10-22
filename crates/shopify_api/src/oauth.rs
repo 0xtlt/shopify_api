@@ -393,13 +393,14 @@ impl ShopifyApp {
         let params = parse_query(query)?;
         let signature =
             single(&params, "hmac")?.ok_or_else(|| invalid("the query has no `hmac`"))?;
-        check_timestamp(&params, now)?;
         let expected = hex::decode(signature)
             .map_err(|_| invalid("the `hmac` of the query is not hexadecimal"))?;
         let mut mac = mac(self.secret()?);
         mac.update(admin_message(&params).as_bytes());
         mac.verify_slice(&expected)
             .map_err(|_| invalid("the signature of the query does not match"))?;
+        // Only once the signature holds: nothing unsigned reaches the clock.
+        check_timestamp(&params, now)?;
         Ok(signed(params))
     }
 
@@ -424,13 +425,14 @@ impl ShopifyApp {
         }
         let signature =
             single(&params, "signature")?.ok_or_else(|| invalid("the query has no `signature`"))?;
-        check_timestamp(&params, now)?;
         let expected = hex::decode(signature)
             .map_err(|_| invalid("the `signature` of the query is not hexadecimal"))?;
         let mut mac = mac(self.secret()?);
         mac.update(proxy_message(&params).as_bytes());
         mac.verify_slice(&expected)
             .map_err(|_| invalid("the signature of the app proxy request does not match"))?;
+        // Only once the signature holds: nothing unsigned reaches the clock.
+        check_timestamp(&params, now)?;
         Ok(signed(params))
     }
 
@@ -481,10 +483,12 @@ impl ShopifyApp {
         let time = |name: &str| claims.get(name).and_then(Value::as_i64);
         let now = now.timestamp();
         let expires = time("exp").ok_or_else(|| invalid("the session token has no `exp`"))?;
-        if now > expires + JWT_TOLERANCE_SECONDS {
+        if now > expires.saturating_add(JWT_TOLERANCE_SECONDS) {
             return Err(invalid("the session token has expired"));
         }
-        if time("nbf").is_some_and(|not_before| now < not_before - JWT_TOLERANCE_SECONDS) {
+        if time("nbf")
+            .is_some_and(|not_before| now < not_before.saturating_sub(JWT_TOLERANCE_SECONDS))
+        {
             return Err(invalid("the session token is not valid yet"));
         }
         let audience_matches = match claims.get("aud") {
@@ -602,7 +606,8 @@ fn check_timestamp(params: &[(String, String)], now: DateTime<Utc>) -> Result<()
     let timestamp: i64 = single(params, "timestamp")?
         .and_then(|timestamp| timestamp.parse().ok())
         .ok_or_else(|| invalid("the query has no valid `timestamp`"))?;
-    if (now.timestamp() - timestamp).abs() > QUERY_TOLERANCE_SECONDS {
+    // `abs_diff`: any `i64` timestamp, however far, is a distance, not an overflow.
+    if now.timestamp().abs_diff(timestamp) > QUERY_TOLERANCE_SECONDS.unsigned_abs() {
         return Err(invalid(
             "the `timestamp` of the query is more than 90 seconds away",
         ));
@@ -693,6 +698,51 @@ mod tests {
                 .to_string(),
             "verification failed: the signature of the query does not match"
         );
+    }
+
+    /// A timestamp at the edge of `i64` is rejected, never a panic, in both checks.
+    #[test]
+    fn extreme_timestamps_are_rejected_without_panicking() {
+        for timestamp in [i64::MIN, i64::MAX] {
+            let query = format!("timestamp={timestamp}&hmac=00&signature=00");
+            for result in [
+                app().verify_query_at(&query, at(1_700_000_000)),
+                app().verify_app_proxy_at(&query, at(1_700_000_000)),
+            ] {
+                assert!(matches!(result, Err(Error::Verification(_))), "{result:?}");
+            }
+            // Signed, so only the timestamp fails.
+            let unsigned = format!("shop=a.myshopify.com&timestamp={timestamp}");
+            let hmac = app().sign_query(&unsigned).unwrap();
+            let error = app()
+                .verify_query_at(&format!("{unsigned}&hmac={hmac}"), at(1_700_000_000))
+                .unwrap_err();
+            assert!(error.to_string().contains("90 seconds"), "{error}");
+            let signature = app().sign_app_proxy(&unsigned).unwrap();
+            let error = app()
+                .verify_app_proxy_at(
+                    &format!("{unsigned}&signature={signature}"),
+                    at(1_700_000_000),
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("90 seconds"), "{error}");
+        }
+    }
+
+    /// Extreme `exp` and `nbf` claims are rejected, never a panic.
+    #[test]
+    fn extreme_session_token_times_do_not_panic() {
+        let now = 1_700_000_000;
+        for (exp, nbf) in [(i64::MAX, now), (now + 60, i64::MIN), (i64::MIN, now)] {
+            let token = app().sign_session_token(&json!({
+                "iss": "https://a.myshopify.com/admin",
+                "dest": "https://a.myshopify.com",
+                "aud": "client-id",
+                "exp": exp,
+                "nbf": nbf,
+            }));
+            let _ = app().verify_session_token_at(&token, at(now));
+        }
     }
 
     #[test]
