@@ -178,7 +178,10 @@ requests wait for it.
 ## Rate limits and retries
 
 A request Shopify throttles is sent again when the bucket holds its cost again,
-computed from `extensions.cost`. A `429` waits for its `Retry-After`. A query
+computed from `extensions.cost`. A `429` waits for its `Retry-After`, even past
+`max_delay` (which caps only the backoff the client computes); a `Retry-After`
+longer than `max_retry_after` (five minutes by default) is not waited for, and
+ends in `Error::Throttled` with that wait in `retry_after`. A query
 is also retried after a `5xx` or a network failure, with exponential backoff;
 a mutation is not, since it may have run.
 

@@ -132,8 +132,7 @@ async fn no_retry_policy_sends_once() {
 #[tokio::test]
 async fn waits_shopify_cannot_mean_do_not_panic() {
     let mock = MockTransport::new();
-    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "1e300"))
-        .push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "-5"))
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "-5"))
         .push_json(json!({
             "errors": [{ "message": "Throttled", "extensions": { "code": "THROTTLED" } }],
             "extensions": { "cost": {
@@ -145,7 +144,68 @@ async fn waits_shopify_cannot_mean_do_not_panic() {
     let shopify = client(&mock);
 
     shopify.graphql("{ shop { name } }", ()).await.unwrap();
-    assert_eq!(mock.requests().len(), 4);
+    assert_eq!(mock.requests().len(), 3);
+
+    // Too long to wait for: the caller gets it.
+    mock.clear();
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "1e300"));
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::Throttled {
+                retry_after: Some(Duration::MAX),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// `max_delay` caps the backoff the client computes, not the wait Shopify asks for.
+#[tokio::test(start_paused = true)]
+async fn a_429_waits_for_a_retry_after_longer_than_the_longest_backoff() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "120"))
+        .push_data(shop());
+    let shopify = Shopify::builder("test-shop")
+        .access_token("t")
+        .transport(mock.clone())
+        .build()
+        .unwrap();
+
+    let started = tokio::time::Instant::now();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    assert_eq!(started.elapsed(), Duration::from_secs(120));
+    assert_eq!(mock.requests().len(), 2);
+}
+
+/// A wait longer than `max_retry_after` is not slept through: the caller gets it.
+#[tokio::test(start_paused = true)]
+async fn a_retry_after_beyond_the_limit_is_returned_as_a_throttle_error() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", "600"));
+    let shopify = Shopify::builder("test-shop")
+        .access_token("t")
+        .transport(mock.clone())
+        .retry(RetryPolicy::new(4).with_max_retry_after(Duration::from_secs(300)))
+        .build()
+        .unwrap();
+
+    let started = tokio::time::Instant::now();
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    let Error::Throttled {
+        retries,
+        retry_after,
+        ..
+    } = error
+    else {
+        panic!("throttled: {error:?}");
+    };
+    assert_eq!(retries, 0);
+    assert_eq!(retry_after, Some(Duration::from_secs(600)));
+    assert_eq!(mock.requests().len(), 1);
 }
 
 /// A comment that ends with a bare `\r` still hides nothing: the mutation

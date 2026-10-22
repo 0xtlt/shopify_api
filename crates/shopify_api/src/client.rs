@@ -171,20 +171,30 @@ fn warn_mismatch(pinned: ApiVersion, checked: &'static str) {
 /// the time its cost says the bucket needs. A query is also sent again after
 /// a `5xx` or a network failure, with exponential backoff; a mutation is not,
 /// since it may have run.
+///
+/// A `429` waits for its `Retry-After`, however longer than
+/// [`max_delay`](Self::max_delay) it is: that cap is for the backoff the client
+/// computes. A `Retry-After` longer than
+/// [`max_retry_after`](Self::max_retry_after) (five minutes by default) is not
+/// waited for: the request ends in [`Error::Throttled`](crate::Error::Throttled),
+/// with the wait Shopify asked for in its `retry_after`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     max_retries: u32,
     base_delay: Duration,
     max_delay: Duration,
+    max_retry_after: Duration,
 }
 
 impl RetryPolicy {
-    /// At most `max_retries` retries, from one second up to thirty seconds apart.
+    /// At most `max_retries` retries, from one second up to thirty seconds
+    /// apart, or as long as a `Retry-After` of up to five minutes asks.
     pub const fn new(max_retries: u32) -> Self {
         Self {
             max_retries,
             base_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(30),
+            max_retry_after: Duration::from_secs(300),
         }
     }
 
@@ -199,9 +209,18 @@ impl RetryPolicy {
         self
     }
 
-    /// The longest wait between two attempts.
+    /// The longest backoff between two attempts. A `Retry-After` from
+    /// Shopify is not capped by it: see [`with_max_retry_after`](Self::with_max_retry_after).
     pub const fn with_max_delay(mut self, delay: Duration) -> Self {
         self.max_delay = delay;
+        self
+    }
+
+    /// The longest `Retry-After` the client waits for before sending a `429`
+    /// again. A longer one ends the request in
+    /// [`Error::Throttled`](crate::Error::Throttled) at once.
+    pub const fn with_max_retry_after(mut self, wait: Duration) -> Self {
+        self.max_retry_after = wait;
         self
     }
 
@@ -209,9 +228,14 @@ impl RetryPolicy {
         self.max_retries
     }
 
-    /// The longest wait between two attempts.
+    /// The longest backoff between two attempts.
     pub const fn max_delay(&self) -> Duration {
         self.max_delay
+    }
+
+    /// The longest `Retry-After` the client waits for.
+    pub const fn max_retry_after(&self) -> Duration {
+        self.max_retry_after
     }
 
     /// The wait before retry number `retry` (from 0): exponential, with up

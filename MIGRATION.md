@@ -51,7 +51,7 @@ to keep that.
 | --- | --- |
 | `ConnectionFailed(reqwest::Error)` | `Transport { url, source }` |
 | An `error_for_status` failure | `Http { status, url, body }`; `error.status()`, `error.is_unauthorized()` |
-| `Throttled` | `Throttled { retries, cost }`, once the retries are spent |
+| `Throttled` | `Throttled { retries, cost, retry_after }`, once the retries are spent or when `Retry-After` exceeds `max_retry_after` |
 | `GraphqlErrors(Vec<GraphqlError>)` | `Graphql(GraphqlErrors { errors, data })` |
 | `JsonParseError` | `Json`, or `Decode { path, message }` when `data` does not fit its type |
 | `NotWantedJsonFormat`, `NotJson`, `ResponseBroken` | `Decode` |

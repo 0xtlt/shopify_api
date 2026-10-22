@@ -159,20 +159,30 @@ impl Shopify {
                         None => return Err(Error::http(&url, &response)),
                     }
                 }
-                429 if may_retry => {
-                    let wait = retry_after(&response)
-                        .unwrap_or_else(|| self.retry.backoff(retries))
-                        .min(self.retry.max_delay());
+                429 => {
+                    let asked = retry_after(&response);
+                    let throttled = Error::Throttled {
+                        retries,
+                        cost: None,
+                        retry_after: asked,
+                    };
+                    if !may_retry {
+                        return Err(throttled);
+                    }
+                    // `max_delay` caps the backoff, not the wait Shopify asks for;
+                    // a wait longer than `max_retry_after` goes back to the caller.
+                    let wait = match asked {
+                        Some(wait) if wait > self.retry.max_retry_after() => {
+                            tracing::debug!("Shopify answered 429 with a Retry-After of {wait:?}");
+                            return Err(throttled);
+                        }
+                        Some(wait) => wait,
+                        None => self.retry.backoff(retries),
+                    };
                     tracing::debug!("Shopify answered 429: retrying in {wait:?}");
                     tokio::time::sleep(wait).await;
                     retries += 1;
                     continue;
-                }
-                429 => {
-                    return Err(Error::Throttled {
-                        retries,
-                        cost: None,
-                    });
                 }
                 500..=599 if may_retry && !kind.is_mutation() => {
                     tracing::debug!("Shopify answered {}: retrying the query", response.status);
@@ -187,7 +197,11 @@ impl Shopify {
             if raw.is_throttled() {
                 let cost = raw.cost();
                 if !may_retry {
-                    return Err(Error::Throttled { retries, cost });
+                    return Err(Error::Throttled {
+                        retries,
+                        cost,
+                        retry_after: None,
+                    });
                 }
                 let wait = self.retry.throttled(retries, cost);
                 tracing::debug!("throttled by Shopify: retrying in {wait:?}");
@@ -201,10 +215,13 @@ impl Shopify {
 }
 
 /// The wait a `Retry-After` header asks for, in seconds; `None` for a
-/// value that is not a wait.
+/// value that is not a wait. A wait too long for a `Duration` is the longest one.
 fn retry_after(response: &crate::transport::HttpResponse) -> Option<std::time::Duration> {
     let seconds: f64 = response.header("Retry-After")?.trim().parse().ok()?;
-    std::time::Duration::try_from_secs_f64(seconds).ok()
+    if seconds.is_nan() || seconds < 0.0 {
+        return None;
+    }
+    Some(std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX))
 }
 
 /// The `data` and `extensions` of an answer without errors.

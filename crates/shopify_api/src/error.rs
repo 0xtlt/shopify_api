@@ -55,7 +55,12 @@ pub enum Error {
     /// [`RetryPolicy`](crate::RetryPolicy).
     #[error("throttled by Shopify after {retries} retries")]
     #[non_exhaustive]
-    Throttled { retries: u32, cost: Option<Cost> },
+    Throttled {
+        retries: u32,
+        cost: Option<Cost>,
+        /// The wait the `Retry-After` of the last `429` asked for, if any.
+        retry_after: Option<std::time::Duration>,
+    },
 
     /// The `data` of the answer does not fit the type it is read as: the
     /// shop runs another API version than the schema the operation was
