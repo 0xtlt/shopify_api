@@ -289,7 +289,8 @@ fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
                             );
                         }
                         read(file)
-                    })?;
+                    })
+                    .map_err(|error| error.to_string())?;
                     return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
                 }
             }

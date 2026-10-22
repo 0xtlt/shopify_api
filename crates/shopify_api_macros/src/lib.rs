@@ -12,7 +12,9 @@ use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::codegen::{
     DATA_TYPE, VARIABLES_TYPE, data_types, variable_type, variables_types,
 };
-use shopify_api_graphql::project::{metadata_snippet, up_to_date_schema};
+use shopify_api_graphql::project::{
+    DownloadError, metadata_snippet, previous_api_version, up_to_date_schema,
+};
 use shopify_api_graphql::{
     MINIMUM_API_VERSION, Operation, OperationKind, PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema,
     SchemaSource, Variable, analyze, is_supported_api_version, latest_api_version, schema_source,
@@ -298,17 +300,38 @@ fn version_schema(path: &Path, version: &str, latest: bool) -> Result<Arc<Schema
     let _one_at_a_time = DOWNLOAD
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    up_to_date_schema(path, version, latest, read_schema).map_err(|error| {
-        let which = if latest {
-            format!("the latest Admin API version, {version} (Cargo.toml declares none)")
-        } else {
-            format!("the Admin API version in Cargo.toml, {version}")
-        };
-        format!(
-            "{error}\n`graphql!` downloads the schema of {which} into `{PROJECT_SCHEMA_PATH}`: \
-             build once with network access and commit the file"
-        )
-    })
+    up_to_date_schema(path, version, latest, read_schema)
+        .map_err(|error| download_failure(&error, version, latest, SystemTime::now()))
+}
+
+/// What to tell when the schema of `version` cannot be had at `now`.
+fn download_failure(error: &DownloadError, version: &str, latest: bool, now: SystemTime) -> String {
+    match error {
+        DownloadError::UnknownVersion { .. } => {
+            // On the first day of a quarter, its version may not be out yet.
+            let released = latest_api_version(now);
+            let suggested = match previous_api_version(version) {
+                Some(previous) if released.as_str() >= version => previous,
+                _ => released,
+            };
+            format!(
+                "{error}: it is not out yet, or its name is wrong. \
+                 Declare a released version in Cargo.toml:\n\n{}",
+                metadata_snippet(&suggested)
+            )
+        }
+        DownloadError::Failed(_) => {
+            let which = if latest {
+                format!("the latest Admin API version, {version} (Cargo.toml declares none)")
+            } else {
+                format!("the Admin API version in Cargo.toml, {version}")
+            };
+            format!(
+                "{error}\n`graphql!` downloads the schema of {which} into `{PROJECT_SCHEMA_PATH}`: \
+                 build once with network access and commit the file"
+            )
+        }
+    }
 }
 
 /// Reads a schema file. One compilation expands many operations: each file is
@@ -736,5 +759,33 @@ mod tests {
                 .to_string();
             assert_eq!(error, message, "{source}");
         }
+    }
+
+    #[test]
+    fn a_version_shopify_does_not_have_is_named_and_a_released_one_suggested() {
+        let day =
+            |days: u64| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(days * 86_400);
+        let (october_22_2026, january_1_2027) = (day(20_748), day(20_819));
+        let unknown = |version: &str| DownloadError::UnknownVersion {
+            version: version.to_string(),
+            answer: "HTTP 400".to_string(),
+        };
+
+        assert_eq!(
+            download_failure(&unknown("2027-04"), "2027-04", false, october_22_2026),
+            "Shopify has no Admin API version 2027-04 (HTTP 400): it is not out yet, \
+             or its name is wrong. Declare a released version in Cargo.toml:\n\n\
+             [package.metadata.shopify_api]\napi-version = \"2026-10\""
+        );
+        // On the first day of a quarter, before Shopify releases its version.
+        let error = download_failure(&unknown("2027-01"), "2027-01", false, january_1_2027);
+        assert!(error.ends_with("api-version = \"2026-10\""), "{error}");
+
+        let offline = DownloadError::Failed("cannot download".to_string());
+        let error = download_failure(&offline, "2026-07", false, october_22_2026);
+        assert!(
+            error.ends_with("build once with network access and commit the file"),
+            "{error}"
+        );
     }
 }

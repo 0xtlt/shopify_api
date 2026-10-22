@@ -167,15 +167,84 @@ pub fn schema_source(
 /// that answers introspection without a token.
 pub const PUBLIC_ADMIN_SCHEMA_ENDPOINT: &str = "https://shopify.dev/admin-graphql-direct-proxy";
 
+/// Why the schema of a version could not be had.
+#[cfg(feature = "download")]
+#[cfg_attr(docsrs, doc(cfg(feature = "download")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadError {
+    /// Shopify has no Admin API of this version: it is not out yet, or its
+    /// name is wrong. Downloading it again will not help.
+    UnknownVersion {
+        /// The version asked for.
+        version: String,
+        /// What Shopify answered.
+        answer: String,
+    },
+    /// Anything else: no network, an answer that is not a schema, a file
+    /// that cannot be written or read.
+    Failed(String),
+}
+
+#[cfg(feature = "download")]
+impl std::fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownVersion { version, answer } => {
+                write!(f, "Shopify has no Admin API version {version} ({answer})")
+            }
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+#[cfg(feature = "download")]
+impl std::error::Error for DownloadError {}
+
+/// The introspection result in Shopify's answer to `url`, or why there is none.
+#[cfg(feature = "download")]
+fn introspection_in(
+    version: &str,
+    url: &str,
+    status: u16,
+    text: &str,
+) -> Result<serde_json::Value, DownloadError> {
+    let failed = |error: &dyn std::fmt::Display| {
+        DownloadError::Failed(format!(
+            "cannot download the Admin schema {version} from {url}: {error}"
+        ))
+    };
+    let value: Option<serde_json::Value> = serde_json::from_str(text).ok();
+    let message = value
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(message) = message {
+        // Shopify answers a version it does not have with a 400 that says so.
+        if status == 400 && message.to_ascii_lowercase().contains("api version") {
+            return Err(DownloadError::UnknownVersion {
+                version: version.to_string(),
+                answer: format!("{url} answered \"{message}\", HTTP 400"),
+            });
+        }
+        return Err(failed(&format!("{message} (HTTP {status})")));
+    }
+    if !(200..300).contains(&status) {
+        return Err(failed(&format!("HTTP {status}")));
+    }
+    value.ok_or_else(|| failed(&"the answer is not JSON"))
+}
+
 /// Downloads the Admin schema of `version` from Shopify's public endpoint.
 #[cfg(feature = "download")]
 #[cfg_attr(docsrs, doc(cfg(feature = "download")))]
-pub fn download_public_schema(version: &str) -> Result<crate::Schema, String> {
+pub fn download_public_schema(version: &str) -> Result<crate::Schema, DownloadError> {
     use std::time::Duration;
 
     let url = format!("{PUBLIC_ADMIN_SCHEMA_ENDPOINT}/{version}");
     let failed = |error: &dyn std::fmt::Display| {
-        format!("cannot download the Admin schema {version} from {url}: {error}")
+        DownloadError::Failed(format!(
+            "cannot download the Admin schema {version} from {url}: {error}"
+        ))
     };
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(120)))
@@ -199,19 +268,7 @@ pub fn download_public_schema(version: &str) -> Result<crate::Schema, String> {
         .limit(256 * 1024 * 1024)
         .read_to_string()
         .map_err(|error| failed(&error))?;
-    let value: Option<serde_json::Value> = serde_json::from_str(&text).ok();
-    let message = value
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(serde_json::Value::as_str);
-    let status = response.status();
-    if let Some(message) = message {
-        return Err(failed(&format!("{message} (HTTP {})", status.as_u16())));
-    }
-    if !status.is_success() {
-        return Err(failed(&format!("HTTP {}", status.as_u16())));
-    }
-    let value = value.ok_or_else(|| failed(&"the answer is not JSON"))?;
+    let value = introspection_in(version, &url, response.status().as_u16(), &text)?;
     crate::Schema::from_introspection(&value, version).map_err(|error| failed(&error))
 }
 
@@ -221,9 +278,9 @@ pub fn download_public_schema(version: &str) -> Result<crate::Schema, String> {
 /// the old schema or the new one, never part of one.
 #[cfg(feature = "download")]
 #[cfg_attr(docsrs, doc(cfg(feature = "download")))]
-pub fn download_schema_file(path: &Path, version: &str) -> Result<crate::Schema, String> {
+pub fn download_schema_file(path: &Path, version: &str) -> Result<crate::Schema, DownloadError> {
     let schema = download_public_schema(version)?;
-    write_atomically(path, &schema.to_json())?;
+    write_atomically(path, &schema.to_json()).map_err(DownloadError::Failed)?;
     Ok(schema)
 }
 
@@ -260,7 +317,8 @@ pub fn up_to_date_schema<S: AsRef<crate::Schema>>(
     version: &str,
     latest: bool,
     read: impl Fn(&Path) -> Result<S, String>,
-) -> Result<S, String> {
+) -> Result<S, DownloadError> {
+    let read = |path: &Path| read(path).map_err(DownloadError::Failed);
     let current = path.is_file().then(|| read(path).ok()).flatten();
     if let Some(current) = current {
         if current.as_ref().api_version == version {
@@ -272,13 +330,19 @@ pub fn up_to_date_schema<S: AsRef<crate::Schema>>(
             Err(error) => Err(error),
         };
     }
-    match download_schema_file(path, version) {
+    let error = match download_schema_file(path, version) {
+        Ok(_) => return read(path),
+        Err(error) => error,
+    };
+    let Some(previous) = previous_api_version(version).filter(|_| latest) else {
+        return Err(error);
+    };
+    match download_schema_file(path, &previous) {
         Ok(_) => read(path),
-        Err(error) if latest => match previous_api_version(version) {
-            Some(previous) if download_schema_file(path, &previous).is_ok() => read(path),
-            _ => Err(error),
-        },
-        Err(error) => Err(error),
+        // The latest version not being out yet does not explain why the one
+        // before failed: that failure is the one to fix.
+        Err(fallback) if matches!(error, DownloadError::UnknownVersion { .. }) => Err(fallback),
+        Err(_) => Err(error),
     }
 }
 
@@ -466,6 +530,35 @@ mod tests {
         assert_eq!(
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
+        );
+    }
+
+    #[cfg(feature = "download")]
+    #[test]
+    fn a_version_shopify_does_not_have_is_told_apart() {
+        let url = "https://shopify.dev/admin-graphql-direct-proxy/2027-04";
+        let answer = |status, text| introspection_in("2027-04", url, status, text);
+        let failed = |reason: &str| {
+            Err(DownloadError::Failed(format!(
+                "cannot download the Admin schema 2027-04 from {url}: {reason}"
+            )))
+        };
+        assert_eq!(
+            answer(400, r#"{"error":"Invalid API version"}"#),
+            Err(DownloadError::UnknownVersion {
+                version: "2027-04".to_string(),
+                answer: format!("{url} answered \"Invalid API version\", HTTP 400"),
+            })
+        );
+        assert_eq!(
+            answer(401, r#"{"error":"Unauthorized"}"#),
+            failed("Unauthorized (HTTP 401)")
+        );
+        assert_eq!(answer(503, "Service Unavailable"), failed("HTTP 503"));
+        assert_eq!(answer(200, "<html>"), failed("the answer is not JSON"));
+        assert_eq!(
+            answer(200, r#"{"data":{}}"#),
+            Ok(serde_json::json!({ "data": {} }))
         );
     }
 }
