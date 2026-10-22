@@ -283,6 +283,40 @@ async fn a_refused_grant_says_what_shopify_answered_and_never_the_secret() {
 }
 
 #[tokio::test]
+async fn a_token_answer_that_does_not_parse_shows_no_token() {
+    for answer in [
+        // A token, with a field of the wrong type next to it.
+        HttpResponse::json(
+            200,
+            &json!({ "access_token": "shpat_TOKEN_SECRET", "scope": 1, "refresh_token": "shprt_REFRESH_SECRET", "expires_in": "shpat_TOKEN_SECRET" }),
+        ),
+        // A refusal that echoes what was sent.
+        HttpResponse::new(
+            400,
+            "invalid request: client_secret=CLIENT_SECRET&refresh_token=shprt_REFRESH_SECRET",
+        ),
+    ] {
+        let mock = MockTransport::new();
+        mock.push(answer);
+        let shopify = builder(&mock)
+            .client_credentials("id", "CLIENT_SECRET")
+            .build()
+            .unwrap();
+        let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+        for shown in [
+            format!("{error}"),
+            format!("{error:?}"),
+            format!("{error:#?}"),
+        ] {
+            for secret in ["TOKEN_SECRET", "REFRESH_SECRET", "CLIENT_SECRET"] {
+                assert!(!shown.contains(secret), "{secret} in {shown}");
+            }
+            assert!(shown.contains("token endpoint"), "{shown}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_failed_renewal_ahead_of_expiry_keeps_the_token_that_still_works() {
     let mock = MockTransport::new();
     mock.respond_with(|request: &HttpRequest| {

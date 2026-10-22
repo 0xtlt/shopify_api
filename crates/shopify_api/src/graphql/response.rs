@@ -201,10 +201,8 @@ impl RawResponse {
 
 /// Reads `value` as `T`, naming the path of the first field that does not fit.
 pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> crate::Result<T> {
-    serde_path_to_error::deserialize(value).map_err(|error| crate::Error::Decode {
-        path: error.path().to_string(),
-        message: error.inner().to_string(),
-    })
+    serde_path_to_error::deserialize(value)
+        .map_err(|error| crate::Error::decode(error.path().to_string(), &error.inner().to_string()))
 }
 
 #[cfg(test)]

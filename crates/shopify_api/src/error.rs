@@ -10,9 +10,31 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// What went wrong, with what Shopify said about it.
 ///
-/// Secrets never appear in an error: no access token, client secret or
-/// refresh token, and no query string of an address, which may be signed
-/// (the results of a bulk operation).
+/// What an error displays (`Display`, `Debug`, `{:#?}`) and what its
+/// [`source`](std::error::Error::source) chain displays holds no secret the
+/// crate knows of:
+///
+/// - no access token, refresh token or client secret;
+/// - no query string or fragment of an address, which may be signed (the
+///   results of a bulk operation, a staged upload);
+/// - no value of the answer: [`Error::Decode`] names the path and the kinds
+///   of value, without the value; the `data` and the `extensions` of a
+///   GraphQL error show the names of their entries, not their values;
+/// - of a body that is not a success, [`Error::Http`] shows at most 1 KiB,
+///   with query strings, words that look like a token (Shopify's `shp…_`
+///   prefixes, JWTs, 32 letters and digits or more) and the values of entries
+///   named like a secret (`access_token`, `X-Goog-Signature`,
+///   `Authorization`, …) replaced by `[redacted]`.
+///
+/// What is shown as is: the messages Shopify writes (in `errors` and
+/// `userErrors`), which may quote a part of a variable that does not
+/// validate; the messages of your [`Transport`](crate::transport::Transport)
+/// and of your [`TokenStore`](crate::TokenStore); and what a type's own
+/// `Deserialize` implementation writes outside quotes.
+///
+/// The values themselves stay available where you ask for them:
+/// [`GraphqlErrors::data`], [`GraphqlError::extensions`] and
+/// [`Error::raw_http_body`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -41,10 +63,14 @@ pub enum Error {
         status: u16,
         /// The address, without its query string.
         url: String,
-        /// The body of the answer, cut at 2 KiB.
+        /// The body of the answer, cut at 1 KiB, with what looks like a
+        /// secret replaced by `[redacted]` (see [`Error`]).
         body: String,
         /// Shopify's `X-Request-Id`, which its support asks for.
         request_id: Option<String>,
+        /// The whole body, as it was received. It may hold secrets: read it
+        /// with [`Error::raw_http_body`]. Its `Debug` shows its length only.
+        raw_body: RawBody,
     },
 
     /// The answer has a non-empty `errors` list.
@@ -140,6 +166,18 @@ impl Error {
         }
     }
 
+    /// The whole body of the answer, for [`Error::Http`], exactly as it was
+    /// received: unlike `body`, nothing is cut or redacted.
+    ///
+    /// **It may contain secrets** (a token, a signed address): do not log it
+    /// or show it to a user.
+    pub fn raw_http_body(&self) -> Option<&[u8]> {
+        match self {
+            Self::Http { raw_body, .. } => Some(raw_body.as_bytes()),
+            _ => None,
+        }
+    }
+
     /// The errors Shopify returned, for [`Error::Graphql`].
     pub fn graphql_errors(&self) -> &[GraphqlError] {
         match self {
@@ -165,24 +203,47 @@ impl Error {
         )
     }
 
-    fn http_parts(status: u16, url: &str, body: &[u8], request_id: Option<String>) -> Self {
-        const LIMIT: usize = 2048;
-        let text = String::from_utf8_lossy(body);
-        let body = if text.len() > LIMIT {
-            let mut end = LIMIT;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            format!("{}…", &text[..end])
-        } else {
-            text.into_owned()
-        };
+    pub(crate) fn http_parts(
+        status: u16,
+        url: &str,
+        body: &[u8],
+        request_id: Option<String>,
+    ) -> Self {
         Self::Http {
             status,
             url: without_query(url),
-            body,
+            body: crate::redact::http_body(body),
             request_id,
+            raw_body: RawBody(body.to_vec()),
         }
+    }
+
+    /// An answer that does not fit its type: serde's message without the
+    /// values it quotes.
+    pub(crate) fn decode(path: impl Into<String>, message: &str) -> Self {
+        Self::Decode {
+            path: path.into(),
+            message: crate::redact::serde_message(message),
+        }
+    }
+}
+
+/// The body of an answer exactly as it was received, in [`Error::Http`].
+///
+/// **It may contain secrets.** Its `Debug` shows its length, not its content.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct RawBody(Vec<u8>);
+
+impl RawBody {
+    /// The bytes of the body. They may contain secrets: do not log them.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RawBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "RawBody([{} bytes])", self.0.len())
     }
 }
 
@@ -283,12 +344,85 @@ mod tests {
             panic!("an HTTP error");
         };
         assert!(body.ends_with('…'));
-        assert!(body.len() <= 2048 + '…'.len_utf8());
+        assert!(body.len() <= 1024 + '…'.len_utf8());
         assert_eq!(url, "https://storage.example.com/results.jsonl");
         assert!(!error.to_string().contains("secret"));
         assert_eq!(error.status(), Some(500));
         assert_eq!(error.request_id(), Some("a1b2"));
         assert!(!error.is_unauthorized());
+        assert_eq!(error.raw_http_body().unwrap().len(), 4000);
+    }
+
+    #[test]
+    fn http_errors_show_no_secret_of_their_body() {
+        // A storage error that echoes the signed request, a token endpoint
+        // that echoes the token.
+        let raw = concat!(
+            "<Error><Code>SignatureDoesNotMatch</Code><Details>GET /b/r.jsonl?X-Goog-Credential=CRED_SECRET",
+            "&X-Goog-Signature=SIG_SECRET https://storage.googleapis.com/b/r.jsonl?X-Goog-Signature=URL_SECRET</Details></Error>",
+            r#" {"access_token":"shpat_TOKEN_SECRET","scope":"read_orders"}"#,
+        );
+        let error = Error::http_parts(
+            403,
+            "https://storage.googleapis.com/b/r.jsonl",
+            raw.as_bytes(),
+            None,
+        );
+        for shown in [
+            format!("{error}"),
+            format!("{error:?}"),
+            format!("{error:#?}"),
+        ] {
+            for secret in ["CRED_SECRET", "SIG_SECRET", "URL_SECRET", "TOKEN_SECRET"] {
+                assert!(!shown.contains(secret), "{secret} in {shown}");
+            }
+            assert!(shown.contains("SignatureDoesNotMatch"), "{shown}");
+            assert!(shown.contains("read_orders"), "{shown}");
+        }
+        assert!(format!("{error:?}").contains("RawBody(["), "{error:?}");
+        // Asked for explicitly, the body is whole.
+        assert_eq!(error.raw_http_body(), Some(raw.as_bytes()));
+        assert_eq!(Error::Variables(String::new()).raw_http_body(), None);
+    }
+
+    #[test]
+    fn json_errors_say_where_not_what() {
+        let source =
+            br#"{"data": {"url": "https://x.test/r?sig=SIGNED_SECRET"}, shpat_TOKEN_SECRET}"#;
+        let error: Error = serde_json::from_slice::<crate::RawResponse>(source)
+            .unwrap_err()
+            .into();
+        let mut shown = format!("{error} {error:?} {error:#?}");
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            shown.push_str(&format!(" {cause} {cause:?}"));
+            source = cause.source();
+        }
+        assert!(!shown.contains("SECRET"), "{shown}");
+        assert!(shown.contains("line 1 column"), "{shown}");
+    }
+
+    #[test]
+    fn decode_errors_keep_kinds_not_values() {
+        #[derive(Debug, serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Data {
+            count: u64,
+        }
+        let value = serde_json::json!({ "count": "https://x.test/r.jsonl?sig=SIGNED_SECRET" });
+        let error = crate::graphql::decode::<Data>(value).unwrap_err();
+        for shown in [
+            format!("{error}"),
+            format!("{error:?}"),
+            format!("{error:#?}"),
+        ] {
+            assert!(!shown.contains("SIGNED_SECRET"), "{shown}");
+            assert!(!shown.contains("x.test"), "{shown}");
+        }
+        assert_eq!(
+            error.to_string(),
+            "Shopify's answer does not match the operation at `count`: invalid type: string, expected u64"
+        );
     }
 
     #[test]

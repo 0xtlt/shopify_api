@@ -635,13 +635,10 @@ pub fn parse_jsonl<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>> {
                 let inner = error.inner();
                 let position = format!(" at line {} column {}", inner.line(), inner.column());
                 let message = inner.to_string();
-                Error::Decode {
-                    path: format!("line {}: {}", index + 1, error.path()),
-                    message: message
-                        .strip_suffix(&position)
-                        .unwrap_or(&message)
-                        .to_string(),
-                }
+                Error::decode(
+                    format!("line {}: {}", index + 1, error.path()),
+                    message.strip_suffix(&position).unwrap_or(&message),
+                )
             })
         })
         .collect()
@@ -731,7 +728,7 @@ mod tests {
         let error = parse_jsonl::<Row>(b"{\"id\":\"a\"}\n{\"id\":2}\n").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Shopify's answer does not match the operation at `line 2: id`: invalid type: integer `2`, expected a string"
+            "Shopify's answer does not match the operation at `line 2: id`: invalid type: integer, expected a string"
         );
     }
 

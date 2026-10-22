@@ -359,12 +359,11 @@ pub(crate) async fn request_token(
             .get("error_description")
             .and_then(serde_json::Value::as_str);
         let detail = match (code, description) {
-            (Some(code), Some(description)) => format!("{code}: {description}"),
-            (Some(code), None) => code.to_string(),
-            _ => {
-                let text = response.text();
-                text.chars().take(300).collect()
+            (Some(code), Some(description)) => {
+                crate::redact::http_body(format!("{code}: {description}").as_bytes())
             }
+            (Some(code), None) => crate::redact::http_body(code.as_bytes()),
+            _ => crate::redact::http_body(&response.body),
         };
         return Err(Error::Auth(format!(
             "the token endpoint of {shop} answered {}: {detail}",
@@ -373,7 +372,8 @@ pub(crate) async fn request_token(
     }
     let parsed: TokenResponse = serde_json::from_slice(&response.body).map_err(|error| {
         Error::Auth(format!(
-            "the token endpoint of {shop} answered an invalid token: {error}"
+            "the token endpoint of {shop} answered an invalid token: {}",
+            crate::redact::serde_message(&error.to_string())
         ))
     })?;
     Ok(parsed.into_token())

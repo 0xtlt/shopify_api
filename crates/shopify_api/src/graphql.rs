@@ -94,7 +94,7 @@ impl Shopify {
     /// A throttled request is still retried.
     pub async fn graphql_raw(&self, query: &str, variables: impl Serialize) -> Result<RawResponse> {
         let variables = match serde_json::to_value(variables)
-            .map_err(|error| Error::Variables(error.to_string()))?
+            .map_err(|error| Error::Variables(crate::redact::serde_message(&error.to_string())))?
         {
             Value::Null => Map::new(),
             Value::Object(variables) => variables,

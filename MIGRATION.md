@@ -50,10 +50,10 @@ to keep that.
 | 0.10 | 1.0 |
 | --- | --- |
 | `ConnectionFailed(reqwest::Error)` | `Transport { url, source }` |
-| An `error_for_status` failure | `Http { status, url, body }`; `error.status()`, `error.is_unauthorized()` |
+| An `error_for_status` failure | `Http { status, url, body, .. }`: `body` is cut at 1 KiB and redacted; `error.raw_http_body()` gives the whole body, secrets included; `error.status()`, `error.is_unauthorized()` |
 | `Throttled` | `Throttled { retries, cost, retry_after }`, once the retries are spent or when `Retry-After` exceeds `max_retry_after` |
 | `GraphqlErrors(Vec<GraphqlError>)` | `Graphql(GraphqlErrors { errors, data })` |
-| `JsonParseError` | `Json`, or `Decode { path, message }` when `data` does not fit its type |
+| `JsonParseError` | `Json`, or `Decode { path, message }` when `data` does not fit its type: the path and the kinds of value, not the value |
 | `NotWantedJsonFormat`, `NotJson`, `ResponseBroken` | `Decode` |
 | `Authentication(text)` | `Auth(text)` |
 | `MissingGraphqlData`, `InvalidHeaderValue`, `Other` | Gone |

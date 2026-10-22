@@ -105,12 +105,12 @@ impl Shopify {
 /// An introspection result, or why it is not one.
 fn check(value: Value) -> Result<Value> {
     if let Some(message) = value.get("error").and_then(Value::as_str) {
-        return Err(Error::Http {
-            status: 200,
-            url: PUBLIC_ADMIN_SCHEMA_ENDPOINT.to_string(),
-            body: message.to_string(),
-            request_id: None,
-        });
+        return Err(Error::http_parts(
+            200,
+            PUBLIC_ADMIN_SCHEMA_ENDPOINT,
+            message.as_bytes(),
+            None,
+        ));
     }
     if value.pointer("/data/__schema/types").is_none() {
         return Err(Error::Decode {

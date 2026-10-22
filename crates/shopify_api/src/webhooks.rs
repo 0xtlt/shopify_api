@@ -208,10 +208,8 @@ impl Webhook {
     /// The body read as `T`, the path of the first mismatch in the error.
     pub fn payload<T: DeserializeOwned>(&self) -> Result<T> {
         let mut deserializer = serde_json::Deserializer::from_slice(&self.body);
-        serde_path_to_error::deserialize(&mut deserializer).map_err(|error| Error::Decode {
-            path: error.path().to_string(),
-            message: error.inner().to_string(),
-        })
+        serde_path_to_error::deserialize(&mut deserializer)
+            .map_err(|error| Error::decode(error.path().to_string(), &error.inner().to_string()))
     }
 }
 
@@ -631,7 +629,7 @@ mod tests {
         }
         assert_eq!(
             webhook.payload::<Wrong>().unwrap_err().to_string(),
-            "Shopify's answer does not match the operation at `name`: invalid type: string \"#1001\", expected u32 at line 1 column 22"
+            "Shopify's answer does not match the operation at `name`: invalid type: string, expected u32 at line 1 column 22"
         );
     }
 
