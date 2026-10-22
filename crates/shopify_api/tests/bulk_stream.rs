@@ -235,6 +235,38 @@ async fn a_grouped_bulk_query_asks_for_grouping_and_yields_each_parent_with_its_
     assert_eq!(mock.graphql_requests()[0].variables["groupObjects"], true);
 }
 
+#[tokio::test]
+async fn a_child_out_of_place_only_asks_for_grouping_when_it_may_be_off() {
+    let body = &b"{\"id\":\"P1\",\"title\":\"A\"}\n{\"id\":\"P2\",\"title\":\"B\"}\n{\"__parentId\":\"P1\"}\n"[..];
+    let mock = MockTransport::new();
+    push_run_and_completed(&mock, Some(RESULTS_URL));
+    mock.push_chunks(200, [body]);
+    mock.push_chunks(200, [body]);
+    let shopify = client(&mock);
+
+    let mut groups = shopify
+        .bulk_query_grouped::<Product, Value>("{ products { edges { node { id } } } }", fast())
+        .await
+        .unwrap();
+    groups.next_group().await.unwrap().unwrap();
+    let error = groups.next_group().await.unwrap().unwrap_err().to_string();
+    assert!(
+        error.ends_with("though the query ran with `groupObjects`"),
+        "{error}"
+    );
+
+    let mut groups = shopify
+        .download_bulk_results_grouped::<Product, Value>(RESULTS_URL)
+        .await
+        .unwrap();
+    groups.next_group().await.unwrap().unwrap();
+    let error = groups.next_group().await.unwrap().unwrap_err().to_string();
+    assert!(
+        error.ends_with("run the query with `groupObjects`"),
+        "{error}"
+    );
+}
+
 /// Shopify reserves an upload target; the storage server takes the file.
 fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
     let mock = MockTransport::new();

@@ -744,8 +744,10 @@ impl Shopify {
     /// not complete.
     ///
     /// Grouping makes Shopify slower, and more likely to time out: use it
-    /// when you need the children with their parent. See [`BulkGroups`]
-    /// for the order it relies on and connections two levels deep.
+    /// when you need the children with their parent. Every object that has
+    /// a nested connection must select `id`, without an alias: Shopify
+    /// refuses the query otherwise. See [`BulkGroups`] for the order it
+    /// relies on and connections two levels deep.
     ///
     /// ```no_run
     /// use serde::Deserialize;
@@ -783,8 +785,8 @@ impl Shopify {
     ) -> Result<BulkGroups<P, C>> {
         let operation = self.run_bulk_query_grouped(query, true).await?;
         match self.completed_url(&operation.id, options).await? {
-            Some(url) => self.download_bulk_results_grouped(&url).await,
-            None => Ok(BulkGroups::new(None, "")),
+            Some(url) => Ok(self.download_bulk_results_grouped(&url).await?.grouped()),
+            None => Ok(BulkGroups::new(None, "").grouped()),
         }
     }
 
@@ -832,7 +834,8 @@ impl Shopify {
 
     /// [`Shopify::download_bulk_results_stream`], one top-level object and
     /// its children at a time. The operation must have run with
-    /// `groupObjects`: see [`BulkGroups`].
+    /// `groupObjects`, and every object of it that has a nested connection
+    /// must have an `id`, not aliased: see [`BulkGroups`].
     pub async fn download_bulk_results_grouped<P: DeserializeOwned, C: DeserializeOwned>(
         &self,
         url: &str,

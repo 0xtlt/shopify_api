@@ -263,6 +263,8 @@ struct Group<P, C> {
     /// The IDs of the objects of the group, the children of the next lines
     /// belong to.
     ids: HashSet<String>,
+    /// An object of the group has no `id`: a child of it cannot be placed.
+    missing_id: bool,
 }
 
 /// The results of a grouped bulk query, each top-level object with the
@@ -294,15 +296,26 @@ struct Group<P, C> {
 /// current top-level object nor one of its children is an [`Error::Bulk`]
 /// rather than a child put in the wrong group.
 ///
+/// # The `id` it needs
+///
+/// A child is placed by matching its `__parentId` with the `id` of an
+/// object before it: every object that has a nested connection must select
+/// `id`, without an alias. Shopify refuses a bulk query that does not, so
+/// this only matters for a file from elsewhere; a child of an object
+/// without `id` is an [`Error::Bulk`] that says so.
+///
 /// # Errors
 ///
 /// Any error ends the stream, a line that does not read as `P` or `C`
 /// included: the lines after it could not be placed for sure. The errors
-/// are those of [`BulkRows`], and the child out of place above.
+/// are those of [`BulkRows`], and the child out of place or without a
+/// matching `id` above.
 #[must_use = "a stream does nothing until it is read"]
 pub struct BulkGroups<P, C> {
     lines: Lines,
     group: Option<Group<P, C>>,
+    /// The operation is known to have run with `groupObjects`.
+    grouped: bool,
 }
 
 // The group is never pinned: it is only reached through `&mut`.
@@ -326,7 +339,24 @@ impl<P, C> BulkGroups<P, C> {
         Self {
             lines: Lines::new(body, url),
             group: None,
+            grouped: false,
         }
+    }
+
+    pub(crate) fn grouped(mut self) -> Self {
+        self.grouped = true;
+        self
+    }
+
+    fn misplaced(&self, number: usize) -> Error {
+        let message = if self.group.as_ref().is_some_and(|group| group.missing_id) {
+            "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections"
+        } else if self.grouped {
+            "is a child of neither the top-level object before it nor one of its children, though the query ran with `groupObjects`"
+        } else {
+            "is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
+        };
+        Error::Bulk(format!("line {number} of the results {message}"))
     }
 
     /// [`BulkRows::max_line_length`].
@@ -383,6 +413,7 @@ impl<P: DeserializeOwned, C: DeserializeOwned> Stream for BulkGroups<P, C> {
                     let next = Group {
                         parent,
                         children: Vec::new(),
+                        missing_id: keys.id.is_none(),
                         ids: keys.id.into_iter().collect(),
                     };
                     if let Some(done) = this.group.replace(next) {
@@ -395,9 +426,7 @@ impl<P: DeserializeOwned, C: DeserializeOwned> Stream for BulkGroups<P, C> {
                         .as_ref()
                         .is_some_and(|group| group.ids.contains(&parent_id))
                     {
-                        let error = Error::Bulk(format!(
-                            "line {number} of the results is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
-                        ));
+                        let error = this.misplaced(number);
                         return this.fail(error);
                     }
                     let child = match crate::decode::from_jsonl_line::<C>(line, number) {
@@ -405,6 +434,7 @@ impl<P: DeserializeOwned, C: DeserializeOwned> Stream for BulkGroups<P, C> {
                         Err(error) => return this.fail(error),
                     };
                     if let Some(group) = this.group.as_mut() {
+                        group.missing_id |= keys.id.is_none();
                         group.ids.extend(keys.id);
                         group.children.push(child);
                     }
@@ -802,6 +832,54 @@ mod tests {
             assert_eq!(groups.len(), 1, "{body}");
             assert!(matches!(groups[0], Err(Error::Bulk(_))), "{body}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_parent_without_id_is_named_as_the_cause() {
+        const MISSING: &str = "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections";
+        for (body, line) in [
+            // A top-level object without `id`.
+            (
+                "{\"title\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
+                2,
+            ),
+            // A first-level child without `id`, parent of the second level.
+            (
+                "{\"id\":\"P1\"}\n{\"sku\":\"V1\",\"__parentId\":\"P1\"}\n{\"id\":\"L1\",\"__parentId\":\"V1\"}\n",
+                3,
+            ),
+            // An aliased `id`.
+            (
+                "{\"productId\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
+                2,
+            ),
+        ] {
+            for groups in [groups_of(body), groups_of(body).grouped()] {
+                let groups = all_groups(groups).await;
+                let error = groups.last().unwrap().as_ref().unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("bulk operation: line {line} of the results {MISSING}"),
+                    "{body}"
+                );
+            }
+        }
+
+        // A child without `id` has no child of its own to place: fine.
+        let body = "{\"id\":\"P1\"}\n{\"sku\":\"V1\",\"__parentId\":\"P1\"}\n";
+        let groups = all_groups(groups_of(body)).await;
+        assert_eq!(groups[0].as_ref().unwrap().1.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_child_out_of_place_does_not_ask_for_group_objects_when_it_is_on() {
+        let body = "{\"id\":\"P1\"}\n{\"id\":\"P2\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n";
+        let groups = all_groups(groups_of(body).grouped()).await;
+        let error = groups.last().unwrap().as_ref().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "bulk operation: line 3 of the results is a child of neither the top-level object before it nor one of its children, though the query ran with `groupObjects`"
+        );
     }
 
     #[tokio::test]
