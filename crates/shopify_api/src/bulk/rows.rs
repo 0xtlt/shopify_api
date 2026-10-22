@@ -94,15 +94,17 @@ impl Lines {
                 return Poll::Ready(Some(Err(self.too_long(self.line + 1))));
             }
             let Some(body) = self.body.as_mut() else {
-                // The last line, without a newline after it.
                 let range = self.start..self.buffer.len();
                 self.start = range.end;
                 self.scanned = 0;
                 self.done = true;
-                if range.is_empty() || is_blank(&self.buffer[range.clone()]) {
+                if range.is_empty() {
                     break;
                 }
                 self.line += 1;
+                if is_blank(&self.buffer[range.clone()]) {
+                    break;
+                }
                 return Poll::Ready(Some(Ok((self.line, range))));
             };
             match body.as_mut().poll_next(context) {
@@ -528,6 +530,21 @@ mod tests {
         }
         let one_byte_each = body.iter().map(|byte| vec![*byte]).collect();
         assert_eq!(shown(&all(rows_of(one_byte_each)).await), expected);
+    }
+
+    #[tokio::test]
+    async fn a_last_blank_line_without_a_newline_is_counted() {
+        for (body, lines) in [
+            (&b"{}\n \r"[..], 2),
+            (b"{}\n\n\t", 3),
+            (b"{}\n", 1),
+            (b"{}", 1),
+        ] {
+            let mut rows = rows_of::<serde_json::Value>(vec![body.to_vec()]);
+            assert!(rows.next_row().await.unwrap().is_ok());
+            assert!(rows.next_row().await.is_none());
+            assert_eq!(rows.line(), lines, "{body:?}");
+        }
     }
 
     #[tokio::test]
