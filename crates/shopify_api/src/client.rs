@@ -172,9 +172,9 @@ fn warn_mismatch(pinned: ApiVersion, checked: &'static str) {
 /// a `5xx` or a network failure, with exponential backoff; a mutation is not,
 /// since it may have run.
 ///
-/// A `429` waits for its `Retry-After`, however longer than
-/// [`max_delay`](Self::max_delay) it is: that cap is for the backoff the client
-/// computes. A `Retry-After` longer than
+/// A `429` waits for its `Retry-After`, in seconds or until an HTTP date,
+/// however longer than [`max_delay`](Self::max_delay) it is: that cap is for
+/// the backoff the client computes. A `Retry-After` longer than
 /// [`max_retry_after`](Self::max_retry_after) (five minutes by default) is not
 /// waited for: the request ends in [`Error::Throttled`](crate::Error::Throttled),
 /// with the wait Shopify asked for in its `retry_after`.

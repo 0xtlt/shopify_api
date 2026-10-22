@@ -214,14 +214,42 @@ impl Shopify {
     }
 }
 
-/// The wait a `Retry-After` header asks for, in seconds; `None` for a
-/// value that is not a wait. A wait too long for a `Duration` is the longest one.
+/// The wait a `Retry-After` header asks for: a number of seconds, or an
+/// HTTP date (RFC 9110), counted from now. `None` for a value that is
+/// neither. A date already past is no wait; a wait too long for a `Duration`
+/// is the longest one.
 fn retry_after(response: &crate::transport::HttpResponse) -> Option<std::time::Duration> {
-    let seconds: f64 = response.header("Retry-After")?.trim().parse().ok()?;
-    if seconds.is_nan() || seconds < 0.0 {
-        return None;
+    retry_after_from(response.header("Retry-After")?, chrono::Utc::now())
+}
+
+fn retry_after_from(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<std::time::Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<f64>() {
+        if seconds.is_nan() || seconds < 0.0 {
+            return None;
+        }
+        return Some(
+            std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX),
+        );
     }
-    Some(std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX))
+    let date = http_date(value)?;
+    Some((date - now).to_std().unwrap_or_default())
+}
+
+/// An HTTP date in any of its three forms: `Sun, 06 Nov 1994 08:49:37 GMT`,
+/// the obsolete `Sunday, 06-Nov-94 08:49:37 GMT` and `Sun Nov  6 08:49:37 1994`.
+fn http_date(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, NaiveDateTime, Utc};
+    if let Ok(date) = DateTime::parse_from_rfc2822(value) {
+        return Some(date.with_timezone(&Utc));
+    }
+    ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
+        .iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+        .map(|date| date.and_utc())
 }
 
 /// The `data` and `extensions` of an answer without errors.
@@ -233,4 +261,38 @@ fn into_data(raw: RawResponse) -> Result<(Value, Option<Value>)> {
         }));
     }
     Ok((raw.data.unwrap_or(Value::Null), raw.extensions))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::retry_after_from;
+
+    #[test]
+    fn retry_after_reads_seconds_and_http_dates() {
+        let now = chrono::DateTime::parse_from_rfc3339("1994-11-06T08:47:37Z")
+            .unwrap()
+            .to_utc();
+        let read = |value| retry_after_from(value, now);
+        assert_eq!(read("120"), Some(Duration::from_secs(120)));
+        assert_eq!(read(" 2.5 "), Some(Duration::from_millis(2500)));
+        assert_eq!(read("-5"), None);
+        // The three forms of RFC 9110, two minutes after `now`.
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            read("Sunday, 06-Nov-94 08:49:37 GMT"),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            read("Sun Nov  6 08:49:37 1994"),
+            Some(Duration::from_secs(120))
+        );
+        // A date already past is no wait.
+        assert_eq!(read("Sun, 06 Nov 1994 08:00:00 GMT"), Some(Duration::ZERO));
+        assert_eq!(read("soon"), None);
+    }
 }

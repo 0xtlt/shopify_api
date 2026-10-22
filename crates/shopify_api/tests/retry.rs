@@ -246,3 +246,54 @@ async fn the_test_client_does_not_wait_for_a_retry_after() {
     );
     assert_eq!(started.elapsed(), Duration::ZERO);
 }
+
+fn http_date_in(seconds: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::seconds(seconds))
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
+}
+
+/// A `Retry-After` may be an HTTP date: the client waits until then.
+#[tokio::test(start_paused = true)]
+async fn a_429_waits_until_its_retry_after_date() {
+    let mock = MockTransport::new();
+    mock.push(
+        HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", http_date_in(120)),
+    )
+    .push_data(shop());
+    let shopify = Shopify::builder("test-shop")
+        .access_token("t")
+        .transport(mock.clone())
+        .build()
+        .unwrap();
+
+    let started = tokio::time::Instant::now();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    // The date has whole seconds: up to one less than asked.
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed > Duration::from_secs(118) && elapsed <= Duration::from_secs(120),
+        "{elapsed:?}"
+    );
+
+    // Past: sent again at once. Beyond `max_retry_after`: the caller gets it.
+    mock.clear();
+    mock.push(
+        HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", http_date_in(-60)),
+    )
+    .push_data(shop());
+    let started = tokio::time::Instant::now();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    assert_eq!(started.elapsed(), Duration::ZERO);
+
+    mock.clear();
+    mock.push(
+        HttpResponse::new(429, "Too Many Requests").with_header("Retry-After", http_date_in(600)),
+    );
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert!(
+        matches!(error, Error::Throttled { retry_after: Some(wait), .. } if wait > Duration::from_secs(590)),
+        "{error:?}"
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
