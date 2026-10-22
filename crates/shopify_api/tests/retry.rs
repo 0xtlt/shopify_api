@@ -147,3 +147,18 @@ async fn waits_shopify_cannot_mean_do_not_panic() {
     shopify.graphql("{ shop { name } }", ()).await.unwrap();
     assert_eq!(mock.requests().len(), 4);
 }
+
+/// A comment that ends with a bare `\r` still hides nothing: the mutation
+/// after it is sent once.
+#[tokio::test]
+async fn a_mutation_after_a_comment_ended_by_a_carriage_return_is_not_sent_again() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::new(502, "Bad Gateway"))
+        .push_data(json!({ "tagsAdd": { "userErrors": [] } }));
+    let shopify = client(&mock);
+
+    let mutation = "# comment\rmutation { tagsAdd(id: \"gid://shopify/Order/1\", tags: [\"a\"]) { userErrors { message } } }";
+    let error = shopify.graphql(mutation, ()).await.unwrap_err();
+    assert_eq!(error.status(), Some(502));
+    assert_eq!(mock.requests().len(), 1);
+}

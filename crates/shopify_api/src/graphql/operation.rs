@@ -19,25 +19,15 @@ impl OperationKind {
     /// Reads the kind of a document: a mutation as soon as one of its
     /// operations is one, so that a document that holds a mutation is never
     /// sent twice by a retry.
+    ///
+    /// It fails safe: a document it can't read to the end (a subscription, a
+    /// typo, an unclosed string or block…) is a [`Mutation`](Self::Mutation)
+    /// too, so it is never retried either. Only a document made of queries,
+    /// fragments and `{ … }` shorthands is a [`Query`](Self::Query).
     pub fn of(document: &str) -> Self {
-        let mut rest = document;
-        loop {
-            rest = skip_ignored(rest);
-            if rest.is_empty() {
-                return Self::Query;
-            }
-            let word: String = rest
-                .chars()
-                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
-                .collect();
-            if word == "mutation" {
-                return Self::Mutation;
-            }
-            // A query, a fragment or a shorthand `{ … }`: on to the next definition.
-            match skip_block(&rest[word.len()..]) {
-                Some(after) => rest = after,
-                None => return Self::Query,
-            }
+        match read_kind(document) {
+            Some(kind) => kind,
+            None => Self::Mutation,
         }
     }
 
@@ -46,54 +36,168 @@ impl OperationKind {
     }
 }
 
-/// Skips white space, commas, comments and a byte order mark.
-fn skip_ignored(mut text: &str) -> &str {
+/// The kind of the document, `None` when it can't be read.
+fn read_kind(document: &str) -> Option<OperationKind> {
+    let mut lexer = Lexer {
+        text: document,
+        position: 0,
+    };
     loop {
-        let trimmed = text.trim_start_matches(|character: char| {
-            character.is_whitespace() || character == ',' || character == '\u{feff}'
-        });
-        match trimmed.strip_prefix('#') {
-            Some(comment) => text = comment.split_once('\n').map_or("", |(_, after)| after),
-            None => return trimmed,
+        match lexer.next()? {
+            None => return Some(OperationKind::Query),
+            Some(Token::Punctuator(b'{')) => lexer.skip_selection_set()?,
+            Some(Token::Name("query" | "fragment")) => {
+                lexer.skip_to_selection_set()?;
+                lexer.skip_selection_set()?;
+            }
+            Some(Token::Name("mutation")) => return Some(OperationKind::Mutation),
+            Some(_) => return None,
         }
     }
 }
 
-/// What follows the next `{ … }` block, strings and comments taken into account.
-fn skip_block(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let mut depth = 0usize;
-    let mut chars = text[start..].char_indices().peekable();
-    while let Some((index, character)) = chars.next() {
-        match character {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&text[start + index + 1..]);
+/// The tokens that tell where a definition starts and ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Token<'a> {
+    Name(&'a str),
+    /// `{`, `}`, `(`, `)`, `[` or `]`.
+    Punctuator(u8),
+    /// Strings, numbers and every other punctuator.
+    Other,
+}
+
+/// Just enough of a GraphQL lexer to find the definitions of a document.
+struct Lexer<'a> {
+    text: &'a str,
+    position: usize,
+}
+
+impl<'a> Lexer<'a> {
+    fn rest(&self) -> &'a [u8] {
+        &self.text.as_bytes()[self.position..]
+    }
+
+    /// Skips white space, line terminators, commas, comments and byte order marks.
+    fn skip_ignored(&mut self) {
+        loop {
+            let rest = self.rest();
+            match rest.first() {
+                Some(b' ' | b'\t' | b'\n' | b'\r' | b',') => self.position += 1,
+                Some(0xEF) if rest.starts_with("\u{feff}".as_bytes()) => self.position += 3,
+                // A comment runs to the next line terminator: `\n`, `\r` or `\r\n`.
+                Some(b'#') => {
+                    self.position += rest
+                        .iter()
+                        .position(|byte| matches!(byte, b'\n' | b'\r'))
+                        .unwrap_or(rest.len());
                 }
+                _ => return,
             }
-            '#' => {
-                for (_, character) in chars.by_ref() {
-                    if character == '\n' {
-                        break;
-                    }
-                }
-            }
-            '"' => {
-                let mut escaped = false;
-                for (_, character) in chars.by_ref() {
-                    match character {
-                        '\\' if !escaped => escaped = true,
-                        '"' if !escaped => break,
-                        _ => escaped = false,
-                    }
-                }
-            }
-            _ => {}
         }
     }
-    None
+
+    /// The next token: `None` when the text can't be read, `Some(None)` at its end.
+    fn next(&mut self) -> Option<Option<Token<'a>>> {
+        self.skip_ignored();
+        let rest = self.rest();
+        let Some(&first) = rest.first() else {
+            return Some(None);
+        };
+        let start = self.position;
+        let token = match first {
+            b'A'..=b'Z' | b'a'..=b'z' | b'_' => {
+                let length = rest
+                    .iter()
+                    .position(|byte| !(byte.is_ascii_alphanumeric() || *byte == b'_'))
+                    .unwrap_or(rest.len());
+                self.position += length;
+                Token::Name(&self.text[start..self.position])
+            }
+            b'"' if rest.starts_with(b"\"\"\"") => {
+                // A block string: its only escape is `\"""`.
+                let mut index = 3;
+                loop {
+                    let tail = rest.get(index..)?;
+                    if tail.is_empty() {
+                        return None;
+                    } else if tail.starts_with(b"\\\"\"\"") {
+                        index += 4;
+                    } else if tail.starts_with(b"\"\"\"") {
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+                self.position += index + 3;
+                Token::Other
+            }
+            b'"' => {
+                let mut index = 1;
+                loop {
+                    match rest.get(index)? {
+                        b'\\' => index += 2,
+                        b'"' => break,
+                        b'\n' | b'\r' => return None,
+                        _ => index += 1,
+                    }
+                }
+                self.position += index + 1;
+                Token::Other
+            }
+            b'{' | b'}' | b'(' | b')' | b'[' | b']' => {
+                self.position += 1;
+                Token::Punctuator(first)
+            }
+            b'0'..=b'9' | b'-' => {
+                let length = rest
+                    .iter()
+                    .position(|byte| {
+                        !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'+' | b'-'))
+                    })
+                    .unwrap_or(rest.len());
+                self.position += length;
+                Token::Other
+            }
+            _ => {
+                // Any other punctuator, or a character GraphQL doesn't allow here.
+                let length = self.text[start..].chars().next().map_or(1, char::len_utf8);
+                self.position += length;
+                Token::Other
+            }
+        };
+        Some(Some(token))
+    }
+
+    /// Skips the header of a definition (name, variables and their default
+    /// values, directives), up to and with the `{` of its selection set.
+    fn skip_to_selection_set(&mut self) -> Option<()> {
+        let mut depth = 0usize;
+        loop {
+            match self.next()?? {
+                Token::Punctuator(b'{') if depth == 0 => return Some(()),
+                Token::Punctuator(b'{' | b'(' | b'[') => depth += 1,
+                Token::Punctuator(_) => depth = depth.checked_sub(1)?,
+                _ => {}
+            }
+        }
+    }
+
+    /// Skips a selection set, its `{` already read.
+    fn skip_selection_set(&mut self) -> Option<()> {
+        let mut depth = 1usize;
+        loop {
+            match self.next()?? {
+                Token::Punctuator(b'{') => depth += 1,
+                Token::Punctuator(b'}') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// An operation, its variables, and the type `D` of its `data`.
@@ -407,10 +511,60 @@ mod tests {
                 "fragment F on Shop { name } query { shop { ...F } }",
                 OperationKind::Query,
             ),
-            ("mutations", OperationKind::Query),
             ("", OperationKind::Query),
         ] {
             assert_eq!(OperationKind::of(document), kind, "{document}");
+        }
+    }
+
+    /// A comment ends at `\r`, `\n` or `\r\n` (the spec's LineTerminator).
+    #[test]
+    fn a_comment_ends_at_any_line_terminator() {
+        for document in [
+            "# comment\rmutation { tagsAdd(id: \"1\", tags: [\"a\"]) { userErrors { message } } }",
+            "# comment\r\nmutation { a }",
+            "# comment\nmutation { a }",
+            "query { a # }\r } mutation { b }",
+            "query { a } # x\rmutation { b }",
+        ] {
+            assert_eq!(
+                OperationKind::of(document),
+                OperationKind::Mutation,
+                "{document:?}"
+            );
+        }
+    }
+
+    /// When the document can't be read, it's treated as a mutation: never retried.
+    #[test]
+    fn a_document_it_cannot_read_is_a_mutation() {
+        for document in [
+            "mutations",
+            "subscription { a }",
+            "query { a",
+            "query { a(x: \"}) } mutation { b }",
+            "query { a(x: \"\"\" } \" \"\"\") } mutation { b }",
+            "query { a } }",
+            "query @d(x: \"{\") { a } mutation { b }",
+            "query ($x: In = {a: 1}) { a } mutation { b }",
+        ] {
+            assert_eq!(
+                OperationKind::of(document),
+                OperationKind::Mutation,
+                "{document:?}"
+            );
+        }
+        for document in [
+            "query ($x: In = {a: 1}) { a(x: $x) }",
+            "query { a(x: \"\"\" } \\\"\"\" \"\"\") }",
+            "query @d(x: \"{\") { a }",
+            "query { a } # mutation { b }\r\n",
+        ] {
+            assert_eq!(
+                OperationKind::of(document),
+                OperationKind::Query,
+                "{document:?}"
+            );
         }
     }
 
