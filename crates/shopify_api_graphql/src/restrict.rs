@@ -195,16 +195,14 @@ impl Used {
             };
             types.insert(name, restricted);
         }
-        // Interfaces and possible types only among the types kept.
+        // Interfaces only among the types kept. The possible types of an
+        // interface or a union all stay, kept or not: they tell whether a
+        // fragment always applies, and so whether its fields are optional.
+        // Left out, `... on Product` in a `Node` would always apply.
         let names: BTreeSet<String> = types.keys().cloned().collect();
-        let keep = |list: &mut Vec<String>| list.retain(|name| names.contains(name));
         for definition in types.values_mut() {
-            match definition {
-                TypeDef::Object { interfaces, .. } => keep(interfaces),
-                TypeDef::Interface { possible_types, .. } | TypeDef::Union { possible_types } => {
-                    keep(possible_types)
-                }
-                _ => {}
+            if let TypeDef::Object { interfaces, .. } = definition {
+                interfaces.retain(|name| names.contains(name));
             }
         }
         Schema {

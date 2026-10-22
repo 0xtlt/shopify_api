@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use shopify_api_graphql::{Schema, analyze};
+use shopify_api_graphql::{FieldBase, Schema, analyze};
 
 fn runtime_crate() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../shopify_api/graphql")
@@ -68,4 +68,34 @@ fn a_restricted_schema_refuses_what_it_left_out() {
         "{error}"
     );
     assert!(full.restricted_to(&["{ shop { nam } }"]).is_err());
+}
+
+/// Cutting the schema keeps every possible type of an interface or a union:
+/// a fragment on one of them stays conditional, and its fields optional.
+#[test]
+fn a_restricted_schema_keeps_fragments_on_abstract_types_conditional() {
+    let dir = runtime_crate();
+    let full = Schema::from_json(&std::fs::read_to_string(dir.join("admin.schema.json")).unwrap())
+        .unwrap();
+    for query in [
+        "query($id: ID!) { node(id: $id) { id ... on Product { title } } }",
+        "query($id: ID!) { node(id: $id) { id ...P } } fragment P on Product { title }",
+    ] {
+        let cut = full.restricted_to(&[query]).unwrap();
+        let shape = analyze(&cut, query).unwrap();
+        assert_eq!(shape, analyze(&full, query).unwrap(), "{query}");
+        let FieldBase::Object(node) = &shape.data.fields[0].base else {
+            panic!("node is an object");
+        };
+        let title = node
+            .fields
+            .iter()
+            .find(|field| field.key == "title")
+            .unwrap();
+        assert!(title.conditional, "{query}: {title:?}");
+
+        // Through JSON too, as `graphql!` reads it.
+        let reloaded = Schema::from_json(&cut.to_json()).unwrap();
+        assert_eq!(analyze(&reloaded, query).unwrap(), shape, "{query}");
+    }
 }
