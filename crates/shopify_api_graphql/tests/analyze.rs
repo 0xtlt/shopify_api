@@ -699,6 +699,109 @@ fn the_same_key_with_other_arguments_needs_an_alias() {
     );
 }
 
+/// Arguments compare as Shopify (GraphQL Ruby) compares them: by kind and
+/// value, input fields in the order of the text.
+#[test]
+fn arguments_compare_by_kind_value_and_order() {
+    let twice = |left: &str, right: &str| {
+        format!(
+            "mutation {{ x: flowTriggerReceive(handle: \"h\", payload: {left}) {{ userErrors {{ message }} }} x: flowTriggerReceive(handle: \"h\", payload: {right}) {{ userErrors {{ field }} }} }}"
+        )
+    };
+    for (left, right) in [
+        ("1", "1.0"),
+        ("1.0", "-0.0"),
+        ("0.0", "-0.0"),
+        ("\"A\"", "A"),
+        ("\"1\"", "1"),
+        ("true", "\"true\""),
+        ("null", "\"null\""),
+        ("[1]", "1"),
+        ("[1, 2]", "[2, 1]"),
+        ("{a: 1}", "{a: 1.0}"),
+        ("{a: 1}", "{a: 1, b: 2}"),
+        ("{a: [1]}", "{a: 1}"),
+        ("{a: \"x\"}", "{a: x}"),
+    ] {
+        let refused = refusal(&twice(left, right));
+        assert!(
+            refused.contains("`x` is selected twice with different arguments"),
+            "{left} / {right}: {refused}"
+        );
+    }
+    // Written alike: the same value.
+    for (left, right) in [
+        ("1.0", "1.00"),
+        ("1.0", "10e-1"),
+        ("\"abc\"", "\"\"\"abc\"\"\""),
+        ("\"\\u0041\"", "\"A\""),
+        ("{a: 1, b: [{c: 2, d: 3}]}", "{a: 1, b: [{c: 2, d: 3}]}"),
+    ] {
+        check(&twice(left, right));
+    }
+    // The fields of an input object in another order: Shopify refuses it.
+    for (left, right) in [
+        ("{a: 1, b: 2}", "{b: 2, a: 1}"),
+        ("{n: {a: 1, b: 2}}", "{n: {b: 2, a: 1}}"),
+        ("[{a: 1, b: 2}]", "[{b: 2, a: 1}]"),
+    ] {
+        let refused = refusal(&twice(left, right));
+        assert!(
+            refused.contains(
+                "`x` is selected twice with the fields of an input object in another order"
+            ),
+            "{left} / {right}: {refused}"
+        );
+    }
+    // An argument given or left out, as `null`.
+    assert!(
+        refusal(
+            "mutation { x: flowTriggerReceive(handle: \"h\", payload: null) { userErrors { message } } x: flowTriggerReceive(handle: \"h\") { userErrors { field } } }"
+        )
+        .contains("different arguments (`(handle: \"h\", payload: null)` and `(handle: \"h\")`)")
+    );
+    // The messages write each value with its kind.
+    assert!(
+        refusal(&twice("{a: 1}", "{a: 1.0}")).contains(
+            "(`(handle: \"h\", payload: {a: 1})` and `(handle: \"h\", payload: {a: 1.0})`)"
+        )
+    );
+}
+
+/// The order of input fields is read on the text at the position the parser
+/// gives: tabs, `\r\n`, comments, block strings and other characters before
+/// the fields do not throw it off.
+#[test]
+fn the_order_of_input_fields_is_found_after_any_text() {
+    let field = |payload: &str| {
+        format!(
+            "x: flowTriggerReceive(handle: \"h\", payload: {payload}) {{ userErrors {{ message }} }}"
+        )
+    };
+    let same = field("{a: 1, b: \"é\"}");
+    let other = field("{b: \"é\", a: 1}");
+    for before in [
+        "\t\t",
+        "\r\n\t# a comment ending in CRLF\r\n  ",
+        "# é\n\u{feff}",
+        "y: flowTriggerReceive(handle: \"\"\"line\nanother é\r\n\"\"\", payload: \"é\\\"\") { userErrors { message } }\n\t",
+        "z: flowTriggerReceive(handle: \"ü\", payload: [\"\\u00e9\", {c: 1}]) { userErrors { message } } ",
+    ] {
+        check(&format!(
+            "mutation {{ {before}{same}\r\n\t{before}{same} }}"
+        ));
+        let refused = refusal(&format!("mutation {{ {before}{same}\n\t{before}{other} }}"));
+        assert!(
+            refused.contains("in another order"),
+            "{before:?}: {refused}"
+        );
+    }
+    // Through an alias and a fragment.
+    check(&format!(
+        "mutation {{ ...F {same} }} fragment F on Mutation {{\t{same} }}"
+    ));
+}
+
 #[test]
 fn directives_come_from_the_schema() {
     // Shopify's `@idempotent`, on a mutation field.

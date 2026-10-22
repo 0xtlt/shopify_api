@@ -3,7 +3,7 @@
 
 mod input_objects;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use graphql_parser::Pos;
@@ -254,6 +254,8 @@ pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
 
     let mut analyzer = Analyzer {
         schema,
+        source,
+        argument_orders: HashMap::new(),
         fragments,
         variables: Vec::new(),
         used_variables: BTreeSet::new(),
@@ -384,9 +386,8 @@ struct Pending<'a> {
     field: String,
     ty: TypeRef,
     /// Where the key was selected: on which parent type, which field, with
-    /// which arguments (written the same way for every place that gives the
-    /// same ones).
-    origins: Vec<Origin>,
+    /// which arguments.
+    origins: Vec<Origin<'a>>,
     /// The field may be absent from a value of the parent.
     conditional: bool,
     /// The subfields selected at each place, with whether that place may
@@ -408,11 +409,20 @@ type SubSet<'a> = (&'a SelectionSet<'a>, bool, Lineage);
 type Lineage = Vec<String>;
 
 /// One place a response key is selected at.
-struct Origin {
+struct Origin<'a> {
     /// Its parent type last.
     lineage: Lineage,
     field: String,
-    arguments: String,
+    arguments: &'a [(String, Value<'a>)],
+    position: Pos,
+}
+
+/// How the arguments of two places that select one response key compare.
+enum Arguments {
+    Same,
+    Different,
+    /// Equal, but the fields of an input object come in another order.
+    Reordered,
 }
 
 /// Which of the sets merged into one selection a field comes from.
@@ -423,19 +433,90 @@ struct Place {
     uncertain: bool,
 }
 
-/// The arguments of a field in one canonical text, to compare two places
-/// that select the same response key.
-fn arguments_key(arguments: &[(String, Value<'_>)]) -> String {
-    let mut written: Vec<String> = arguments
+/// Two values written alike, as Shopify compares the arguments of two fields
+/// (GraphQL Ruby's `fieldConflict`): of the same kind (`1` is not `1.0`, `"A"`
+/// is not `A`), equal, with lists in the same order. Input objects are
+/// compared field by field here; the order of their fields, which the parser
+/// does not keep, is compared on the text (see [`Analyzer::same_arguments`]).
+fn same_value(left: &Value<'_>, right: &Value<'_>) -> bool {
+    use ast::Value as V;
+    match (left, right) {
+        (V::Variable(left), V::Variable(right))
+        | (V::String(left), V::String(right))
+        | (V::Enum(left), V::Enum(right)) => left == right,
+        (V::Int(left), V::Int(right)) => left.as_i64() == right.as_i64(),
+        // `-0.0` is not `0.0`; `1.0` is `1.00`.
+        (V::Float(left), V::Float(right)) => left.to_bits() == right.to_bits(),
+        (V::Boolean(left), V::Boolean(right)) => left == right,
+        (V::Null, V::Null) => true,
+        (V::List(left), V::List(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| same_value(left, right))
+        }
+        (V::Object(left), V::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(name, left)| {
+                    right.get(name).is_some_and(|right| same_value(left, right))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Holds an input object of two fields or more, whose order matters.
+fn has_ordered_object(value: &Value<'_>) -> bool {
+    match value {
+        ast::Value::Object(fields) => fields.len() > 1 || fields.values().any(has_ordered_object),
+        ast::Value::List(items) => items.iter().any(has_ordered_object),
+        _ => false,
+    }
+}
+
+/// The arguments of a field for a message, each value written with its kind.
+fn arguments_text(arguments: &[(String, Value<'_>)]) -> String {
+    let written: Vec<String> = arguments
         .iter()
-        .map(|(name, value)| format!("{name}: {value}"))
+        .map(|(name, value)| format!("{name}: {}", value_text(value)))
         .collect();
-    written.sort();
     written.join(", ")
 }
 
+fn value_text(value: &Value<'_>) -> String {
+    match value {
+        ast::Value::Variable(name) => format!("${name}"),
+        ast::Value::Int(number) => number.as_i64().unwrap_or_default().to_string(),
+        ast::Value::Float(number) => format!("{number:?}"),
+        ast::Value::String(text) => format!("{text:?}"),
+        ast::Value::Boolean(value) => value.to_string(),
+        ast::Value::Null => "null".to_string(),
+        ast::Value::Enum(name) => name.clone(),
+        ast::Value::List(items) => {
+            let items: Vec<String> = items.iter().map(value_text).collect();
+            format!("[{}]", items.join(", "))
+        }
+        ast::Value::Object(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(name, value)| format!("{name}: {}", value_text(value)))
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+    }
+}
+
+/// The arguments of a field and the order of their input fields, by name.
+type ArgumentOrders<'a> = Option<Vec<(&'a str, Vec<&'a str>)>>;
+
 struct Analyzer<'a> {
     schema: &'a Schema,
+    /// The text of the operation.
+    source: &'a str,
+    /// [`input_objects::argument_orders`] of the fields compared so far, by
+    /// position.
+    argument_orders: HashMap<(usize, usize), ArgumentOrders<'a>>,
     fragments: BTreeMap<&'a str, &'a ast::FragmentDefinition<'a, String>>,
     /// The declared variables, in the order of the operation.
     variables: Vec<Variable>,
@@ -561,7 +642,12 @@ impl<'a> Analyzer<'a> {
                         conditional | self.check_directives(&field.directives, "FIELD")?;
                     let ty = self.field_type(parent, field)?;
                     let key = field.alias.as_ref().unwrap_or(&field.name).clone();
-                    let arguments = arguments_key(&field.arguments);
+                    let origin = |lineage| Origin {
+                        lineage,
+                        field: field.name.clone(),
+                        arguments: &field.arguments,
+                        position: field.position,
+                    };
                     let origin_lineage: Lineage = lineage
                         .iter()
                         .cloned()
@@ -602,22 +688,31 @@ impl<'a> Analyzer<'a> {
                                             ),
                                         );
                                     }
-                                    if origin.arguments != arguments {
-                                        return error_at(
-                                            field.position,
-                                            format!(
-                                                "`{key}` is selected twice with different arguments (`({})` and `({arguments})`); give one of them an alias",
-                                                origin.arguments
-                                            ),
-                                        );
+                                    match self.same_arguments(origin, field) {
+                                        Arguments::Same => {}
+                                        Arguments::Different => {
+                                            return error_at(
+                                                field.position,
+                                                format!(
+                                                    "`{key}` is selected twice with different arguments (`({})` and `({})`); give one of them an alias",
+                                                    arguments_text(origin.arguments),
+                                                    arguments_text(&field.arguments)
+                                                ),
+                                            );
+                                        }
+                                        Arguments::Reordered => {
+                                            return error_at(
+                                                field.position,
+                                                format!(
+                                                    "`{key}` is selected twice with the fields of an input object in another order (`({})`), which Shopify refuses; write them in the same order, or give one of them an alias",
+                                                    arguments_text(&field.arguments)
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
                             }
-                            existing.origins.push(Origin {
-                                lineage: origin_lineage,
-                                field: field.name.clone(),
-                                arguments,
-                            });
+                            existing.origins.push(origin(origin_lineage));
                             existing.conditional &= conditional;
                             existing.sets.extend(sets);
                             if !conditional {
@@ -628,11 +723,7 @@ impl<'a> Analyzer<'a> {
                             key,
                             field: field.name.clone(),
                             ty,
-                            origins: vec![Origin {
-                                lineage: origin_lineage,
-                                field: field.name.clone(),
-                                arguments,
-                            }],
+                            origins: vec![origin(origin_lineage)],
                             conditional,
                             sets: sets.into_iter().collect(),
                             unconditional_in: (!conditional)
@@ -702,6 +793,52 @@ impl<'a> Analyzer<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Whether `field` gives the arguments `origin` gave.
+    fn same_arguments(
+        &mut self,
+        origin: &Origin<'a>,
+        field: &'a ast::Field<'a, String>,
+    ) -> Arguments {
+        let (left, right) = (origin.arguments, &field.arguments);
+        let same = left.len() == right.len()
+            && left.iter().all(|(name, left)| {
+                right
+                    .iter()
+                    .find(|(given, _)| given == name)
+                    .is_some_and(|(_, right)| same_value(left, right))
+            });
+        if !same {
+            return Arguments::Different;
+        }
+        if !left.iter().any(|(_, value)| has_ordered_object(value)) {
+            return Arguments::Same;
+        }
+        let left = self.argument_orders(origin.position, &origin.field);
+        let right = self.argument_orders(field.position, &field.name);
+        match (left, right) {
+            (Some(left), Some(right))
+                if left.iter().all(|(name, order)| {
+                    right
+                        .iter()
+                        .any(|(given, other)| given == name && order == other)
+                }) =>
+            {
+                Arguments::Same
+            }
+            // The text cannot be read back: refuse rather than send what
+            // Shopify may refuse.
+            _ => Arguments::Reordered,
+        }
+    }
+
+    fn argument_orders(&mut self, position: Pos, name: &str) -> ArgumentOrders<'a> {
+        let source = self.source;
+        self.argument_orders
+            .entry((position.line, position.column))
+            .or_insert_with(|| input_objects::argument_orders(source, position, name))
+            .clone()
     }
 
     /// An object type, as opposed to an interface or a union.
