@@ -1,0 +1,59 @@
+# Toolchain and tasks. Run `mise install` once, then `mise run <task>` (`mise tasks` lists them).
+[tools]
+rust = { version = "1.99.1", profile = "minimal", components = "clippy,rustfmt" }
+"cargo:cargo-audit" = "0.22.2"
+cargo-deny = "0.20.2"
+
+[env]
+RUST_BACKTRACE = "1"
+
+[tasks.fmt]
+description = "Format the workspace"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Check the formatting of the workspace"
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+description = "Clippy on every crate, target and feature, warnings are errors"
+run = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+
+[tasks.test]
+description = "Run every test, with every feature. No network: Shopify is mocked."
+run = "cargo test --workspace --all-features --locked"
+
+[tasks."test:min"]
+description = "Build and test the client with its default features only"
+run = "cargo test -p shopify_api --locked"
+
+[tasks.doc]
+description = "Build the documentation, warnings are errors"
+env = { RUSTDOCFLAGS = "-D warnings --cfg docsrs" }
+run = "cargo doc --workspace --all-features --no-deps --locked"
+
+[tasks.check]
+description = "What CI runs: fmt check, clippy, tests, docs"
+depends = ["fmt:check", "lint", "test", "test:min", "doc"]
+
+[tasks.msrv]
+description = "Build the workspace with the minimum supported Rust version (1.88)"
+run = "cargo +1.88 check --workspace --all-features --locked"
+
+[tasks."ui:bless"]
+description = "Rewrite the expected compiler errors of the `graphql!` compile-fail tests"
+env = { TRYBUILD = "overwrite" }
+run = "cargo test -p shopify_api --all-features --locked --test compile_fail"
+
+[tasks."schema:bundle"]
+description = "Download the Admin schema bundled with the crates, for the version given (2026-10 by default)"
+usage = 'arg "[version]" default="2026-10"'
+run = "cargo run -p shopify_api --features cli --locked -- schema download --api-version ${usage_version} --out crates/shopify_api_graphql/schema/admin-${usage_version}.json"
+
+[tasks."test:live"]
+description = "Run the tests against a real development store (needs SHOPIFY_TEST_SHOP and a token, see tests/live.rs)"
+run = "cargo test -p shopify_api --all-features --locked --test live -- --ignored --test-threads=1"
+
+[tasks.audit]
+description = "Known vulnerabilities, licenses and sources of the dependencies (needs the network)"
+run = ["cargo audit", "cargo deny check"]

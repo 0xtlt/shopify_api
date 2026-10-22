@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0
+
+A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
+
+- Add: `graphql!`, which checks a query or mutation against Shopify's Admin schema while the crate compiles and generates the types of its variables and result. Inline (`graphql!("…", first = 10)`), named (`graphql! { pub mod name = "…"; }`, with typed input objects) or read from a file (`file("…graphql")`).
+- Add: deprecated fields, arguments, input fields and enum values are compiler warnings with Shopify's reason.
+- Add: the Admin schema 2026-10 is bundled (`shopify_api_graphql`); `shopify-api schema download` stores the schema of another version in `graphql/admin.schema.json`, and operations are sent to the version they were checked against.
+- Add: `shopify-api check` checks `.graphql` files against the schema.
+- Add: retries: a throttled request waits for what its cost needs, a `429` for its `Retry-After`; queries are retried after a `5xx` or a network failure, mutations never. `RetryPolicy`.
+- Add: tokens are renewed once for all the clones of a client, before they expire and when Shopify refuses one with a `401`. `Auth::expiring_token` with a `TokenStore`.
+- Add: `Shopify::paginate`, `Page`.
+- Add: bulk operations: `bulk_query_rows`, `run_bulk_mutation` (uploads the JSONL), `cancel_bulk_operation`, typed `BulkOperation` and statuses, adaptive polling.
+- Add: `webhooks`: `Webhook::verify` (headers, signature with secret rotation, payload), subscriptions with `sync_webhook_subscriptions`, which updates in place and creates before it deletes.
+- Add: `oauth`: `ShopifyApp` with install links, callback and admin launch verification, code exchange, session tokens and token exchange, app proxies.
+- Add: `Transport` trait, `ReqwestTransport` (redirections always off, `from_builder` for your own settings), and `testing::MockTransport`.
+- Add: token renewals run in a task of their own: a cancelled request does not lose a rotated refresh token. A failed renewal answers the requests waiting for it.
+- Add: errors never hold a query string (signed bulk result addresses stay out of logs); `Error::Http` carries Shopify's `X-Request-Id`.
+- Add: `ShopDomain` refuses anything but `<name>` or `<name>.myshopify.com`.
+- Breaking: `Shopify::new(shop, auth)` and `Shopify::builder`; `ShopifyAuth` is `Auth`; `ShopifyConfig` is gone; `ShopifyAPIError` is `Error`.
+- Breaking: `graphql` returns `data` as a `Value` and `graphql_as` reads it as a type; `post_graphql` and the `graphql-client` feature are gone.
+- Breaking: the warp wrapper, the webhook payload structs, `utils` (`retry_async`, `read_json_tree`) and `graphql_at_path` are gone.
+- Breaking: Rust 1.88, edition 2024.
+
 ## 0.10.1
 
 - Security: refresh `Cargo.lock` to pick up fixes for RUSTSEC-2026-0185, -0285, -0338, -0339, -0340, -0342, -0346, -0348, -0349, -0382 and -0383 (`quinn-proto`, `rustls`, `rustls-webpki`, `webpki-root-certs`).

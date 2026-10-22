@@ -1,0 +1,6 @@
+error: Subscriptions are not supported (line 1, column 1)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/subscription.rs:2:35
+  |
+2 |     let _ = shopify_api::graphql!("subscription { shop { name } }");
+  |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

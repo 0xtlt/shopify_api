@@ -1,0 +1,75 @@
+[package]
+name = "shopify_api"
+description = "Shopify Admin GraphQL client: operations checked against Shopify's schema at compile time, typed results, automatic tokens and throttling, bulk operations, webhooks and OAuth."
+documentation = "https://docs.rs/shopify_api"
+readme = "../../README.md"
+keywords = ["shopify", "graphql", "api", "client", "ecommerce"]
+categories = ["api-bindings", "web-programming::http-client"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+include = ["src/**", "docs/**", "tests/**", "examples/**", "Cargo.toml"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+shopify_api_macros.workspace = true
+
+chrono.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serde_urlencoded.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
+
+base64 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+clap = { workspace = true, optional = true }
+shopify_api_graphql = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
+trybuild.workspace = true
+
+[features]
+default = ["rustls"]
+## The default transport, `ReqwestTransport`, with rustls.
+rustls = ["dep:reqwest", "reqwest/rustls"]
+## The default transport, `ReqwestTransport`, with the platform's TLS.
+native-tls = ["dep:reqwest", "reqwest/native-tls"]
+## Webhook verification and parsing, webhook subscriptions.
+webhooks = ["dep:hmac", "dep:sha2", "dep:base64"]
+## OAuth: install links, callbacks, token exchange, session tokens, app proxies.
+oauth = ["dep:hmac", "dep:sha2", "dep:base64", "dep:hex"]
+## `MockTransport`, to test code that calls Shopify without the network.
+testing = []
+## The `shopify-api` command: downloads Admin schemas, checks `.graphql` files.
+cli = ["dep:clap", "dep:shopify_api_graphql", "rustls", "tokio/macros", "tokio/rt-multi-thread", "tokio/fs"]
+full = ["webhooks", "oauth", "testing", "cli"]
+
+[[bin]]
+name = "shopify-api"
+path = "src/bin/shopify-api.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "products"
+required-features = ["rustls"]
+
+[[example]]
+name = "bulk_export"
+required-features = ["rustls"]
+
+[lints]
+workspace = true

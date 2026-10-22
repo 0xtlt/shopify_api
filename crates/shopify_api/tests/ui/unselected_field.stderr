@@ -1,0 +1,7 @@
+error[E0609]: no field `email` on type `DataShop`
+ --> tests/ui/unselected_field.rs:3:18
+  |
+3 |     Ok(data.shop.email)
+  |                  ^^^^^ unknown field
+  |
+  = note: available field is: `name`

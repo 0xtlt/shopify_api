@@ -1,0 +1,222 @@
+//! What a GraphQL answer holds besides `data`: errors, user errors, cost.
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// An entry of the `errors` of an answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct GraphqlError {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locations: Option<Vec<Location>>,
+    /// The path of the field that failed, names and indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Value>,
+}
+
+impl GraphqlError {
+    /// `extensions.code`, such as `THROTTLED`, `ACCESS_DENIED` or `MAX_COST_EXCEEDED`.
+    pub fn code(&self) -> Option<&str> {
+        self.extensions.as_ref()?.get("code")?.as_str()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Location {
+    pub line: u32,
+    pub column: u32,
+}
+
+/// An entry of the `userErrors` of a mutation: what Shopify refused, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct UserError {
+    /// The path of the input field at fault.
+    #[serde(default)]
+    pub field: Option<Vec<String>>,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// The cost of a query and the state of the shop's rate limit, from
+/// `extensions.cost`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct Cost {
+    pub requested_query_cost: f64,
+    #[serde(default)]
+    pub actual_query_cost: Option<f64>,
+    pub throttle_status: ThrottleStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ThrottleStatus {
+    /// The size of the bucket.
+    pub maximum_available: f64,
+    /// What is left in it.
+    pub currently_available: f64,
+    /// What comes back each second.
+    pub restore_rate: f64,
+}
+
+impl Cost {
+    /// How long until the bucket holds the requested cost again, in seconds.
+    pub fn seconds_until_available(&self) -> f64 {
+        let missing = self.requested_query_cost - self.throttle_status.currently_available;
+        if missing <= 0.0 || self.throttle_status.restore_rate <= 0.0 {
+            0.0
+        } else {
+            missing / self.throttle_status.restore_rate
+        }
+    }
+}
+
+fn cost_of(extensions: Option<&Value>) -> Option<Cost> {
+    serde_json::from_value(extensions?.get("cost")?.clone()).ok()
+}
+
+/// The typed `data` of an operation, with the `extensions` of the answer.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Response<D> {
+    pub data: D,
+    pub extensions: Option<Value>,
+}
+
+impl<D> Response<D> {
+    /// What the operation cost, and what is left of the rate limit.
+    pub fn cost(&self) -> Option<Cost> {
+        cost_of(self.extensions.as_ref())
+    }
+}
+
+/// A GraphQL answer as Shopify sent it: `data`, `errors` and `extensions`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RawResponse {
+    #[serde(default)]
+    pub data: Option<Value>,
+    #[serde(default, deserialize_with = "errors")]
+    pub errors: Vec<GraphqlError>,
+    #[serde(default)]
+    pub extensions: Option<Value>,
+}
+
+/// `errors` is a list of errors; Shopify answers a few refusals with a
+/// string instead (`"errors": "Not Found"`).
+fn errors<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<GraphqlError>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Errors {
+        List(Vec<GraphqlError>),
+        Message(String),
+        Other(Value),
+    }
+    Ok(match Option::<Errors>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Errors::List(errors)) => errors,
+        Some(Errors::Message(message)) => vec![GraphqlError {
+            message,
+            locations: None,
+            path: None,
+            extensions: None,
+        }],
+        Some(Errors::Other(value)) => vec![GraphqlError {
+            message: value.to_string(),
+            locations: None,
+            path: None,
+            extensions: None,
+        }],
+    })
+}
+
+impl RawResponse {
+    pub fn cost(&self) -> Option<Cost> {
+        cost_of(self.extensions.as_ref())
+    }
+
+    /// Shopify did not run the operation: the rate limit of the shop is reached.
+    pub fn is_throttled(&self) -> bool {
+        self.errors
+            .iter()
+            .any(|error| error.code() == Some("THROTTLED"))
+    }
+
+    /// The `data` read as `T`, the path of the first mismatch in the error.
+    pub fn data_as<T: DeserializeOwned>(&self) -> crate::Result<T> {
+        decode(self.data.clone().unwrap_or(Value::Null))
+    }
+}
+
+/// Reads `value` as `T`, naming the path of the first field that does not fit.
+pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> crate::Result<T> {
+    serde_path_to_error::deserialize(value).map_err(|error| crate::Error::Decode {
+        path: error.path().to_string(),
+        message: error.inner().to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_errors_cost_and_throttling() {
+        let raw: RawResponse = serde_json::from_value(json!({
+            "errors": [{ "message": "Throttled", "extensions": { "code": "THROTTLED" } }],
+            "extensions": { "cost": {
+                "requestedQueryCost": 752,
+                "actualQueryCost": null,
+                "throttleStatus": { "maximumAvailable": 2000.0, "currentlyAvailable": 252, "restoreRate": 100.0 },
+            } },
+        }))
+        .unwrap();
+        assert!(raw.is_throttled());
+        assert_eq!(raw.errors[0].code(), Some("THROTTLED"));
+        let cost = raw.cost().unwrap();
+        assert_eq!(cost.requested_query_cost, 752.0);
+        assert_eq!(cost.seconds_until_available(), 5.0);
+    }
+
+    #[test]
+    fn a_string_of_errors_is_one_error() {
+        let raw: RawResponse = serde_json::from_str(r#"{"errors":"Not Found"}"#).unwrap();
+        assert_eq!(raw.errors.len(), 1);
+        assert_eq!(raw.errors[0].message, "Not Found");
+        let raw: RawResponse =
+            serde_json::from_str(r#"{"data":{"shop":{"name":"x"}},"errors":null}"#).unwrap();
+        assert!(raw.errors.is_empty());
+    }
+
+    #[test]
+    fn decoding_names_the_path_of_the_mismatch() {
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Data {
+            orders: Vec<Order>,
+        }
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Order {
+            name: String,
+        }
+        let error =
+            decode::<Data>(json!({ "orders": [{ "name": "#1" }, { "id": 2 }] })).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Shopify's answer does not match the operation at `orders[1]`: missing field `name`"
+        );
+    }
+}

@@ -1,0 +1,5 @@
+error: Variable `$id: ID!` needs a value: add `id = …` after the operation
+ --> tests/ui/missing_variable.rs:2:35
+  |
+2 |     let _ = shopify_api::graphql!("query($id: ID!) { product(id: $id) { title } }");
+  |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

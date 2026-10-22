@@ -1,0 +1,6 @@
+error: Invalid GraphQL: Parse error at 1:16 Unexpected end of input Expected }
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/syntax_error.rs:2:35
+  |
+2 |     let _ = shopify_api::graphql!("{ shop { name }");
+  |                                   ^^^^^^^^^^^^^^^^^

@@ -1,0 +1,24 @@
+[package]
+name = "shopify_api_graphql"
+description = "Checks Shopify Admin GraphQL operations against the schema and generates their Rust types. Used by the `graphql!` macro of `shopify_api`."
+documentation = "https://docs.rs/shopify_api_graphql"
+keywords = ["shopify", "graphql", "codegen"]
+categories = ["development-tools", "api-bindings"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+include = ["src/**", "schema/**", "Cargo.toml", "README.md"]
+
+[dependencies]
+graphql-parser.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
