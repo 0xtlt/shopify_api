@@ -29,7 +29,7 @@ run = "cargo test -p shopify_api --locked"
 
 [tasks.doc]
 description = "Build the documentation, warnings are errors"
-env = { RUSTDOCFLAGS = "-D warnings --cfg docsrs" }
+env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --all-features --no-deps --locked"
 
 [tasks.check]
