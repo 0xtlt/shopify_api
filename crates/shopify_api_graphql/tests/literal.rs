@@ -320,7 +320,10 @@ fn enum_values_are_checked_and_raw_is_only_for_enums() {
     )
     .unwrap();
     // `raw(…)` is an argument, evaluated where the caller wrote it.
-    assert!(code.contains("Field (\"status\" , value0)"), "{code}");
+    assert!(
+        code.contains("Field (\"status\" , __shopify_api_value0)"),
+        "{code}"
+    );
     assert!(
         code.contains(". build (:: shopify_api :: __private :: literal :: raw ((status)) , (id))"),
         "{code}"

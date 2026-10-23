@@ -112,21 +112,6 @@ impl Serialize for Collected {
     }
 }
 
-/// Functions named like the parameters of the method the macros generate,
-/// imported where it is declared: a parameter may shadow a function, so no
-/// constant of the caller's of the same name turns it into a pattern.
-pub mod names {
-    macro_rules! names {
-        ($($name:ident)*) => {$(
-            pub fn $name() {}
-        )*};
-    }
-
-    names!(
-        value0 value1 value2 value3 value4 value5 value6 value7 value8 value9 value10 value11 value12 value13 value14 value15 value16 value17 value18 value19 value20 value21 value22 value23 value24 value25 value26 value27 value28 value29 value30 value31 value32 value33 value34 value35 value36 value37 value38 value39 value40 value41 value42 value43 value44 value45 value46 value47 value48 value49 value50 value51 value52 value53 value54 value55 value56 value57 value58 value59 value60 value61 value62 value63
-    );
-}
-
 #[derive(Debug)]
 pub struct Object<F>(pub F);
 

@@ -161,8 +161,9 @@ enum Place {
 /// builds the value; the method, and the traits that check each argument,
 /// are declared in a block of their own, the receiver of the call. A
 /// constant (`"text"`, `12`, `true`) is written in place, with nothing to
-/// check. The code declares no local that a constant of the caller's could
-/// match.
+/// check. Its locals and parameters are `__shopify_api_…` names, on
+/// mixed-site spans: a constant of the caller's of one of these names could
+/// only make the code fail to compile (E0530), never change what it sends.
 pub struct Literals<'a> {
     schema: &'a Schema,
     krate: TokenStream,
@@ -1154,7 +1155,11 @@ impl Build {
         ty: TokenStream,
         arg: TokenStream,
     ) -> TokenStream {
-        let name = format_ident!("value{}", self.params.len());
+        let name = format_ident!(
+            "__shopify_api_value{}",
+            self.params.len(),
+            span = Span::mixed_site()
+        );
         self.generics.extend(generic);
         self.params.push(quote!(#name: #ty));
         self.args.push(arg);
@@ -1177,18 +1182,9 @@ impl Build {
         if args.is_empty() {
             return quote!({ #path #json });
         }
-        // The parameters shadow functions of these names, and so no
-        // constant: `literal::names` has the first ones.
-        let names = (NAMES..params.len()).map(|n| {
-            let name = format_ident!("value{n}");
-            quote!(#[allow(dead_code)] fn #name() {})
-        });
         quote! {
             ({
                 #path
-                #[allow(unused_imports)]
-                use #krate::__private::literal::names::*;
-                #(#names)*
                 #(#items)*
                 struct Checks;
                 impl Checks {
@@ -1206,9 +1202,6 @@ impl Build {
         }
     }
 }
-
-/// How many names of parameters `literal::names` has.
-const NAMES: usize = 64;
 
 const INT_TYPES: [&str; 10] = [
     "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
