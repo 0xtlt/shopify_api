@@ -7,6 +7,7 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
+use super::check::{Invalid, VariableType};
 use crate::{ApiVersion, Error, Result};
 
 /// A query or a mutation.
@@ -284,38 +285,65 @@ impl<D> Operation<D> {
         }
     }
 
-    fn set(mut self, name: &str, value: serde_json::Result<Box<RawValue>>) -> Self {
+    fn set(
+        mut self,
+        name: &str,
+        value: std::result::Result<Box<RawValue>, VariablesFailure>,
+    ) -> Self {
         match (&mut self.variables, value) {
             (Ok(variables), Ok(value)) => match variables.iter_mut().find(|(set, _)| set == name) {
                 Some((_, set)) => *set = value,
                 None => variables.push((name.to_string(), value)),
             },
-            (Ok(_), Err(error)) => {
-                self.variables = Err(VariablesFailure::of(Error::variables(Some(name), &error)))
-            }
+            (Ok(_), Err(failure)) => self.variables = Err(failure),
             (Err(_), _) => {}
         }
         self
     }
 
+    fn set_json(self, name: &str, value: &impl Serialize) -> Self {
+        let value = serde_json::value::to_raw_value(value)
+            .map_err(|error| VariablesFailure::of(Error::variables(Some(name), &error)));
+        self.set(name, value)
+    }
+
+    fn set_checked(self, name: &str, value: &impl VariableType) -> Self {
+        match value.check(false) {
+            Ok(()) => self.set_json(name, value),
+            Err(invalid) => self.set(name, Err(VariablesFailure::invalid(name, invalid))),
+        }
+    }
+
     /// Sets a variable to a value convertible to `T`, the Rust type of its
     /// GraphQL type.
-    pub fn variable<T: Serialize, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
-        self.set(
-            name,
-            serde_json::value::to_raw_value(&value.into_variable()),
-        )
+    ///
+    /// The value is checked as [`VariableType`] says: one that Shopify would
+    /// not read as written makes the operation fail with
+    /// [`Error::InvalidValue`] before it is sent.
+    pub fn variable<T: VariableType, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
+        self.set_checked(name, &value.into_variable())
     }
 
     /// Sets a variable to any serializable value, checked by nothing.
     pub fn json_variable<V: Serialize>(self, name: &str, value: V) -> Self {
-        self.set(name, serde_json::value::to_raw_value(&value))
+        self.set_json(name, &value)
+    }
+
+    /// What the `Variables` of a `graphql!` module set a variable with.
+    #[doc(hidden)]
+    pub fn __variable<T: VariableType>(self, name: &str, value: T) -> Self {
+        self.set_checked(name, &value)
     }
 
     /// What `graphql!` sets a variable written as a literal to.
     #[doc(hidden)]
-    pub fn __literal_variable(self, name: &str, value: Box<RawValue>) -> Self {
-        self.set(name, Ok(value))
+    pub fn __literal_variable(
+        self,
+        name: &str,
+        value: std::result::Result<Box<RawValue>, Invalid>,
+    ) -> Self {
+        let value = value.map_err(|invalid| VariablesFailure::invalid(name, invalid));
+        self.set(name, value)
     }
 
     /// Replaces the variables with the fields of a serializable struct or map.
@@ -413,29 +441,45 @@ pub(crate) fn variables_of(variables: impl Serialize) -> Result<Map<String, Valu
     }
 }
 
-/// An [`Error::Variables`] kept until the operation is sent. Its `Debug` is
-/// the error's: the detail is not shown.
+/// An [`Error::Variables`] or an [`Error::InvalidValue`] kept until the
+/// operation is sent. Its `Debug` shows no detail.
 #[derive(Clone, Debug)]
-struct VariablesFailure {
-    message: String,
-    detail: Option<crate::SensitiveDetail>,
+enum VariablesFailure {
+    Variables {
+        message: String,
+        detail: Option<crate::SensitiveDetail>,
+    },
+    Invalid {
+        variable: String,
+        invalid: Invalid,
+    },
 }
 
 impl VariablesFailure {
     fn of(error: Error) -> Self {
         match error {
-            Error::Variables { message, detail } => Self { message, detail },
-            other => Self {
+            Error::Variables { message, detail } => Self::Variables { message, detail },
+            other => Self::Variables {
                 message: other.to_string(),
                 detail: None,
             },
         }
     }
 
+    fn invalid(variable: &str, invalid: Invalid) -> Self {
+        Self::Invalid {
+            variable: variable.to_string(),
+            invalid,
+        }
+    }
+
     fn to_error(&self) -> Error {
-        Error::Variables {
-            message: self.message.clone(),
-            detail: self.detail.clone(),
+        match self {
+            Self::Variables { message, detail } => Error::Variables {
+                message: message.clone(),
+                detail: detail.clone(),
+            },
+            Self::Invalid { variable, invalid } => invalid.clone().into_error(variable),
         }
     }
 }
@@ -474,7 +518,8 @@ impl<D> std::fmt::Debug for Operation<D> {
 /// `Option` when the variable is nullable and in `Vec` for lists. The
 /// implementations then accept the usual Rust spellings of those values:
 /// `&str` for a string, any integer for an `Int`, a bare value for a nullable
-/// variable, a slice for a list.
+/// variable, a slice for a list. The value converted is then checked, as
+/// [`VariableType`] says.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a value for a GraphQL variable of Rust type `{T}`",
     label = "the variable expects a value convertible to `{T}`"
@@ -514,7 +559,7 @@ into_variable!(i64:
     u8 => |value| value.into(),
     u16 => |value| value.into(),
     u32 => |value| value.into(),
-    // Larger than any GraphQL `Int`: Shopify rejects the saturated value.
+    // Saturated: out of the range of `Int` all the same, and refused.
     u64 => |value| i64::try_from(value).unwrap_or(i64::MAX),
     usize => |value| i64::try_from(value).unwrap_or(i64::MAX),
     isize => |value| i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX }),
@@ -710,11 +755,91 @@ mod tests {
     }
 
     #[test]
-    fn integers_that_do_not_fit_are_saturated() {
-        let operation = Operation::<()>::new("query { shop { id } }")
-            .variable::<i64, _>("big", u64::MAX)
-            .variable::<i64, _>("fits", 7_u64);
-        assert_eq!(variables(operation), json!({ "big": i64::MAX, "fits": 7 }));
+    fn values_shopify_would_not_read_as_written_are_refused_before_sending() {
+        let operation = || Operation::<()>::new("query { shop { id } }");
+        let fits = operation()
+            .variable::<i64, _>("min", i32::MIN)
+            .variable::<i64, _>("max", i64::from(i32::MAX))
+            .variable::<i64, _>("unsigned", u64::from(i32::MAX.unsigned_abs()))
+            .variable::<f64, _>("ratio", f64::MAX)
+            .variable::<Option<Value>, _>("nullable", Value::Null)
+            .variable::<Vec<Option<Value>>, _>("items", vec![Value::Null])
+            .variable::<Value, _>("nested", json!({ "a": null }));
+        assert_eq!(
+            variables(fits),
+            json!({
+                "min": i32::MIN,
+                "max": i32::MAX,
+                "unsigned": i32::MAX,
+                "ratio": f64::MAX,
+                "nullable": null,
+                "items": [null],
+                "nested": { "a": null },
+            })
+        );
+
+        for (operation, shown) in [
+            (
+                operation().variable::<i64, _>("big", u64::MAX),
+                "invalid value at `$big`: Int out of 32-bit range",
+            ),
+            (
+                operation().variable::<i64, _>("first", 2_147_483_648_i64),
+                "invalid value at `$first`: Int out of 32-bit range",
+            ),
+            (
+                operation().variable::<Option<i64>, _>("last", -2_147_483_649_i64),
+                "invalid value at `$last`: Int out of 32-bit range",
+            ),
+            (
+                operation().variable::<f64, _>("ratio", f64::NAN),
+                "invalid value at `$ratio`: not a finite Float",
+            ),
+            (
+                operation().variable::<Option<f64>, _>("ratio", f32::NEG_INFINITY),
+                "invalid value at `$ratio`: not a finite Float",
+            ),
+            (
+                operation().variable::<Vec<f64>, _>("ratios", [1.0, f64::INFINITY]),
+                "invalid value at `$ratios[1]`: not a finite Float",
+            ),
+            (
+                operation().variable::<Vec<Option<i64>>, _>(
+                    "counts",
+                    vec![Some(1), None, Some(1_i64 << 40)],
+                ),
+                "invalid value at `$counts[2]`: Int out of 32-bit range",
+            ),
+            (
+                operation().variable::<Value, _>("settings", Value::Null),
+                "invalid value at `$settings`: null for a non-null JSON field",
+            ),
+            (
+                operation().variable::<Vec<Value>, _>("settings", vec![json!(1), Value::Null]),
+                "invalid value at `$settings[1]`: null for a non-null JSON field",
+            ),
+            (
+                operation().variable::<f64, _>("a name", f64::NAN),
+                "invalid value at `$[variable]`: not a finite Float",
+            ),
+            (
+                // The first refusal stays.
+                operation()
+                    .variable::<i64, _>("first", u32::MAX)
+                    .variable::<f64, _>("ratio", f64::NAN)
+                    .variable::<i64, _>("first", 1),
+                "invalid value at `$first`: Int out of 32-bit range",
+            ),
+        ] {
+            let error = operation.body().unwrap_err();
+            assert_eq!(error.to_string(), shown);
+            assert!(matches!(error, Error::InvalidValue { detail: None, .. }));
+            assert_eq!(operation.variables_json().unwrap_err().to_string(), shown);
+            assert_eq!(
+                operation.clone().body_json().unwrap_err().to_string(),
+                shown
+            );
+        }
     }
 
     #[test]

@@ -400,6 +400,137 @@ async fn a_nullable_input_variable_takes_null_an_option_or_a_literal() {
     );
 }
 
+/// What Shopify would not read as written: an `Int` beyond 32 bits, a
+/// `Float` that is not finite, `null` for a non-null `JSON`. The operation
+/// fails before anything is sent, saying where and why, never the value.
+#[tokio::test]
+async fn values_shopify_would_not_read_as_written_fail_before_anything_is_sent() {
+    let mock = MockTransport::new();
+    let shopify = client(&mock);
+    let big: i64 = 1 << 40;
+    let quantities = [1_u64, 2, u64::MAX];
+    let nan = f64::NAN;
+    let weights = [Some(1.5), None, Some(f64::INFINITY)];
+    let line_item = input!(DraftOrderLineItemInput { quantity: big });
+    let pixel = input!(WebPixelInput {
+        settings: serde_json::Value::Null
+    });
+
+    let errors = [
+        shopify
+            .execute(graphql!("mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }", input = { lineItems: [{ quantity: 1 }, { quantity: big }] }))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!("mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }", input = {
+                lineItems: [{ quantity: 1, weight: { unit: KILOGRAMS, value: nan } }],
+            }))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!("mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }", input = {
+                lineItems: [for quantity in quantities => { quantity: quantity }],
+            }))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!("mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }", input = {
+                lineItems: [for (i, weight) in weights.iter().enumerate() => {
+                    quantity: i,
+                    weight?: weight.map(|value| input!(WeightInput { unit: GRAMS, value: value })),
+                }],
+            }))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!("mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }", input = { lineItems: [line_item.clone()] }))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!("mutation($webPixel: WebPixelInput!) { webPixelCreate(webPixel: $webPixel) { userErrors { message } } }", webPixel = pixel.clone()))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!(
+                "mutation($id: ID!, $discount: DiscountAutomaticBasicInput!) { discountAutomaticBasicUpdate(id: $id, automaticBasicDiscount: $discount) { userErrors { message } } }",
+                id = "gid://shopify/DiscountAutomaticNode/1",
+                discount = { customerGets: { value: { percentage: f64::INFINITY }, items: { all: true } } },
+            ))
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(recent_products::Variables { first: big, sort_key: None })
+            .await
+            .unwrap_err(),
+        shopify
+            .execute(graphql!(
+                "query($first: Int!) { products(first: $first) { nodes { id } } }",
+                first = u64::MAX,
+            ))
+            .await
+            .unwrap_err(),
+    ];
+    let shown: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        shown,
+        [
+            "invalid value at `$input.lineItems[1].quantity`: Int out of 32-bit range",
+            "invalid value at `$input.lineItems[0].weight.value`: not a finite Float",
+            "invalid value at `$input.lineItems[2].quantity`: Int out of 32-bit range",
+            "invalid value at `$input.lineItems[2].weight.value`: not a finite Float",
+            "invalid value at `$input.lineItems[0].quantity`: Int out of 32-bit range",
+            "invalid value at `$webPixel.settings`: null for a non-null JSON field",
+            "invalid value at `$discount.customerGets.value.percentage`: not a finite Float",
+            "invalid value at `$first`: Int out of 32-bit range",
+            "invalid value at `$first`: Int out of 32-bit range",
+        ]
+    );
+    for error in &errors {
+        assert!(matches!(
+            error,
+            shopify_api::Error::InvalidValue { detail: None, .. }
+        ));
+        let debug = format!("{error:?}");
+        assert!(
+            !debug.contains("1099511627776") && !debug.contains("NaN"),
+            "{debug}"
+        );
+    }
+    assert!(mock.requests().is_empty());
+
+    // Serialized on its own, an input object fails the same way.
+    let error = serde_json::to_string(&line_item).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid value at `DraftOrderLineItemInput.quantity`: Int out of 32-bit range"
+    );
+    assert_eq!(
+        format!("{pixel:?}"),
+        "invalid value at `WebPixelInput.settings`: null for a non-null JSON field"
+    );
+}
+
+/// The bounds are allowed, and nulls inside `JSON`.
+#[test]
+fn values_at_the_bounds_are_sent() {
+    let line_item = input!(DraftOrderLineItemInput {
+        quantity: i64::from(i32::MAX),
+        weight: { unit: GRAMS, value: f64::MAX },
+    });
+    let pixel = input!(WebPixelInput {
+        settings: json!({ "a": null })
+    });
+    let discount = input!(DiscountCustomerGetsValueInput { percentage?: Some(f64::MIN_POSITIVE) });
+    assert_eq!(
+        serde_json::to_value((&line_item, &pixel, &discount)).unwrap(),
+        json!([
+            { "quantity": i32::MAX, "weight": { "unit": "GRAMS", "value": f64::MAX } },
+            { "settings": { "a": null } },
+            { "percentage": f64::MIN_POSITIVE },
+        ])
+    );
+}
+
 /// Names like the ones the macros generate, or generated before, given to
 /// the caller's locals, closures, functions, constants and trait methods:
 /// the values sent are the caller's.

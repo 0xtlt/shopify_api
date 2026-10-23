@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::graphql::{Cost, GraphqlError, UserError};
+use crate::graphql::{Cost, GraphqlError, InvalidValueReason, UserError};
 use crate::transport::{HttpResponse, TransportError};
 
 /// `Result<T, shopify_api::Error>`.
@@ -28,6 +28,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 ///   `[key]`;
 /// - nothing of what a `Serialize` implementation wrote: [`Error::Variables`]
 ///   says which variable does not serialize, and why in this crate's words;
+/// - no value of a variable: [`Error::InvalidValue`] says where the value
+///   stands and why it is refused;
 /// - of an address, the scheme, the host and the path only: no user, no
 ///   password, no query string (a signature), no fragment;
 /// - of the token endpoint's refusal, its status and its standard OAuth error
@@ -139,6 +141,26 @@ pub enum Error {
         detail: Option<SensitiveDetail>,
     },
 
+    /// A value of a variable that Shopify would not read as it was
+    /// written, refused before anything is sent: a `Float` that is NaN or
+    /// infinite (JSON writes it as `null`), an `Int` outside of 32 bits, a
+    /// top-level `null` for a non-null `JSON`, or a value that does not
+    /// serialize. [`input!`](crate::input!), the values of
+    /// [`graphql!`](crate::graphql!) and [`Operation::variable`](crate::Operation::variable)
+    /// keep it when the value is built; the operation fails with it when it
+    /// is sent or its body is read.
+    #[non_exhaustive]
+    InvalidValue {
+        /// Where the value stands: the variable, then the fields and
+        /// indexes of the schema, `$product.metafields[2].value`. A variable
+        /// whose name is not a GraphQL name is `$[variable]`.
+        path: String,
+        reason: InvalidValueReason,
+        /// The message of the `Serialize` implementation that failed: it may
+        /// quote the value. See [`Error::sensitive_detail`].
+        detail: Option<SensitiveDetail>,
+    },
+
     /// A token could not be obtained or renewed.
     #[non_exhaustive]
     Auth {
@@ -207,6 +229,9 @@ impl fmt::Display for Error {
                 "Shopify's answer does not match the operation at `{path}`: {message}"
             ),
             Self::Variables { message, .. } => write!(formatter, "invalid variables: {message}"),
+            Self::InvalidValue { path, reason, .. } => {
+                write!(formatter, "invalid value at `{path}`: {reason}")
+            }
             Self::Auth { message, .. } => write!(formatter, "authentication failed: {message}"),
             Self::UserErrors { mutation, errors } => {
                 write!(formatter, "{mutation} refused: {}", UserErrors(errors))
@@ -294,6 +319,16 @@ impl fmt::Debug for Error {
             Self::Variables { message, detail } => formatter
                 .debug_struct("Variables")
                 .field("message", message)
+                .field("detail", detail)
+                .finish(),
+            Self::InvalidValue {
+                path,
+                reason,
+                detail,
+            } => formatter
+                .debug_struct("InvalidValue")
+                .field("path", path)
+                .field("reason", reason)
                 .field("detail", detail)
                 .finish(),
             Self::Auth { message, detail } => formatter
@@ -405,9 +440,9 @@ impl Error {
     }
 
     /// The text this crate does not show, for [`Error::Decode`] (serde's
-    /// message), [`Error::Variables`] (the message of the `Serialize`
-    /// implementation that failed) and [`Error::Auth`] (what the token
-    /// endpoint said).
+    /// message), [`Error::Variables`] and [`Error::InvalidValue`] (the
+    /// message of the `Serialize` implementation that failed) and
+    /// [`Error::Auth`] (what the token endpoint said).
     ///
     /// **It may contain secrets**: serde quotes the value that does not fit,
     /// a map key, or what a type's own implementation wrote, and a token
@@ -416,6 +451,7 @@ impl Error {
         match self {
             Self::Decode { detail, .. }
             | Self::Variables { detail, .. }
+            | Self::InvalidValue { detail, .. }
             | Self::Auth { detail, .. } => detail.as_ref().map(SensitiveDetail::as_str),
             _ => None,
         }
@@ -513,7 +549,7 @@ impl Error {
 }
 
 /// A GraphQL name: what a variable is called in an operation.
-fn is_graphql_name(name: &str) -> bool {
+pub(crate) fn is_graphql_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes
         .next()
@@ -549,6 +585,10 @@ impl fmt::Debug for RawBody {
 pub struct SensitiveDetail(String);
 
 impl SensitiveDetail {
+    pub(crate) fn new(detail: String) -> Self {
+        Self(detail)
+    }
+
     /// The message. It may contain secrets: do not log it.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -904,6 +944,25 @@ mod tests {
                 .unwrap_err(),
         ));
         errors.push((
+            "InvalidValue",
+            crate::graphql::Operation::<Value>::new("query { shop { id } }")
+                .variable::<f64, _>(&format!("{TOKEN}\""), f64::NAN)
+                .variables_json()
+                .unwrap_err(),
+        ));
+        errors.push((
+            "InvalidValue, does not serialize",
+            crate::graphql::Operation::<Value>::new("query { shop { id } }")
+                .__literal_variable(
+                    "x",
+                    Err(crate::graphql::check::Invalid::unserializable(
+                        &serde_json::to_value(Leaky).unwrap_err(),
+                    )),
+                )
+                .variables_json()
+                .unwrap_err(),
+        ));
+        errors.push((
             "Variables of graphql_raw",
             crate::graphql::operation::variables_of(BTreeMap::from([("x", Leaky)])).unwrap_err(),
         ));
@@ -980,6 +1039,7 @@ mod tests {
             "Http",
             "InvalidApiVersion",
             "InvalidShop",
+            "InvalidValue",
             "NoTransport",
             "Throttled",
             "Timeout",
@@ -1007,6 +1067,7 @@ mod tests {
             Error::Throttled { .. } => "Throttled",
             Error::Decode { .. } => "Decode",
             Error::Variables { .. } => "Variables",
+            Error::InvalidValue { .. } => "InvalidValue",
             Error::Auth { .. } => "Auth",
             Error::UserErrors { .. } => "UserErrors",
             Error::Bulk(_) => "Bulk",

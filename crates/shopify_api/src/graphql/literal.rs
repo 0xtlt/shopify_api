@@ -3,19 +3,119 @@
 //!
 //! An object literal is a list of fields nested in tuples,
 //! `Object((Field("id", id), (Optional("vendor", vendor), ())))`, written in
-//! its order; the macros check its fields and their values first.
+//! its order; the macros check its fields and their values first. A Rust
+//! expression in it is a [`Leaf`], checked for the scalar it stands for when
+//! the value is built.
+
+use std::marker::PhantomData;
 
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::value::RawValue;
 
+pub use super::check::{Float, Int, Invalid, Json, Plain, Validate};
 use crate::Maybe;
 
-/// The JSON of a value the macros accept.
-pub fn to_raw(value: &impl Serialize) -> Box<RawValue> {
-    // The macros only accept strings, numbers, booleans, `serde_json::Value`,
-    // input objects, and lists and objects of them: none fails to serialize.
-    serde_json::value::to_raw_value(value)
-        .expect("the values `graphql!` and `input!` accept always serialize")
+/// The JSON of a value, or why it is refused.
+pub fn to_raw(value: &(impl Check + Serialize)) -> Result<Box<RawValue>, Invalid> {
+    value.check()?;
+    serde_json::value::to_raw_value(value).map_err(|error| Invalid::unserializable(&error))
+}
+
+/// A value of a literal, checked before it is serialized.
+pub trait Check {
+    fn check(&self) -> Result<(), Invalid>;
+}
+
+/// `null`, an enum value, the string of `raw(…)`, a literal Rust value
+/// whose type cannot be refused.
+macro_rules! unchecked {
+    ($($ty:ty),+) => {$(
+        impl Check for $ty {
+            fn check(&self) -> Result<(), Invalid> {
+                Ok(())
+            }
+        }
+    )+};
+}
+
+unchecked!((), &str, String, bool);
+
+impl<T: Check> Check for &T {
+    fn check(&self) -> Result<(), Invalid> {
+        (**self).check()
+    }
+}
+
+/// A Rust expression for a value of the scalar `K`.
+#[derive(Debug)]
+pub struct Leaf<V, K>(V, PhantomData<fn() -> K>);
+
+pub fn leaf<K, V>(value: V) -> Leaf<V, K> {
+    Leaf(value, PhantomData)
+}
+
+/// `field?: value`, the value checked as a `K`.
+pub fn optional<K, T>(value: Maybe<T>) -> Maybe<Leaf<T, K>> {
+    match value {
+        Maybe::Absent => Maybe::Absent,
+        Maybe::Null => Maybe::Null,
+        Maybe::Value(value) => Maybe::Value(leaf(value)),
+    }
+}
+
+impl<V: Validate<K>, K> Check for Leaf<V, K> {
+    fn check(&self) -> Result<(), Invalid> {
+        self.0.validate()
+    }
+}
+
+impl<V: Serialize, K> Serialize for Leaf<V, K> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+/// The items of `[for … => …]`, each written in its turn of the loop, and
+/// the first that is refused.
+#[derive(Debug)]
+pub struct Collected {
+    items: Vec<Box<RawValue>>,
+    invalid: Option<Invalid>,
+}
+
+impl Collected {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            invalid: None,
+        }
+    }
+
+    pub fn push(&mut self, value: &(impl Check + Serialize)) {
+        if self.invalid.is_some() {
+            return;
+        }
+        match to_raw(value) {
+            Ok(item) => self.items.push(item),
+            Err(invalid) => self.invalid = Some(invalid.index(self.items.len())),
+        }
+    }
+}
+
+impl Check for Collected {
+    fn check(&self) -> Result<(), Invalid> {
+        match &self.invalid {
+            Some(invalid) => Err(invalid.clone()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Serialize for Collected {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(&self.items)
+    }
 }
 
 #[derive(Debug)]
@@ -29,23 +129,43 @@ pub struct Field<V>(pub &'static str, pub V);
 pub struct Optional<V>(pub &'static str, pub Maybe<V>);
 
 pub trait Fields {
+    fn check(&self) -> Result<(), Invalid>;
     fn write<M: SerializeMap>(&self, map: &mut M) -> Result<(), M::Error>;
 }
 
 impl Fields for () {
+    fn check(&self) -> Result<(), Invalid> {
+        Ok(())
+    }
+
     fn write<M: SerializeMap>(&self, _: &mut M) -> Result<(), M::Error> {
         Ok(())
     }
 }
 
-impl<V: Serialize, R: Fields> Fields for (Field<V>, R) {
+impl<V: Check + Serialize, R: Fields> Fields for (Field<V>, R) {
+    fn check(&self) -> Result<(), Invalid> {
+        self.0
+            .1
+            .check()
+            .map_err(|invalid| invalid.field(self.0.0))?;
+        self.1.check()
+    }
+
     fn write<M: SerializeMap>(&self, map: &mut M) -> Result<(), M::Error> {
         map.serialize_entry(self.0.0, &self.0.1)?;
         self.1.write(map)
     }
 }
 
-impl<V: Serialize, R: Fields> Fields for (Optional<V>, R) {
+impl<V: Check + Serialize, R: Fields> Fields for (Optional<V>, R) {
+    fn check(&self) -> Result<(), Invalid> {
+        if let Maybe::Value(value) = &self.0.1 {
+            value.check().map_err(|invalid| invalid.field(self.0.0))?;
+        }
+        self.1.check()
+    }
+
     fn write<M: SerializeMap>(&self, map: &mut M) -> Result<(), M::Error> {
         match &self.0.1 {
             Maybe::Absent => {}
@@ -53,6 +173,12 @@ impl<V: Serialize, R: Fields> Fields for (Optional<V>, R) {
             Maybe::Value(value) => map.serialize_entry(self.0.0, value)?,
         }
         self.1.write(map)
+    }
+}
+
+impl<F: Fields> Check for Object<F> {
+    fn check(&self) -> Result<(), Invalid> {
+        self.0.check()
     }
 }
 
@@ -69,19 +195,36 @@ impl<F: Fields> Serialize for Object<F> {
 pub struct List<I>(pub I);
 
 pub trait Items {
+    /// Checks the items, the first being at `index`.
+    fn check(&self, index: usize) -> Result<(), Invalid>;
     fn write<S: SerializeSeq>(&self, seq: &mut S) -> Result<(), S::Error>;
 }
 
 impl Items for () {
+    fn check(&self, _: usize) -> Result<(), Invalid> {
+        Ok(())
+    }
+
     fn write<S: SerializeSeq>(&self, _: &mut S) -> Result<(), S::Error> {
         Ok(())
     }
 }
 
-impl<V: Serialize, R: Items> Items for (V, R) {
+impl<V: Check + Serialize, R: Items> Items for (V, R) {
+    fn check(&self, index: usize) -> Result<(), Invalid> {
+        self.0.check().map_err(|invalid| invalid.index(index))?;
+        self.1.check(index + 1)
+    }
+
     fn write<S: SerializeSeq>(&self, seq: &mut S) -> Result<(), S::Error> {
         seq.serialize_element(&self.0)?;
         self.1.write(seq)
+    }
+}
+
+impl<I: Items> Check for List<I> {
+    fn check(&self) -> Result<(), Invalid> {
+        self.0.check(0)
     }
 }
 
@@ -198,22 +341,70 @@ mod tests {
                 (
                     Optional("b", Maybe::<&str>::Null),
                     (
-                        Optional("c", option(Some(1))),
-                        (Field("list", List(("x", (2, ((), ()))))), ()),
+                        Optional("c", optional::<Int, _>(option(Some(1)))),
+                        (
+                            Field("list", List(("x", (leaf::<Int, _>(2), ((), ()))))),
+                            (),
+                        ),
                     ),
                 ),
             ),
         ));
         assert_eq!(
-            to_raw(&object).get(),
+            to_raw(&object).unwrap().get(),
             r#"{"type":"single_line_text_field","b":null,"c":1,"list":["x",2,null]}"#
         );
-        assert_eq!(to_raw(&Object(())).get(), "{}");
-        assert_eq!(to_raw(&List(())).get(), "[]");
+        assert_eq!(to_raw(&Object(())).unwrap().get(), "{}");
+        assert_eq!(to_raw(&List(())).unwrap().get(), "[]");
         assert_eq!(
             raw_optional(Maybe::Value("A")),
             Maybe::Value("A".to_string())
         );
         assert_eq!(raw_option(None::<&str>), Maybe::Absent);
+    }
+
+    #[test]
+    fn a_value_is_checked_for_its_scalar_and_refused_with_where_it_stands() {
+        use serde_json::Value;
+
+        let refused = |value: Result<Box<RawValue>, Invalid>| value.unwrap_err().message("T");
+        assert_eq!(
+            refused(to_raw(&Object((
+                Optional("j", optional::<Json, _>(Maybe::Value(Value::Null))),
+                ()
+            )))),
+            "invalid value at `T.j`: null for a non-null JSON field"
+        );
+        assert_eq!(
+            refused(to_raw(&Object((
+                Field(
+                    "list",
+                    List((
+                        leaf::<Float, _>(1.0),
+                        (leaf::<Float, _>(vec![Some(f32::NAN)]), ())
+                    ))
+                ),
+                ()
+            )))),
+            "invalid value at `T.list[1][0]`: not a finite Float"
+        );
+        let mut collected = Collected::new();
+        for quantity in [1_usize, 2, 1 << 40, 3, usize::MAX] {
+            collected.push(&Object((Field("quantity", leaf::<Int, _>(quantity)), ())));
+        }
+        assert_eq!(
+            refused(to_raw(&Object((Field("items", &collected), ())))),
+            "invalid value at `T.items[2].quantity`: Int out of 32-bit range"
+        );
+        // `null` of a nullable `JSON`, and nulls inside a `JSON`, are sent.
+        assert_eq!(
+            to_raw(&List((
+                leaf::<Plain, _>(Value::Null),
+                (leaf::<Json, _>(serde_json::json!([null])), ())
+            )))
+            .unwrap()
+            .get(),
+            "[null,[null]]"
+        );
     }
 }

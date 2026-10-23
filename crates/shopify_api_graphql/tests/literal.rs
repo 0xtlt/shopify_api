@@ -122,7 +122,7 @@ fn an_object_is_sent_field_by_field_in_its_order() {
     let id = input_object_id("ProductUpdateInput");
     assert!(
         code.starts_with(&format!(
-            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , & :: shopify_api :: __private :: literal :: Object ((:: shopify_api :: __private :: literal :: Field (\"id\" , ({{"
+            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , :: shopify_api :: __private :: literal :: to_raw (& :: shopify_api :: __private :: literal :: Object ((:: shopify_api :: __private :: literal :: Field (\"id\" , ({{"
         )),
         "{code}"
     );
@@ -466,4 +466,49 @@ fn input_object_ids_differ_for_every_input_object_of_the_schema() {
         }
     }
     assert!(seen.len() > 500);
+}
+
+/// Each Rust expression is checked, when it is built, for the scalar its
+/// innermost type is: an `Int`, a `Float`, a non-null `JSON`, with or
+/// without `?:`.
+#[test]
+fn each_expression_is_checked_for_its_scalar() {
+    let schema = Schema::from_json(
+        r#"{"format": 1, "apiVersion": "2026-10", "query": "Q", "types": {
+            "String": "s", "Int": "s", "Float": "s", "Boolean": "s", "JSON": "s",
+            "T": {"i": {"i": "Int!", "f": "[Float]", "j": "JSON!", "jd": "JSON!=", "jl": "[JSON!]", "jn": "JSON", "s": "String"}},
+            "Q": {"o": {"f": {"echo": ["String", {"input": "T!"}]}}}
+        }}"#,
+    )
+    .unwrap();
+    let mut literals = Literals::new(&schema, quote!(::shopify_api));
+    let code = literals
+        .input_object(
+            "T",
+            Span::call_site(),
+            &object(vec![
+                ("i", rust("a")),
+                ("f", rust("b")),
+                ("j", rust("c")),
+                ("jd?", rust("d")),
+                ("jl", rust("e")),
+                ("jn", rust("f")),
+                ("s", rust("g")),
+            ]),
+        )
+        .unwrap()
+        .to_string();
+    let marker = "literal :: Leaf < ";
+    let kinds: Vec<&str> = code
+        .match_indices(marker)
+        .map(|(at, _)| {
+            let rest = &code[at + marker.len()..];
+            let kind = &rest[rest.find("literal :: ").unwrap() + "literal :: ".len()..];
+            &kind[..kind.find(' ').unwrap()]
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["Int", "Float", "Json", "Json", "Json", "Plain", "Plain"]
+    );
 }

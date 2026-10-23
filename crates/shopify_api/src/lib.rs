@@ -83,8 +83,8 @@ pub use auth::{AssociatedUser, Auth, TokenData, TokenStore};
 pub use client::{RetryPolicy, Shopify, ShopifyBuilder, USER_AGENT};
 pub use error::{Error, GraphqlErrors, RawBody, Result, SensitiveDetail};
 pub use graphql::{
-    Cost, GraphqlError, InputObject, IntoVariable, Location, Maybe, Operation, OperationKind,
-    RawResponse, Response, ThrottleStatus, UserError,
+    Cost, GraphqlError, InputObject, IntoVariable, InvalidValueReason, Location, Maybe, Operation,
+    OperationKind, RawResponse, Response, ThrottleStatus, UserError, VariableType,
 };
 pub use pagination::Page;
 pub use shop::ShopDomain;

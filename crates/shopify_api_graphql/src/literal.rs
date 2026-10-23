@@ -204,14 +204,15 @@ impl<'a> Literals<'a> {
         let ty = &variable.ty;
         let site = Site::Variable(variable.name.clone());
         let scalar = matches!(self.schema.get(ty.name()), Some(TypeDef::Scalar));
-        let converted = |value: Expr| VariableValue::Converted {
-            ty: variable_type(variable, &self.krate)
-                .expect("a variable of a scalar or an enum has a Rust type"),
-            value,
+        let rust_type = variable_type(variable, &self.krate);
+        let convert = |value: Expr| {
+            rust_type
+                .clone()
+                .map(|ty| VariableValue::Converted { ty, value })
         };
-        match value {
-            Value::Rust(expr) if scalar => return Ok(converted(expr.clone())),
-            Value::Ident(ident) if scalar => return Ok(converted(ident_expr(ident))),
+        let converted = match value {
+            Value::Rust(expr) if scalar => convert(expr.clone()),
+            Value::Ident(ident) if scalar => convert(ident_expr(ident)),
             Value::List(List {
                 items,
                 rust: Some(rust),
@@ -221,13 +222,16 @@ impl<'a> Literals<'a> {
                     .iter()
                     .all(|item| matches!(item, Value::Rust(_) | Value::Ident(_))) =>
             {
-                return Ok(converted(rust.clone()));
+                convert(rust.clone())
             }
             Value::Raw { keyword, value } => {
                 self.enum_only(ty, *keyword, &site)?;
-                return Ok(converted(value.clone()));
+                convert(value.clone())
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(converted) = converted {
+            return Ok(converted);
         }
         let code = self.value(value, ty, &site, Place::Variable)?;
         let krate = &self.krate;
@@ -274,7 +278,7 @@ impl<'a> Literals<'a> {
         let krate = &self.krate;
         let id = input_object_id(name);
         Ok(quote_spanned! {span=>
-            #krate::InputObject::<#id>::__new(#name, &#code)
+            #krate::InputObject::<#id>::__new(#name, #krate::__private::literal::to_raw(&#code))
         })
     }
 
@@ -367,13 +371,14 @@ impl<'a> Literals<'a> {
                 };
                 // Each item is written in its turn of the loop, so that it may
                 // borrow what the loop gives.
-                let push = quote!(::std::vec::Vec::push(&mut #items, #krate::__private::literal::to_raw(&#value)););
+                let push =
+                    quote!(#krate::__private::literal::Collected::push(&mut #items, &#value););
                 let body = match filter {
                     Some(filter) => quote!(if #filter { #push }),
                     None => push,
                 };
                 Ok(quote! {{
-                    let mut #items = ::std::vec::Vec::new();
+                    let mut #items = #krate::__private::literal::Collected::new();
                     for #pattern in #iterable { #body }
                     #items
                 }})
@@ -551,11 +556,12 @@ impl<'a> Literals<'a> {
             impl<V: #value_bound> #bound<V> for ::core::option::Option<V> {}
             impl<V: #maybe_bound> #bound<V> for #krate::Maybe<V> {}
         });
+        let kind = self.kind(&definition.ty);
         let checks = checks(
             &items,
             quote! {
-                fn optional<T, V: #bound<T>>(self, value: V) -> #krate::Maybe<T> {
-                    #krate::__private::literal::IntoMaybe::into_maybe(value)
+                fn optional<T, V: #bound<T>>(self, value: V) -> #krate::Maybe<#krate::__private::literal::Leaf<T, #kind>> {
+                    #krate::__private::literal::optional(#krate::__private::literal::IntoMaybe::into_maybe(value))
                 }
             },
         );
@@ -587,11 +593,13 @@ impl<'a> Literals<'a> {
         }
         let mut items = Vec::new();
         let bound = self.expect(ty, place, site, &mut items);
+        let krate = &self.krate;
+        let kind = self.kind(ty);
         let checks = checks(
             &items,
             quote! {
-                fn check<V: #bound>(self, value: V) -> V {
-                    value
+                fn check<V: #bound>(self, value: V) -> #krate::__private::literal::Leaf<V, #kind> {
+                    #krate::__private::literal::leaf(value)
                 }
             },
         );
@@ -795,6 +803,20 @@ impl<'a> Literals<'a> {
         }
     }
 
+    /// What a Rust expression of type `ty` is checked for when it is built:
+    /// the `Int`, `Float` or non-null `JSON` its innermost type is.
+    fn kind(&self, ty: &TypeRef) -> TokenStream {
+        let krate = &self.krate;
+        let (name, non_null) = innermost(ty);
+        let kind = match (self.schema.get(name), Scalar::of(name)) {
+            (Some(TypeDef::Scalar), Scalar::Int) => quote!(Int),
+            (Some(TypeDef::Scalar), Scalar::Float) => quote!(Float),
+            (Some(TypeDef::Scalar), Scalar::Json) if non_null => quote!(Json),
+            _ => quote!(Plain),
+        };
+        quote!(#krate::__private::literal::#kind)
+    }
+
     /// The innermost type of `ty` is an input object.
     fn holds_input(&self, ty: &TypeRef) -> bool {
         matches!(self.schema.get(ty.name()), Some(TypeDef::Input { .. }))
@@ -924,6 +946,18 @@ fn scalar_types(scalar: Scalar, krate: &TokenStream) -> Vec<TokenStream> {
             quote!(#krate::__private::serde_json::Value),
             quote!(&'a #krate::__private::serde_json::Value),
         ],
+    }
+}
+
+/// The innermost named type of `ty`, and whether it is non-null.
+fn innermost(ty: &TypeRef) -> (&str, bool) {
+    match ty {
+        TypeRef::Named(name) => (name, false),
+        TypeRef::NonNull(inner) => match &**inner {
+            TypeRef::Named(name) => (name, true),
+            other => innermost(other),
+        },
+        TypeRef::List(item) => innermost(item),
     }
 }
 

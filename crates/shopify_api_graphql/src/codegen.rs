@@ -310,7 +310,7 @@ pub fn variables_types(
                 pub #ident: #ty,
             });
             setters.push(quote! {
-                let operation = operation.json_variable(#key, variables.#ident);
+                let operation = operation.__variable(#key, variables.#ident);
             });
         } else {
             // `wrap` of a nullable type is already an `Option`.
@@ -323,7 +323,8 @@ pub fn variables_types(
             });
             setters.push(quote! {
                 let operation = match variables.#ident {
-                    ::core::option::Option::Some(value) => operation.json_variable(#key, value),
+                    // In `Some`: the value of a nullable variable may be `null`.
+                    value @ ::core::option::Option::Some(_) => operation.__variable(#key, value),
                     ::core::option::Option::None => operation,
                 };
             });

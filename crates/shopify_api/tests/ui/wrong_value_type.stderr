@@ -24,6 +24,6 @@ help: `&str` implements trait `IntoVariable<T>`
 note: required by a bound in `Operation::<D>::variable`
  --> src/graphql/operation.rs
   |
-  |     pub fn variable<T: Serialize, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
-  |                                      ^^^^^^^^^^^^^^^ required by this bound in `Operation::<D>::variable`
+  |     pub fn variable<T: VariableType, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
+  |                                         ^^^^^^^^^^^^^^^ required by this bound in `Operation::<D>::variable`
   = note: this error originates in the macro `into_variable` (in Nightly builds, run with -Z macro-backtrace for more info)

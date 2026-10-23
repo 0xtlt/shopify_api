@@ -1,6 +1,7 @@
 //! Running GraphQL operations: typed ones from [`graphql!`](crate::graphql!),
 //! untyped ones from any text.
 
+pub(crate) mod check;
 mod input;
 pub mod literal;
 pub(crate) mod operation;
@@ -10,6 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+pub use check::{InvalidValueReason, VariableType};
 pub use input::{InputObject, Maybe};
 pub use operation::{IntoVariable, Operation, OperationKind};
 pub use response::{

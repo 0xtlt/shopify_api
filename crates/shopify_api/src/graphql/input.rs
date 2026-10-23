@@ -4,6 +4,8 @@
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
 
+use super::check::Invalid;
+
 /// An input object of the schema, built and checked by
 /// [`input!`](crate::input!): `input!(MetafieldsSetInput { … })`.
 ///
@@ -15,33 +17,48 @@ use serde_json::value::RawValue;
 /// `input!` name the GraphQL type too.
 ///
 /// The value is opaque: it holds the JSON it is sent as, written when it is
-/// built.
+/// built. A value Shopify would not read as written (a `Float` that is not
+/// finite, an `Int` beyond 32 bits, `null` for a non-null `JSON`) is kept as
+/// refused: the operation that holds it fails with
+/// [`Error::InvalidValue`](crate::Error::InvalidValue) before it is sent,
+/// and serializing it on its own fails.
 #[derive(Clone)]
 pub struct InputObject<const TYPE: u64> {
     name: &'static str,
-    json: Box<RawValue>,
+    json: Result<Box<RawValue>, Invalid>,
 }
 
 impl<const TYPE: u64> InputObject<TYPE> {
     /// What `input!` builds.
     #[doc(hidden)]
-    pub fn __new(name: &'static str, fields: &impl Serialize) -> Self {
-        Self {
-            name,
-            json: crate::__private::literal::to_raw(fields),
+    pub fn __new(name: &'static str, json: Result<Box<RawValue>, Invalid>) -> Self {
+        Self { name, json }
+    }
+
+    /// Why the value is refused, if it is.
+    pub(crate) fn invalid(&self) -> Result<(), Invalid> {
+        match &self.json {
+            Ok(_) => Ok(()),
+            Err(invalid) => Err(invalid.clone()),
         }
     }
 }
 
 impl<const TYPE: u64> Serialize for InputObject<TYPE> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.json.serialize(serializer)
+        match &self.json {
+            Ok(json) => json.serialize(serializer),
+            Err(invalid) => Err(serde::ser::Error::custom(invalid.message(self.name))),
+        }
     }
 }
 
 impl<const TYPE: u64> std::fmt::Debug for InputObject<TYPE> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{} {}", self.name, self.json.get())
+        match &self.json {
+            Ok(json) => write!(formatter, "{} {}", self.name, json.get()),
+            Err(invalid) => formatter.write_str(&invalid.message(self.name)),
+        }
     }
 }
 
