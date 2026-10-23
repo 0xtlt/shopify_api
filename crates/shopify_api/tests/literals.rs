@@ -420,21 +420,12 @@ graphql! {
     }";
 }
 
-/// A non-null variable with a default: `None` leaves it out, for Shopify
-/// to use the default; a value is checked as non-null, never sent as `null`.
+/// A non-null variable with a default, given `None`, is left out, for
+/// Shopify to use the default.
 #[test]
-fn a_defaulted_non_null_variable_is_left_out_or_checked_as_non_null() {
+fn a_defaulted_non_null_variable_given_none_is_left_out() {
     use serde_json::Value;
-    use shopify_api::{Error, InvalidValueReason};
 
-    let reason = |body: shopify_api::Result<String>| match body {
-        Err(Error::InvalidValue { reason, .. }) => reason,
-        other => panic!("not refused: {other:?}"),
-    };
-    let big: i64 = 1 << 31;
-    let line_item = input!(DraftOrderLineItemInput { quantity: big });
-
-    // Left out.
     let operation = defaults::operation(defaults::Variables::default());
     assert_eq!(operation.variable_json("first").unwrap(), None);
     assert_eq!(operation.variable_json("query").unwrap(), None);
@@ -456,8 +447,11 @@ fn a_defaulted_non_null_variable_is_left_out_or_checked_as_non_null() {
         tags: None,
     });
     assert_eq!(variables(&operation), Value::Null);
+}
 
-    // Sent.
+/// A non-null variable with a default, given a value, sends it.
+#[test]
+fn a_defaulted_non_null_variable_given_a_value_sends_it() {
     let operation = defaults::operation(defaults::Variables {
         first: Some(i64::from(i32::MAX)),
         query: Some("b".into()),
@@ -488,8 +482,22 @@ fn a_defaulted_non_null_variable_is_left_out_or_checked_as_non_null() {
         variables(&operation),
         json!({ "input": { "note": "n" }, "items": [{ "quantity": 1 }], "tags": ["t"] })
     );
+}
 
-    // Refused: the module and the inline operation alike.
+/// A value given to a non-null variable with a default is checked as
+/// non-null, never sent as `null`, by a module and an inline operation
+/// alike.
+#[test]
+fn a_defaulted_non_null_variable_checks_its_value() {
+    use serde_json::Value;
+    use shopify_api::{Error, InvalidValueReason};
+
+    let reason = |body: shopify_api::Result<String>| match body {
+        Err(Error::InvalidValue { reason, .. }) => reason,
+        other => panic!("not refused: {other:?}"),
+    };
+    let big: i64 = 1 << 31;
+    let line_item = input!(DraftOrderLineItemInput { quantity: big });
     for (body, expected) in [
         (
             defaults::operation(defaults::Variables {
@@ -917,7 +925,9 @@ mod hygiene {
             text.map(|text| format!("fn:{text}"))
         }
 
-        /// More values than the names `literal::names` has.
+        /// Seventy values, each a constant named like a generated one: the
+        /// macro numbers its own names past any count, and every value sent
+        /// is the caller's.
         #[test]
         fn seventy_values() {
             let value = input!(ProductUpdateInput {
