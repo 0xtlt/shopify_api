@@ -926,28 +926,28 @@ mod tests {
             "Variables of an operation",
             crate::graphql::Operation::<Value>::new("query { shop { id } }")
                 .variables(BTreeMap::from([("x", Leaky)]))
-                .variables_json()
+                .body()
                 .unwrap_err(),
         ));
         errors.push((
             "Variables, one",
             crate::graphql::Operation::<Value>::new("query { shop { id } }")
                 .json_variable("x", Leaky)
-                .variables_json()
+                .body()
                 .unwrap_err(),
         ));
         errors.push((
             "Variables, one with an odd name",
             crate::graphql::Operation::<Value>::new("query { shop { id } }")
                 .json_variable(&format!("{TOKEN}\""), Leaky)
-                .variables_json()
+                .body()
                 .unwrap_err(),
         ));
         errors.push((
             "InvalidValue",
             crate::graphql::Operation::<Value>::new("query { shop { id } }")
                 .variable::<f64, _>(&format!("{TOKEN}\""), f64::NAN)
-                .variables_json()
+                .body()
                 .unwrap_err(),
         ));
         errors.push((
@@ -959,7 +959,7 @@ mod tests {
                         &serde_json::to_value(Leaky).unwrap_err(),
                     )),
                 )
-                .variables_json()
+                .body()
                 .unwrap_err(),
         ));
         errors.push((
@@ -1134,7 +1134,7 @@ mod tests {
 
         let error = crate::graphql::Operation::<Value>::new("query { shop { id } }")
             .json_variable("input", Leaky)
-            .variables_json()
+            .body()
             .unwrap_err();
         assert_eq!(
             error.to_string(),

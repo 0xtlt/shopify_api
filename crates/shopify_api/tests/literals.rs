@@ -26,6 +26,12 @@ fn sent(mock: &MockTransport) -> String {
     String::from_utf8(mock.last_request().unwrap().body).unwrap()
 }
 
+/// The variables of `operation`, parsed from the body it sends.
+fn variables<D>(operation: &shopify_api::Operation<D>) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(&operation.body().unwrap()).unwrap()["variables"]
+        .take()
+}
+
 /// A body of `query` with `variables`, written as `shopify_api` writes it.
 fn body(query: &str, variables: &str) -> String {
     format!(
@@ -257,7 +263,7 @@ async fn one_vec_of_input_objects_goes_to_an_inline_operation_and_to_a_module() 
         metafields: color_metafields(&rows()),
     });
     assert_eq!(
-        operation.variables_json().unwrap()["metafields"][1]["compareDigest"],
+        variables(&operation)["metafields"][1]["compareDigest"],
         "d3"
     );
 }
@@ -625,7 +631,7 @@ mod hygiene {
             first = __shopify_api_items.len(),
         );
         assert_eq!(
-            operation.body().unwrap()["variables"],
+            crate::variables(&operation),
             json!({
                 "product": { "title": "closure:e", "tags": ["local"] },
                 "media": [{ "originalSource": "closure:local", "mediaContentType": "IMAGE", "alt": "local" }],
@@ -773,7 +779,7 @@ mod hygiene {
                 first = __shopify_api_items.len(),
             );
             assert_eq!(
-                operation.body().unwrap()["variables"],
+                crate::variables(&operation),
                 json!({ "product": { "title": "const", "tags": ["const", "const"] }, "first": 1 })
             );
         }

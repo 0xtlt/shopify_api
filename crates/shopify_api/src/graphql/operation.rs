@@ -364,32 +364,32 @@ impl<D> Operation<D> {
         self
     }
 
-    /// The variables, read back from the JSON they are sent as.
-    pub fn variables_json(&self) -> Result<Map<String, Value>> {
+    /// The JSON text the variable `name` is sent as, `None` when it is not
+    /// set; an error when a variable was refused, as
+    /// [`Shopify::execute`](crate::Shopify::execute) would fail.
+    ///
+    /// Nothing is parsed back: to read it as a [`Value`], parse it with the
+    /// settings you need, such as `serde_json::from_str::<Value>(json)`,
+    /// which refuses a value nested deeper than 128.
+    pub fn variable_json(&self, name: &str) -> Result<Option<&str>> {
         let variables = self
             .variables
             .as_ref()
             .map_err(|failure| failure.to_error())?;
-        variables
+        Ok(variables
             .iter()
-            .map(
-                |(name, value)| match read_back(serde_json::Deserializer::from_str(value.get())) {
-                    Ok(value) => Ok((name.clone(), value)),
-                    Err(error) => Err(Error::variables(Some(name), &error)),
-                },
-            )
-            .collect()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.get()))
     }
 
-    /// The body Shopify receives: `query`, `variables` and `operationName`,
-    /// read back from the JSON it is sent as.
-    pub fn body(&self) -> Result<Value> {
-        read_back(serde_json::Deserializer::from_slice(&self.body_json()?))
-            .map_err(|error| Error::variables(None, &error))
-    }
-
-    /// The body as it is sent.
-    pub(crate) fn body_json(&self) -> Result<Vec<u8>> {
+    /// The body as the exact JSON text
+    /// [`Shopify::execute`](crate::Shopify::execute) sends: `query`,
+    /// `variables` and `operationName`.
+    ///
+    /// Nothing is parsed back: to read it as a [`Value`], parse it with the
+    /// settings you need, such as `serde_json::from_str::<Value>(&body)`,
+    /// which refuses a value nested deeper than 128.
+    pub fn body(&self) -> Result<String> {
         let variables = self
             .variables
             .as_ref()
@@ -399,19 +399,8 @@ impl<D> Operation<D> {
             variables,
             name: self.name.as_deref(),
         };
-        serde_json::to_vec(&body).map_err(|error| Error::variables(None, &error))
+        serde_json::to_string(&body).map_err(|error| Error::variables(None, &error))
     }
-}
-
-/// Reads back JSON this crate wrote, as deep as it was written: no limit,
-/// since the value it was written from was as deep.
-fn read_back<'de, R: serde_json::de::Read<'de>>(
-    mut deserializer: serde_json::Deserializer<R>,
-) -> serde_json::Result<Value> {
-    deserializer.disable_recursion_limit();
-    let value = serde::Deserialize::deserialize(&mut deserializer)?;
-    deserializer.end()?;
-    Ok(value)
 }
 
 struct Body<'a> {
@@ -652,8 +641,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn body<D>(operation: &Operation<D>) -> Value {
+        serde_json::from_str(&operation.body().unwrap()).unwrap()
+    }
+
     fn variables<D>(operation: Operation<D>) -> Value {
-        Value::Object(operation.variables_json().unwrap())
+        body(&operation)["variables"].take()
     }
 
     #[test]
@@ -848,25 +841,48 @@ mod tests {
             let error = operation.body().unwrap_err();
             assert_eq!(error.to_string(), shown);
             assert!(matches!(error, Error::InvalidValue { detail: None, .. }));
-            assert_eq!(operation.variables_json().unwrap_err().to_string(), shown);
             assert_eq!(
-                operation.clone().body_json().unwrap_err().to_string(),
+                operation.variable_json("first").unwrap_err().to_string(),
                 shown
             );
         }
     }
 
-    /// As deep as the value it was written from: past serde_json's limit of
-    /// 128 for a text it did not write.
+    /// The text sent, not parsed back: no depth limit, no stack used per
+    /// level, no float rounded.
     #[test]
-    fn variables_read_back_as_deep_as_they_were_written() {
-        let mut deep = json!(1);
-        for _ in 0..400 {
-            deep = json!([deep]);
+    fn the_body_and_the_variables_are_the_text_sent() {
+        let mut value = json!(0);
+        for _ in 0..250 {
+            value = json!([value]);
         }
-        let operation = Operation::<()>::new("query { shop { id } }").json_variable("deep", &deep);
-        assert_eq!(operation.variables_json().unwrap()["deep"], deep);
-        assert_eq!(operation.body().unwrap()["variables"]["deep"], deep);
+        let deep = format!("{}0{}", "[".repeat(250), "]".repeat(250));
+        let float = 2.3318716180463287e-130_f64;
+        let operation = Operation::<()>::new("query { shop { id } }")
+            .json_variable("deep", &value)
+            .variable::<f64, _>("x", float);
+        let body = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || operation.body().map(|body| (body, operation)))
+            .unwrap()
+            .join()
+            .unwrap();
+        let (body, operation) = body.unwrap();
+        assert_eq!(
+            body,
+            format!(
+                r#"{{"query":"query {{ shop {{ id }} }}","variables":{{"deep":{deep},"x":2.3318716180463287e-130}}}}"#
+            )
+        );
+        assert_eq!(
+            operation.variable_json("deep").unwrap(),
+            Some(deep.as_str())
+        );
+        assert_eq!(
+            operation.variable_json("x").unwrap(),
+            Some("2.3318716180463287e-130")
+        );
+        assert_eq!(operation.variable_json("y").unwrap(), None);
     }
 
     #[test]
@@ -928,13 +944,13 @@ mod tests {
         );
         assert_eq!(
             operation.body().unwrap(),
-            json!({ "query": "query Shop { shop { id } }", "operationName": "Shop" })
+            r#"{"query":"query Shop { shop { id } }","operationName":"Shop"}"#
         );
         assert_eq!(operation.api_version().unwrap(), ApiVersion::V2026_07);
         let operation = operation.variable::<i64, _>("first", 1);
         assert_eq!(
             operation.body().unwrap(),
-            json!({ "query": "query Shop { shop { id } }", "variables": { "first": 1 }, "operationName": "Shop" })
+            r#"{"query":"query Shop { shop { id } }","variables":{"first":1},"operationName":"Shop"}"#
         );
         assert_eq!(
             Operation::<()>::new("{ shop { id } }")

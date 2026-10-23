@@ -59,7 +59,7 @@ impl Shopify {
     ) -> Result<Response<D>> {
         let operation = operation.into();
         let version = self.version_for(operation.checked_against())?;
-        let body = operation.body_json()?;
+        let body = operation.body()?.into_bytes();
         let raw = self.send_graphql(version, body, operation.kind()).await?;
         let (data, extensions) = into_data(raw)?;
         Ok(Response {

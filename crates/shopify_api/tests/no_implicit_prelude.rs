@@ -19,8 +19,12 @@ fn modules_variables_and_constants_compile_without_the_prelude() {
     };
     let operation = products::operation(variables);
     ::std::assert_eq!(
-        ::std::string::ToString::to_string(&operation.body().unwrap()["variables"]),
-        r#"{"first":2}"#
+        operation.variable_json("first").unwrap(),
+        ::std::option::Option::Some("2")
+    );
+    ::std::assert_eq!(
+        operation.variable_json("query").unwrap(),
+        ::std::option::Option::None
     );
     let inline = shopify_api::graphql!(
         "query($first: Int!, $query: String) { products(first: $first, query: $query) { nodes { id } } }",
@@ -28,8 +32,12 @@ fn modules_variables_and_constants_compile_without_the_prelude() {
         query = "title:shirt",
     );
     ::std::assert_eq!(
-        ::std::string::ToString::to_string(&inline.body().unwrap()["variables"]),
-        r#"{"first":3,"query":"title:shirt"}"#
+        inline.variable_json("first").unwrap(),
+        ::std::option::Option::Some("3")
+    );
+    ::std::assert_eq!(
+        inline.variable_json("query").unwrap(),
+        ::std::option::Option::Some(r#""title:shirt""#)
     );
     let product = shopify_api::input!(ProductUpdateInput { title: "a", status: ACTIVE, tags: ["b"], seo: { title: "s" } });
     let literal = shopify_api::graphql!(
@@ -41,7 +49,7 @@ fn modules_variables_and_constants_compile_without_the_prelude() {
         r#"{"title":"a","status":"ACTIVE","tags":["b"],"seo":{"title":"s"}}"#
     );
     ::std::assert_eq!(
-        ::std::string::ToString::to_string(&literal.body().unwrap()["variables"]),
-        r#"{"product":{"descriptionHtml":null,"status":"ACTIVE","title":"a"}}"#
+        literal.variable_json("product").unwrap(),
+        ::std::option::Option::Some(r#"{"title":"a","status":"ACTIVE","descriptionHtml":null}"#)
     );
 }

@@ -255,7 +255,7 @@ An integer literal out of range is a compile error at the literal: `-1`,
 `2_147_483_648_i64`, `0x8000_0000`, `Some(…)` of one, or an item of `[…]` or
 `vec![…]`. A value known at run time is kept as refused, and the operation
 fails with [`Error::InvalidValue`] when it is sent, or when
-[`Operation::body`] or [`Operation::variables_json`] reads it, before any
+[`Operation::body`] or [`Operation::variable_json`] reads it, before any
 request. Its `Display` names the place in GraphQL terms and the reason, never
 the value:
 
