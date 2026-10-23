@@ -82,8 +82,8 @@ pub use auth::{AssociatedUser, Auth, TokenData, TokenStore};
 pub use client::{RetryPolicy, Shopify, ShopifyBuilder, USER_AGENT};
 pub use error::{Error, GraphqlErrors, RawBody, Result, SensitiveDetail};
 pub use graphql::{
-    Cost, GraphqlError, IntoVariable, Location, Operation, OperationKind, RawResponse, Response,
-    ThrottleStatus, UserError,
+    Cost, GraphqlError, InputObject, IntoVariable, Location, Maybe, Operation, OperationKind,
+    RawResponse, Response, ThrottleStatus, UserError,
 };
 pub use pagination::Page;
 pub use shop::ShopDomain;
@@ -97,6 +97,7 @@ pub use shopify_api_macros::graphql;
 /// What the code `graphql!` generates refers to. Not a public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::graphql::literal;
     pub use serde;
     pub use serde_json;
 }

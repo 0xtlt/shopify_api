@@ -1,6 +1,8 @@
 //! Running GraphQL operations: typed ones from [`graphql!`](crate::graphql!),
 //! untyped ones from any text.
 
+mod input;
+pub mod literal;
 pub(crate) mod operation;
 mod response;
 
@@ -8,6 +10,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+pub use input::{InputObject, Maybe};
 pub use operation::{IntoVariable, Operation, OperationKind};
 pub use response::{
     Cost, GraphqlError, Location, RawResponse, Response, ThrottleStatus, UserError,

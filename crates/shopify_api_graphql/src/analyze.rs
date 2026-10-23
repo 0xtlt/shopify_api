@@ -1397,7 +1397,7 @@ fn variable_fits(variable: &Variable, null_default: bool, location: &InputValue)
 }
 
 /// ` (did you mean `x`?)` for the candidate closest to `name`, or nothing.
-fn did_you_mean<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn did_you_mean<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> String {
     let lowered = name.to_lowercase();
     // Half of the name may differ, within three edits: `frist` → `first`, `CREATED` → `CREATED_AT`.
     let limit = (name.len() / 2).clamp(1, 3);

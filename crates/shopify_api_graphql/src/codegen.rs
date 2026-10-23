@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
+use quote::{quote, quote_spanned};
 
 use crate::analyze::{
     FieldBase, Operation, Scalar, SelectedField, Selection, Variable, VariableBase,
@@ -227,6 +227,26 @@ pub fn variable_type(variable: &Variable, krate: &TokenStream) -> Option<TokenSt
         VariableBase::Input => return None,
     };
     Some(wrap(&variable.ty, &base))
+}
+
+/// The `TYPE` of `shopify_api::InputObject<TYPE>` for the input object
+/// `name`: the 64-bit FNV-1a hash of the name, the same in every crate.
+pub fn input_object_id(name: &str) -> u64 {
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// A compiler warning at `span` that gives `note`: the use of a
+/// `#[deprecated]` constant.
+pub fn deprecation_warning(span: Span, note: &str) -> TokenStream {
+    quote_spanned! {span=>
+        const _: () = {
+            #[deprecated(note = #note)]
+            const SHOPIFY_DEPRECATION: () = ();
+            SHOPIFY_DEPRECATION
+        };
+    }
 }
 
 struct InputTypes<'a> {

@@ -312,6 +312,12 @@ impl<D> Operation<D> {
         self.set(name, serde_json::value::to_raw_value(&value))
     }
 
+    /// What `graphql!` sets a variable written as a literal to.
+    #[doc(hidden)]
+    pub fn __literal_variable(self, name: &str, value: Box<RawValue>) -> Self {
+        self.set(name, Ok(value))
+    }
+
     /// Replaces the variables with the fields of a serializable struct or map.
     pub fn variables<V: Serialize>(mut self, variables: V) -> Self {
         self.variables = variables_of(variables)

@@ -1,17 +1,20 @@
 //! Compile-time support for the typed Shopify Admin GraphQL operations of
 //! [`shopify_api`](https://docs.rs/shopify_api).
 //!
-//! [`analyze`](fn@analyze) checks an operation against a [`Schema`] and describes the
-//! shape of its variables and of its result; [`codegen`] turns that
-//! description into Rust types. The `graphql!` macro is a thin layer over
-//! both. [`project`] finds the API version of a crate (the one its
-//! `Cargo.toml` declares, else the latest), and downloads that version's
-//! schema (with the `download` feature). No schema is bundled.
+//! [`analyze`](fn@analyze) checks an operation against a [`Schema`] and
+//! describes the shape of its variables and of its result; [`codegen`] turns
+//! that description into Rust types. [`literal`] checks the values written in
+//! Rust for input types (`{ title: "x" }`) and writes the code that sends
+//! them. The `graphql!` macro is a thin layer over them. [`project`] finds
+//! the API version of a crate (the one its `Cargo.toml` declares, else the
+//! latest), and downloads that version's schema (with the `download`
+//! feature). No schema is bundled.
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod analyze;
 pub mod codegen;
+pub mod literal;
 pub mod project;
 mod restrict;
 pub mod schema;

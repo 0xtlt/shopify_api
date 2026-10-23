@@ -2,6 +2,8 @@
 //! which re-exports and documents it.
 #![forbid(unsafe_code)]
 
+mod value;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,8 +12,9 @@ use std::time::SystemTime;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::codegen::{
-    DATA_TYPE, VARIABLES_TYPE, data_types, variable_type, variables_types,
+    DATA_TYPE, VARIABLES_TYPE, data_types, deprecation_warning, variables_types,
 };
+use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
 use shopify_api_graphql::project::{
     DownloadError, metadata_snippet, previous_api_version, up_to_date_schema,
 };
@@ -21,7 +24,7 @@ use shopify_api_graphql::{
 };
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, Ident, LitStr, Token, Visibility};
+use syn::{Attribute, Ident, LitStr, Token, Visibility};
 
 /// The schema of `shopify_api`'s own operations, relative to its `Cargo.toml`:
 /// the Admin schema cut down to what they use. A crate that depends on
@@ -68,7 +71,7 @@ impl Parse for Source {
 enum Input {
     Expression {
         source: Source,
-        variables: Vec<(Ident, Expr)>,
+        variables: Vec<(Ident, Value)>,
     },
     Modules(Vec<Module>),
 }
@@ -141,7 +144,7 @@ impl Parse for Input {
                 syn::Error::new(error.span(), "expected a variable: `name = value`")
             })?;
             input.parse::<Token![=]>()?;
-            variables.push((name, input.parse()?));
+            variables.push((name, value::parse_value(input)?));
         }
         Ok(Self::Expression { source, variables })
     }
@@ -290,6 +293,18 @@ impl LoadedSchema {
         }
     }
 
+    /// A refusal of a literal value, at its token.
+    fn literal_error(&self, error: literal::Error) -> syn::Error {
+        syn::Error::new(
+            error.span,
+            format!(
+                "{}\n(checked against the Shopify Admin API {})",
+                error.message,
+                self.schema().api_version
+            ),
+        )
+    }
+
     /// Checks an operation, pointing a refusal at its text.
     fn check(&self, text: &Text) -> syn::Result<Operation> {
         analyze(self.schema(), &text.query.value()).map_err(|error| {
@@ -390,13 +405,7 @@ fn deprecation_warnings(schema: &Schema, operation: &Operation, text: &Text) -> 
             "`{}` is deprecated in the Shopify Admin API {}: {} (line {line}, column {column} of the operation)",
             deprecation.coordinate, schema.api_version, deprecation.reason
         );
-        quote_spanned! {text.span()=>
-            const _: () = {
-                #[deprecated(note = #note)]
-                const SHOPIFY_DEPRECATION: () = ();
-                SHOPIFY_DEPRECATION
-            };
-        }
+        deprecation_warning(text.span(), &note)
     });
     quote!(#(#warnings)*)
 }
@@ -429,14 +438,14 @@ fn constructor(
 fn expand_expression(
     schema: &LoadedSchema,
     source: &Source,
-    variables: &[(Ident, Expr)],
+    variables: &[(Ident, Value)],
 ) -> syn::Result<TokenStream> {
     let krate = quote!(::shopify_api);
     let text = Text::read(source)?;
     let operation = schema.check(&text)?;
 
     // Each value with the variable it is for.
-    let mut given: Vec<(&Variable, &Expr)> = Vec::new();
+    let mut given: Vec<(&Variable, &Value)> = Vec::new();
     for (name, value) in variables {
         let Some(declared) = operation
             .variables
@@ -486,22 +495,31 @@ fn expand_expression(
 
     // Evaluated before the generated types are in scope, so that the
     // values cannot name them by accident.
-    let locals: Vec<Ident> = (0..given.len())
-        .map(|index| {
-            Ident::new(
-                &format!("__shopify_api_variable_{index}"),
-                Span::mixed_site(),
-            )
-        })
-        .collect();
-    let values = given.iter().map(|(_, value)| value);
-    let setters = given.iter().zip(&locals).map(|((declared, value), local)| {
+    let mut literals = Literals::new(schema.schema(), krate.clone());
+    let mut values = Vec::new();
+    let mut setters = Vec::new();
+    for (index, (declared, value)) in given.iter().enumerate() {
+        let local = Ident::new(
+            &format!("__shopify_api_variable_{index}"),
+            Span::mixed_site(),
+        );
         let key = &declared.name;
-        match variable_type(declared, &krate) {
-            Some(ty) => quote_spanned!(value.span()=> .variable::<#ty, _>(#key, #local)),
-            None => quote_spanned!(value.span()=> .json_variable(#key, #local)),
+        match literals
+            .variable(declared, value)
+            .map_err(|error| schema.literal_error(error))?
+        {
+            VariableValue::Converted { ty, value } => {
+                let tokens = &value.tokens;
+                values.push(quote!(let #local = #tokens;));
+                setters.push(quote_spanned!(value.span=> .variable::<#ty, _>(#key, #local)));
+            }
+            VariableValue::Literal(code) => {
+                values.push(quote!(let #local = #code;));
+                setters.push(quote!(.__literal_variable(#key, #local)));
+            }
         }
-    });
+    }
+    let checks = literals.finish();
 
     let tracking = schema.tracking();
     let file = text.tracking();
@@ -510,7 +528,8 @@ fn expand_expression(
     let query = &text.query;
     let constructor = constructor(schema.schema(), &operation, &quote!(#query), &krate);
     Ok(quote! {{
-        #(let #locals = #values;)*
+        #checks
+        #(#values)*
         {
             #tracking
             #file
