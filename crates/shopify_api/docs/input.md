@@ -43,11 +43,13 @@ required field, `?:` for a field that may be left out, enum values bare or
 `raw(…)`, nested objects and lists, `[for … => …]`.
 
 A value of another input type is refused where one is expected, with a
-message that names both places in GraphQL terms:
+message that names the place and the GraphQL type it expects:
 
 ```text
 error[E0277]: an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })`
 ```
+
+The type given may show only as `InputObject<N>`, `N` a hash of its name.
 
 A value that Shopify would not read as written, a `Float` that is not
 finite, an `Int` beyond 32 bits, `null` for a non-null `JSON`, is kept as

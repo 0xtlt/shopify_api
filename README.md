@@ -143,8 +143,9 @@ shopify.execute(graphql!(
 )).await?;
 ```
 
-A value of another input type is refused, the message naming both GraphQL
-types: `` an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })` ``.
+A value of another input type is refused, the message naming the place and
+the GraphQL type it expects: `` an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })` ``.
+The type given may show only as `InputObject<N>`, `N` a hash of its name.
 
 ### Values Shopify would not read as written
 
