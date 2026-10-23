@@ -372,17 +372,20 @@ impl<D> Operation<D> {
             .map_err(|failure| failure.to_error())?;
         variables
             .iter()
-            .map(|(name, value)| match serde_json::from_str(value.get()) {
-                Ok(value) => Ok((name.clone(), value)),
-                Err(error) => Err(Error::variables(Some(name), &error)),
-            })
+            .map(
+                |(name, value)| match read_back(serde_json::Deserializer::from_str(value.get())) {
+                    Ok(value) => Ok((name.clone(), value)),
+                    Err(error) => Err(Error::variables(Some(name), &error)),
+                },
+            )
             .collect()
     }
 
     /// The body Shopify receives: `query`, `variables` and `operationName`,
     /// read back from the JSON it is sent as.
     pub fn body(&self) -> Result<Value> {
-        serde_json::from_slice(&self.body_json()?).map_err(|error| Error::variables(None, &error))
+        read_back(serde_json::Deserializer::from_slice(&self.body_json()?))
+            .map_err(|error| Error::variables(None, &error))
     }
 
     /// The body as it is sent.
@@ -398,6 +401,17 @@ impl<D> Operation<D> {
         };
         serde_json::to_vec(&body).map_err(|error| Error::variables(None, &error))
     }
+}
+
+/// Reads back JSON this crate wrote, as deep as it was written: no limit,
+/// since the value it was written from was as deep.
+fn read_back<'de, R: serde_json::de::Read<'de>>(
+    mut deserializer: serde_json::Deserializer<R>,
+) -> serde_json::Result<Value> {
+    deserializer.disable_recursion_limit();
+    let value = serde::Deserialize::deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(value)
 }
 
 struct Body<'a> {
@@ -840,6 +854,19 @@ mod tests {
                 shown
             );
         }
+    }
+
+    /// As deep as the value it was written from: past serde_json's limit of
+    /// 128 for a text it did not write.
+    #[test]
+    fn variables_read_back_as_deep_as_they_were_written() {
+        let mut deep = json!(1);
+        for _ in 0..400 {
+            deep = json!([deep]);
+        }
+        let operation = Operation::<()>::new("query { shop { id } }").json_variable("deep", &deep);
+        assert_eq!(operation.variables_json().unwrap()["deep"], deep);
+        assert_eq!(operation.body().unwrap()["variables"]["deep"], deep);
     }
 
     #[test]
