@@ -1,5 +1,5 @@
-//! The `graphql!` macro of `shopify_api`. Use it through `shopify_api::graphql!`,
-//! which re-exports and documents it.
+//! The `graphql!` and `input!` macros of `shopify_api`. Use them through
+//! `shopify_api`, which re-exports and documents them.
 #![forbid(unsafe_code)]
 
 mod value;
@@ -147,6 +147,32 @@ impl Parse for Input {
             variables.push((name, value::parse_value(input)?));
         }
         Ok(Self::Expression { source, variables })
+    }
+}
+
+/// `input!(TypeName { field: value, … })`.
+struct InputObject {
+    name: Ident,
+    object: Value,
+}
+
+impl Parse for InputObject {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        const FORM: &str =
+            "expected an input object of the schema: `input!(TypeName { field: value, … })`";
+        let name: Ident = input
+            .parse()
+            .map_err(|error| syn::Error::new(error.span(), FORM))?;
+        if !input.peek(syn::token::Brace) {
+            return Err(input.error(FORM));
+        }
+        let content;
+        let braces = syn::braced!(content in input);
+        let object = value::parse_object(&content, braces.span.join())?;
+        if !input.is_empty() {
+            return Err(input.error("expected the end of `input!`"));
+        }
+        Ok(Self { name, object })
     }
 }
 
@@ -624,11 +650,42 @@ fn expand(input: Input, schema: Result<LoadedSchema, String>) -> syn::Result<Tok
     }
 }
 
+/// `input!(TypeName { … })`: an `InputObject` of that type.
+fn expand_input(
+    input: InputObject,
+    schema: Result<LoadedSchema, String>,
+) -> syn::Result<TokenStream> {
+    let schema = schema.map_err(|message| syn::Error::new(Span::call_site(), message))?;
+    let Value::Object(object) = &input.object else {
+        unreachable!("`input!` reads an object");
+    };
+    let mut literals = Literals::new(schema.schema(), quote!(::shopify_api));
+    let value = literals
+        .input_object(&input.name.to_string(), input.name.span(), object)
+        .map_err(|error| schema.literal_error(error))?;
+    let checks = literals.finish();
+    let tracking = schema.tracking();
+    Ok(quote! {{
+        #tracking
+        #checks
+        #value
+    }})
+}
+
 /// See `shopify_api::graphql!`.
 #[proc_macro]
 pub fn graphql(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as Input);
     expand(input, LoadedSchema::load())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// See `shopify_api::input!`.
+#[proc_macro]
+pub fn input(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as InputObject);
+    expand_input(input, LoadedSchema::load())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -640,6 +697,16 @@ pub fn graphql(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 pub fn __graphql_internal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as Input);
     expand(input, LoadedSchema::internal())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `input!` for `shopify_api` itself. Not for other crates.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __input_internal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as InputObject);
+    expand_input(input, LoadedSchema::internal())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

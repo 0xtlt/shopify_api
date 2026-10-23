@@ -4,8 +4,8 @@
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
 
-/// An input object of the schema, built and checked by `input!`:
-/// `input!(MetafieldsSetInput { … })`.
+/// An input object of the schema, built and checked by
+/// [`input!`](crate::input!): `input!(MetafieldsSetInput { … })`.
 ///
 /// `TYPE` identifies the GraphQL input type: a hash of its name, so that
 /// every `input!` of `MetafieldsSetInput`, in any module or crate, gives the
@@ -46,8 +46,21 @@ impl<const TYPE: u64> std::fmt::Debug for InputObject<TYPE> {
 }
 
 /// A field given with `field?: value` in [`graphql!`](crate::graphql!) and
-/// `input!`, when sending `null` is a choice made at run
+/// [`input!`](crate::input!), when sending `null` is a choice made at run
 /// time: an `Option` covers absent or value, `Maybe` adds `null`.
+///
+/// ```no_run
+/// use shopify_api::{Maybe, input};
+///
+/// # fn vendor(clear: bool, vendor: Option<String>) {
+/// let vendor = match (clear, vendor) {
+///     (true, _) => Maybe::Null,
+///     (false, Some(vendor)) => Maybe::Value(vendor),
+///     (false, None) => Maybe::Absent,
+/// };
+/// let product = input!(ProductUpdateInput { id: "gid://shopify/Product/1", vendor?: vendor });
+/// # }
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Maybe<T> {
     /// The field is not sent: Shopify keeps what it has.

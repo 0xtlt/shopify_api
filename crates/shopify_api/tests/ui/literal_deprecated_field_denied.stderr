@@ -1,0 +1,11 @@
+error: use of deprecated constant `main::_::SHOPIFY_DEPRECATION`: `ProductVariantsBulkInput.barcode` is deprecated in the Shopify Admin API 2026-10: Use `barcodes` instead.
+ --> tests/ui/literal_deprecated_field_denied.rs:4:60
+  |
+4 |     let _ = shopify_api::input!(ProductVariantsBulkInput { barcode: "1234", price: "10.00" });
+  |                                                            ^^^^^^^
+  |
+note: the lint level is defined here
+ --> tests/ui/literal_deprecated_field_denied.rs:1:9
+  |
+1 | #![deny(deprecated)]
+  |         ^^^^^^^^^^

@@ -1,0 +1,6 @@
+error: Input object `MetafieldsSetInput` requires the fields `key: String!` and `value: String!`: add them
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_missing_required.rs:2:52
+  |
+2 |     let _ = shopify_api::input!(MetafieldsSetInput { ownerId: "gid://shopify/Product/1", namespace: "custom" });
+  |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,26 @@
+error[E0277]: `lineItems` of `InventoryTransferCreateInput` is non-null (`[InventoryTransferLineItemInput!]!`): `lineItems?:` takes an `Option`, not a `Maybe`, whose `Null` it refuses
+ --> tests/ui/literal_maybe_non_null_with_default.rs:6:63
+  |
+6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });
+  |             --------------------------------------------------^^^^^^^^^^---
+  |             |                                                 |
+  |             |                                                 an `Option`: `None` leaves the field out
+  |             required by a bound introduced by this call
+  |
+  = help: the trait `__ShopifyApiNoNull4` is not implemented for `Vec<InputObject<12797409305445540075>>`
+help: this trait has no implementations, consider adding one
+ --> tests/ui/literal_maybe_non_null_with_default.rs:6:13
+  |
+6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `Maybe<Vec<InputObject<12797409305445540075>>>` to implement `__ShopifyApiOptional4<Vec<InputObject<12797409305445540075>>>`
+ --> tests/ui/literal_maybe_non_null_with_default.rs:6:13
+  |
+6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__shopify_api_optional4`
+ --> tests/ui/literal_maybe_non_null_with_default.rs:6:13
+  |
+6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__shopify_api_optional4`
+  = note: this error originates in the macro `input` (in Nightly builds, run with -Z macro-backtrace for more info)

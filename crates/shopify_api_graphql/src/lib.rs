@@ -5,10 +5,10 @@
 //! describes the shape of its variables and of its result; [`codegen`] turns
 //! that description into Rust types. [`literal`] checks the values written in
 //! Rust for input types (`{ title: "x" }`) and writes the code that sends
-//! them. The `graphql!` macro is a thin layer over them. [`project`] finds
-//! the API version of a crate (the one its `Cargo.toml` declares, else the
-//! latest), and downloads that version's schema (with the `download`
-//! feature). No schema is bundled.
+//! them. The `graphql!` and `input!` macros are a thin layer over them.
+//! [`project`] finds the API version of a crate (the one its `Cargo.toml`
+//! declares, else the latest), and downloads that version's schema (with the
+//! `download` feature). No schema is bundled.
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

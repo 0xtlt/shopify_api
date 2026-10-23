@@ -94,7 +94,12 @@ pub use version::ApiVersion;
 #[doc = include_str!("../docs/graphql.md")]
 pub use shopify_api_macros::graphql;
 
-/// What the code `graphql!` generates refers to. Not a public API.
+/// Builds an input object of the schema, checked like a literal of
+/// [`graphql!`]: `input!(MetafieldsSetInput { key: "color", … })`.
+#[doc = include_str!("../docs/input.md")]
+pub use shopify_api_macros::input;
+
+/// What the code `graphql!` and `input!` generate refers to. Not a public API.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::graphql::literal;

@@ -1,0 +1,26 @@
+error[E0277]: `vendor` of `ProductUpdateInput` takes a `String`, not an `Option`: write `vendor?: value` to leave the field out when it is `None`, or `vendor: null` to send `null`
+ --> tests/ui/literal_option_in_field.rs:3:93
+  |
+3 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", vendor: vendor });
+  |             --------------------------------------------------------------------------------^^^^^^---
+  |             |                                                                               |
+  |             |                                                                               `vendor: None` would send `null`, which clears the field
+  |             required by a bound introduced by this call
+  |
+  = help: the trait `__ShopifyApiNoOption5` is not implemented for `String`
+help: this trait has no implementations, consider adding one
+ --> tests/ui/literal_option_in_field.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", vendor: vendor });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `Option<String>` to implement `__ShopifyApiExpect4`
+ --> tests/ui/literal_option_in_field.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", vendor: vendor });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__shopify_api_check6`
+ --> tests/ui/literal_option_in_field.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", vendor: vendor });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__shopify_api_check6`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
