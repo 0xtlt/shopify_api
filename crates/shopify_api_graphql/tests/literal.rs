@@ -300,7 +300,6 @@ fn enum_values_are_checked_and_raw_is_only_for_enums() {
         ),
         "`values` of `CollectionSourceInclusionConditionProductStatusInput` expects a list of values of the enum `ProductStatus`: write them bare, `[ACTIVE, …]`, or `[for value in … => raw(value)]` for strings known at run time"
     );
-    // A long enum is listed in part.
     let exemptions = refusal(
         "CompanyLocationInput",
         vec![
@@ -343,7 +342,6 @@ fn a_value_has_the_form_of_its_type() {
         refusal("ProductUpdateInput", vec![("title", list(vec![rust("t")]))]),
         "`title` of `ProductUpdateInput` expects a `String`, not a list"
     );
-    // No single value where a list is expected.
     assert_eq!(
         refusal(
             "ProductUpdateInput",
