@@ -1,0 +1,9 @@
+query BulkOperations($first: Int!, $after: String, $query: String, $reverse: Boolean) {
+  bulkOperations(first: $first, after: $after, query: $query, reverse: $reverse, sortKey: CREATED_AT) {
+    nodes { ...BulkOperationFields }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+fragment BulkOperationFields on BulkOperation {
+  id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
+}

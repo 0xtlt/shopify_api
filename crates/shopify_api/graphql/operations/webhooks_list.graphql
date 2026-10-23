@@ -1,0 +1,10 @@
+query WebhookSubscriptions($after: String) {
+  webhookSubscriptions(first: 250, after: $after) {
+    nodes { ...WebhookSubscriptionFields }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+fragment WebhookSubscriptionFields on WebhookSubscription {
+  id topic uri format filter includeFields metafieldNamespaces name createdAt updatedAt
+  apiVersion { handle }
+}

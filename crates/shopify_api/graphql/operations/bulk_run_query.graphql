@@ -1,0 +1,9 @@
+mutation BulkOperationRunQuery($query: String!, $groupObjects: Boolean!) {
+  bulkOperationRunQuery(query: $query, groupObjects: $groupObjects) {
+    bulkOperation { ...BulkOperationFields }
+    userErrors { field message code }
+  }
+}
+fragment BulkOperationFields on BulkOperation {
+  id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
+}

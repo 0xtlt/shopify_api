@@ -1,0 +1,7 @@
+# An operation kept in a file: `graphql! { mod from_file = file("tests/graphql/order.graphql"); }`.
+query OrderFromFile($id: ID!) {
+  order(id: $id) {
+    name
+    email
+  }
+}

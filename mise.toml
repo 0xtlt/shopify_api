@@ -1,0 +1,73 @@
+# Toolchain and tasks. Run `mise install` once, then `mise run <task>` (`mise tasks` lists them).
+[tools]
+rust = { version = "1.99.1", profile = "minimal", components = "clippy,rustfmt" }
+"cargo:cargo-audit" = "0.22.2"
+cargo-deny = "0.20.2"
+
+[env]
+RUST_BACKTRACE = "1"
+
+[tasks.fmt]
+description = "Format the workspace"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Check the formatting of the workspace"
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+description = "Clippy on every crate, target and feature, warnings are errors"
+run = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+
+[tasks.test]
+description = "Run every test, with every feature. No network: Shopify is mocked."
+run = "cargo test --workspace --all-features --locked"
+
+[tasks."test:min"]
+description = "Build and test the client with its default features only"
+run = "cargo test -p shopify_api --locked"
+
+[tasks."check:features"]
+description = "Build the client without its default features, then with each feature alone: what feature unification in the workspace hides"
+run = [
+  "cargo check -p shopify_api --no-default-features --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features webhooks --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features oauth --lib --locked",
+  "cargo check -p shopify_api --no-default-features --features testing --lib --locked",
+]
+
+[tasks.doc]
+description = "Build the documentation, warnings are errors"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --workspace --all-features --no-deps --locked"
+
+[tasks.check]
+description = "What CI runs: fmt check, clippy, tests, docs, features alone"
+depends = ["fmt:check", "lint", "test", "test:min", "check:features", "doc"]
+
+[tasks.msrv]
+description = "Build the workspace with the minimum supported Rust version (1.88)"
+run = "cargo +1.88 check --workspace --all-features --locked"
+
+[tasks."ui:bless"]
+description = "Rewrite the expected compiler errors of the `graphql!` compile-fail tests"
+env = { TRYBUILD = "overwrite" }
+run = "cargo test -p shopify_api --all-features --locked --test compile_fail"
+
+[tasks."schema:test"]
+description = "Download the Admin schema the tests use again, for the version in crates/shopify_api/Cargo.toml"
+dir = "crates/shopify_api"
+run = "cargo run -p shopify_api --features cli --locked -- schema download"
+
+[tasks."schema:internal"]
+description = "Cut the test schema down to the operations of shopify_api, into crates/shopify_api/graphql/internal.schema.json"
+env = { SHOPIFY_API_BLESS = "1" }
+run = "cargo test -p shopify_api_graphql --locked --test internal_schema"
+
+[tasks."test:live"]
+description = "Run the tests against a real development store (needs SHOPIFY_TEST_SHOP and a token, see tests/live.rs)"
+run = "cargo test -p shopify_api --all-features --locked --test live -- --ignored --test-threads=1"
+
+[tasks.audit]
+description = "Known vulnerabilities, licenses and sources of the dependencies (needs the network)"
+run = ["cargo audit", "cargo deny check"]

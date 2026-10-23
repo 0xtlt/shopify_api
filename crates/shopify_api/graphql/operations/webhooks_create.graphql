@@ -1,0 +1,10 @@
+mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+  webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+    webhookSubscription { ...WebhookSubscriptionFields }
+    userErrors { field message }
+  }
+}
+fragment WebhookSubscriptionFields on WebhookSubscription {
+  id topic uri format filter includeFields metafieldNamespaces name createdAt updatedAt
+  apiVersion { handle }
+}

@@ -1,0 +1,5 @@
+error: Cannot read `graphql/missing.graphql`, relative to the Cargo.toml of the crate: No such file or directory (os error 2)
+ --> tests/ui/missing_file.rs:2:23
+  |
+2 |     mod orders = file("graphql/missing.graphql");
+  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^

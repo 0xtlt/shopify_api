@@ -1,0 +1,6 @@
+error: `ownerId` of `MetafieldsSetInput` is required (`ID!`): it cannot be left out, so `?:` does not apply; write `ownerId: …`
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_optional_required.rs:3:61
+  |
+3 |     let _ = shopify_api::input!(MetafieldsSetInput { ownerId?: owner, key: "color", value: "blue" });
+  |                                                             ^
