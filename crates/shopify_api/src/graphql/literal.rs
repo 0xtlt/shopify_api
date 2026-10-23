@@ -79,21 +79,13 @@ impl<V: Validate<K>, K> Serialize for Leaf<V, K> {
 
 /// The items of `[for … => …]`, each written in its turn of the loop, and
 /// the first that is refused.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Collected {
     items: Vec<Box<RawValue>>,
     invalid: Option<Invalid>,
 }
 
 impl Collected {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            invalid: None,
-        }
-    }
-
     pub fn push(&mut self, value: Result<Box<RawValue>, Invalid>) {
         if self.invalid.is_some() {
             return;
@@ -409,7 +401,7 @@ mod tests {
             )))),
             "invalid value at `T.list[1][0]`: not a finite Float"
         );
-        let mut collected = Collected::new();
+        let mut collected = Collected::default();
         for quantity in [1_usize, 2, 1 << 40, 3, usize::MAX] {
             collected.push(to_raw(&Object((
                 Field("quantity", leaf::<Int, _>(quantity)),

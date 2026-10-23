@@ -106,7 +106,6 @@ fn an_object_is_sent_field_by_field_in_its_order() {
                 Value::For(Box::new(For {
                     span: Span::call_site(),
                     pattern: quote!(m),
-                    binding: Some(Ident::new("m", Span::call_site())),
                     iterable: quote!(&rows),
                     filter: Some(quote!(!m.value.is_empty())),
                     item: Value::Object(object(vec![

@@ -177,4 +177,3 @@ The input objects of `graphql!` changed before the release.
 | `shopify.execute(module::Variables { … }.into())` | Drop the `.into()`: `execute` takes `impl Into<Operation<D>>`, so `.into()` has no single target (E0283) |
 | `Operation::variable::<T, _>` with a `T` of yours | `T` is a `VariableType`: one of the Rust types `graphql!` picks (`String`, `i64`, `f64`, `bool`, `Value`, `InputObject`, in `Option` and `Vec`). `json_variable` takes anything else |
 | A `u64` beyond `i64` saturated to `i64::MAX`; NaN and infinity sent as `null`; `null` sent for a non-null `JSON` | Refused: `Error::InvalidValue` when the operation runs, before the request; an integer literal out of the range of `Int` is a compile error |
-| `[for _ in … => …]` | `[for _item in … => …]`: the pattern binds a name |

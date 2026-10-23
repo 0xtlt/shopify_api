@@ -88,8 +88,6 @@ pub struct For {
     /// Of the brackets.
     pub span: Span,
     pub pattern: TokenStream,
-    /// A name the pattern binds, if it binds one.
-    pub binding: Option<Ident>,
     pub iterable: TokenStream,
     pub filter: Option<TokenStream>,
     pub item: Value,
@@ -371,25 +369,14 @@ impl<'a> Literals<'a> {
                 let value = each.finish(value, &krate);
                 let For {
                     pattern,
-                    binding,
                     iterable,
                     filter,
                     ..
                 } = &**comprehension;
-                // The list is a local named after a name the pattern binds:
-                // the pattern compiles, so no constant of that name is in
-                // scope. Its mixed-site hygiene keeps the two apart.
-                let Some(binding) = binding else {
-                    return error(
-                        comprehension.span,
-                        "The pattern of `[for pattern in … => …]` binds no name: name what it gives, as `[for _item in … => …]`",
-                    );
-                };
-                let name = binding.to_string();
-                let items = match name.strip_prefix("r#") {
-                    Some(name) => Ident::new_raw(name, Span::mixed_site()),
-                    None => Ident::new(&name, Span::mixed_site()),
-                };
+                // A generated name may meet a user item only in a compile
+                // error (a constant in a pattern, E0530), never in a silent
+                // change of meaning: mixed-site, no user expression sees it.
+                let items = Ident::new("__shopify_api_collected", Span::mixed_site());
                 // Each item is written in its turn of the loop, so that it may
                 // borrow what the loop gives.
                 let push =
@@ -399,7 +386,7 @@ impl<'a> Literals<'a> {
                     None => push,
                 };
                 let list = quote! {{
-                    let mut #items = #krate::__private::literal::Collected::new();
+                    let mut #items = <#krate::__private::literal::Collected as ::core::default::Default>::default();
                     for #pattern in #iterable { #body }
                     #items
                 }};

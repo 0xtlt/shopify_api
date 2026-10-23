@@ -231,10 +231,6 @@ What reads as what, when Rust could read it too:
 - A lone identifier is an enum value where an enum is expected, and a Rust
   variable everywhere else.
 
-- The pattern of `[for … in … => …]` binds a name: `[for _item in 0..3 => …]`
-  rather than `[for _ in 0..3 => …]`. The generated code names the list after
-  it, which no constant of the caller's can match.
-
 Nothing goes through a `serde_json::Value`: each literal is written straight
 to the JSON sent, and a value of `input!` holds its JSON already.
 

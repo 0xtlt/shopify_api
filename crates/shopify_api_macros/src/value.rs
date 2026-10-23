@@ -154,39 +154,11 @@ fn parse_for(input: ParseStream, span: Span) -> syn::Result<Value> {
     }
     Ok(Value::For(Box::new(For {
         span,
-        binding: binding(&pattern),
         pattern: pattern.into_token_stream(),
         iterable: iterable.into_token_stream(),
         filter,
         item,
     })))
-}
-
-/// The first name `pattern` binds. A lone identifier that starts with a
-/// capital is taken for a constant, a unit struct or a variant.
-fn binding(pattern: &syn::Pat) -> Option<Ident> {
-    use syn::Pat;
-    match pattern {
-        Pat::Ident(pattern) => {
-            let name = pattern.ident.unraw().to_string();
-            if name != "_" && !name.starts_with(|first: char| first.is_uppercase()) {
-                return Some(pattern.ident.clone());
-            }
-            pattern
-                .subpat
-                .as_ref()
-                .and_then(|(_, pattern)| binding(pattern))
-        }
-        Pat::Or(pattern) => pattern.cases.first().and_then(binding),
-        Pat::Paren(pattern) => binding(&pattern.pat),
-        Pat::Reference(pattern) => binding(&pattern.pat),
-        Pat::Type(pattern) => binding(&pattern.pat),
-        Pat::Tuple(pattern) => pattern.elems.iter().find_map(binding),
-        Pat::TupleStruct(pattern) => pattern.elems.iter().find_map(binding),
-        Pat::Slice(pattern) => pattern.elems.iter().find_map(binding),
-        Pat::Struct(pattern) => pattern.fields.iter().find_map(|field| binding(&field.pat)),
-        _ => None,
-    }
 }
 
 fn expr(value: &syn::Expr) -> Expr {
@@ -307,28 +279,6 @@ mod tests {
             ("Some(x)", "rust Some (x)"),
         ] {
             assert_eq!(kind(&parse(text)), read, "{text}");
-        }
-    }
-
-    #[test]
-    fn finds_a_name_the_pattern_of_a_for_binds() {
-        for (pattern, name) in [
-            ("m", Some("m")),
-            ("(i, m)", Some("i")),
-            ("(_, m)", Some("m")),
-            ("&Row { id, .. }", Some("id")),
-            ("Some(x) | None", Some("x")),
-            ("ref mut r#type", Some("r#type")),
-            ("whole @ (_, _)", Some("whole")),
-            ("_", None),
-            ("(_, Marker)", None),
-            ("[_, _]", None),
-        ] {
-            let Value::For(comprehension) = parse(&format!("[for {pattern} in xs => 1]")) else {
-                panic!("{pattern}");
-            };
-            let found = comprehension.binding.map(|ident| ident.to_string());
-            assert_eq!(found.as_deref(), name, "{pattern}");
         }
     }
 

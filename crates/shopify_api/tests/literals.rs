@@ -957,6 +957,39 @@ mod hygiene {
         }
     }
 
+    enum Stage {
+        Ready,
+    }
+    use Stage::Ready as ready;
+
+    /// Any pattern, whatever it binds: nothing, a name that starts with a
+    /// capital, a unit variant renamed in lower case, a generated name.
+    #[test]
+    fn the_pattern_of_a_for_is_the_callers() {
+        let value = json(input!(ProductUpdateInput {
+            tags: [for _ in 0..2 => "sale"],
+            collectionsToJoin: [for (ready, id) in [(ready, "1")] => id],
+            collectionsToLeave: [for ref Item in [String::from("a")] => Item],
+            redirectNewHandle: true,
+        }));
+        assert_eq!(
+            value,
+            json!({ "tags": ["sale", "sale"], "collectionsToJoin": ["1"], "collectionsToLeave": ["a"], "redirectNewHandle": true })
+        );
+        let value = json(input!(ProductUpdateInput {
+            tags: [for __shopify_api_collected in [["a", "b"]] => __shopify_api_collected[1]],
+        }));
+        assert_eq!(value, json!({ "tags": ["b"] }));
+        let operation = graphql!(
+            "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
+            product = { tags: [for _ in [()] => "x"], metafields: [for Item in ["k"] => { key: Item, value: "v", namespace: "n", type: "single_line_text_field" }] },
+        );
+        assert_eq!(
+            crate::variables(&operation),
+            json!({ "product": { "tags": ["x"], "metafields": [{ "key": "k", "value": "v", "namespace": "n", "type": "single_line_text_field" }] } })
+        );
+    }
+
     struct Product {
         title: &'static str,
     }
