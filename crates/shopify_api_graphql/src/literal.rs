@@ -916,7 +916,9 @@ impl<'a> Literals<'a> {
 
     /// Refuses an integer literal outside of the 32 bits of `Int`, where
     /// the innermost type of `ty` is `Int`: written alone, negated, in
-    /// `Some(…)`, in parentheses, or as an item of `[…]` or `vec![…]`.
+    /// parentheses, or as an item of a list `[…]`. Only forms whose meaning
+    /// does not depend on what a name resolves to: `Some(…)` may be a
+    /// function of the caller's. Any other value is checked when it is built.
     fn int_literals(&self, tokens: &TokenStream, ty: &TypeRef, site: &Site) -> Result<(), Error> {
         if !matches!(self.schema.get(ty.name()), Some(TypeDef::Scalar))
             || Scalar::of(ty.name()) != Scalar::Int
@@ -1070,18 +1072,6 @@ fn int_literals(tokens: &TokenStream, found: &mut Vec<(i128, Span)>) {
             Delimiter::Bracket => items(&group.stream(), found),
             Delimiter::Brace => {}
         },
-        [TokenTree::Ident(some), TokenTree::Group(group)]
-            if some == "Some" && group.delimiter() == Delimiter::Parenthesis =>
-        {
-            int_literals(&group.stream(), found);
-        }
-        [
-            TokenTree::Ident(vec),
-            TokenTree::Punct(bang),
-            TokenTree::Group(group),
-        ] if vec == "vec" && bang.as_char() == '!' && group.delimiter() == Delimiter::Bracket => {
-            items(&group.stream(), found);
-        }
         _ => {}
     }
 

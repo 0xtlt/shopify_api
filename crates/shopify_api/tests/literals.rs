@@ -724,6 +724,64 @@ fn values_at_the_bounds_are_sent() {
     );
 }
 
+/// Only integer literals, negated, in parentheses or in a list `[…]`, are
+/// checked when the crate compiles: what `Some(…)` calls depends on what
+/// the name resolves to. The other forms are checked when the value is
+/// built.
+mod int_forms {
+    use shopify_api::{Error, InvalidValueReason, graphql, input};
+
+    fn normalize(n: i64) -> i32 {
+        (n - 2_147_483_648) as i32
+    }
+    use normalize as Some;
+
+    #[test]
+    fn a_function_named_some_is_the_callers() {
+        let value = input!(DraftOrderLineItemInput {
+            quantity: Some(2_147_483_648i64)
+        });
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            serde_json::json!({ "quantity": 0 })
+        );
+    }
+
+    #[test]
+    fn repeats_vec_and_option_are_checked_when_built() {
+        let out_of_range = |body: shopify_api::Result<String>| {
+            matches!(
+                body,
+                Err(Error::InvalidValue {
+                    reason: InvalidValueReason::IntOutOfRange,
+                    ..
+                })
+            )
+        };
+        assert!(out_of_range(
+            graphql!(
+                "query($n: Int!) { products(first: $n) { nodes { id } } }",
+                n = { [2_147_483_648i64; 1][0] }
+            )
+            .body()
+        ));
+        assert!(out_of_range(
+            graphql!(
+                "query($n: Int) { products(first: $n) { nodes { id } } }",
+                n = ::core::option::Option::Some(3_000_000_000i64),
+            )
+            .body()
+        ));
+        assert!(out_of_range(
+            graphql!(
+                "mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { userErrors { message } } }",
+                input = { lineItems: [{ quantity: vec![2_147_483_648i64][0] }] },
+            )
+            .body()
+        ));
+    }
+}
+
 /// Names like the ones the macros generate, or generated before, given to
 /// the caller's locals, closures, functions, constants and trait methods:
 /// the values sent are the caller's.

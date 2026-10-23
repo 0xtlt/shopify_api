@@ -550,13 +550,6 @@ fn integer_literals_outside_of_int_are_refused() {
         format!("The integer is outside the range of `Int`, a 32-bit integer, given for {site}")
     };
     assert_eq!(
-        refused(vec![
-            ("quantity", rust("1")),
-            ("grams?", rust("Some(3_000_000_000)"))
-        ]),
-        message("`grams` of `DraftOrderLineItemInput`")
-    );
-    assert_eq!(
         refusal(
             "DraftOrderInput",
             vec![(
@@ -583,9 +576,9 @@ fn integer_literals_outside_of_int_are_refused() {
     )
     .unwrap();
     for (field, value) in [
-        ("l", rust("vec![1, 2_147_483_648]")),
+        ("l", rust("[1, 2_147_483_648]")),
         ("l", list(vec![rust("1"), rust("2_147_483_648")])),
-        ("m", rust("[[Some(1)], [Some(2_147_483_648)]]")),
+        ("m", rust("[[1], [(-2_147_483_649)]]")),
     ] {
         let error = Literals::new(&schema, quote!(::shopify_api))
             .input_object("T", Span::call_site(), &object(vec![(field, value)]))
@@ -598,7 +591,8 @@ fn integer_literals_outside_of_int_are_refused() {
             error.message
         );
     }
-    // At the bounds, and computed: checked when the value is built.
+    // At the bounds, computed, or in a form whose meaning depends on what a
+    // name resolves to: checked when the value is built.
     assert!(
         input(
             "DraftOrderLineItemInput",
@@ -609,6 +603,24 @@ fn integer_literals_outside_of_int_are_refused() {
         )
         .is_ok()
     );
+    assert!(
+        input(
+            "DraftOrderLineItemInput",
+            vec![
+                ("quantity", rust("Some(3_000_000_000)")),
+                ("grams?", rust("Some(3_000_000_000)"))
+            ]
+        )
+        .is_ok()
+    );
+    for value in ["vec![2_147_483_648]", "[2_147_483_648; 2]"] {
+        assert!(
+            Literals::new(&schema, quote!(::shopify_api))
+                .input_object("T", Span::call_site(), &object(vec![("l", rust(value))]))
+                .is_ok(),
+            "{value}"
+        );
+    }
     assert!(
         input(
             "DraftOrderLineItemInput",

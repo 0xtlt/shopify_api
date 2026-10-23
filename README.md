@@ -152,8 +152,9 @@ A value is checked when it is built, in a literal, an `input!`, a module's
 `Variables` or `Operation::variable`: an `Int` must fit in 32 bits, a `Float`
 must be finite (JSON has no NaN or infinity, and `null` would clear the
 field), and a non-null `JSON` must not be `null` at its top (`null` inside it
-is fine). An integer literal out of range is a compile error at the literal.
-A value known at run time makes `execute` fail before anything is sent, with
+is fine). An integer literal out of range, alone, negated, in parentheses or
+in a list `[…]`, is a compile error at the literal; `Some(…)`, `vec![…]` and
+any other form are checked at run time. A value known at run time makes `execute` fail before anything is sent, with
 `Error::InvalidValue`, which says where and why, never the value:
 `` invalid value at `$input.lineItems[2].quantity`: Int out of 32-bit range ``.
 

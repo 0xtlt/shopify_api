@@ -247,10 +247,14 @@ would turn into something else:
 | A non-null `JSON` | `null` at its top; `null` inside it is sent | `null for a non-null JSON field` |
 | Any value | Its `Serialize` fails | `could not serialize` |
 
-An integer literal out of range is a compile error at the literal: `-1`,
-`2_147_483_648_i64`, `0x8000_0000`, `Some(…)` of one, or an item of `[…]` or
-`vec![…]`. A value known at run time is kept as refused, and the operation
-fails with [`Error::InvalidValue`] when it is sent, or when
+An integer literal out of range is a compile error at the literal, where
+an `Int` is expected: `2_147_483_648_i64`, `-2147483649`, `0x8000_0000`,
+`(3_000_000_000)`, in any base, with `_` and a suffix, negated, in
+parentheses, alone or as an item of a list `[…]`. Only these forms are
+checked when the crate compiles, since their meaning does not depend on what
+a name resolves to. Any other value, `Some(…)`, `vec![…]`, `[x; n]` or a
+computed one, is checked when it is built: it is kept as refused, and the
+operation fails with [`Error::InvalidValue`] when it is sent, or when
 [`Operation::body`] or [`Operation::variable_json`] reads it, before any
 request. Its `Display` names the place in GraphQL terms and the reason, never
 the value:
