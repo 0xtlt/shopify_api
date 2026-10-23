@@ -1,13 +1,8 @@
 error[E0277]: an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })`
  --> tests/ui/literal_wrong_input_type.rs:5:22
   |
-3 |       let _ = shopify_api::graphql!(
-  |  _____________-
-4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
-5 | |         metafields = seo,
-  | |                      ^^^ build it with `input!(MetafieldsSetInput { … })`
-6 | |     );
-  | |_____- required by a bound introduced by this call
+5 |         metafields = seo,
+  |                      ^^^ build it with `input!(MetafieldsSetInput { … })`
   |
   = help: the trait `__ShopifyApiExpect2` is not implemented for `InputObject<2493993284262097346>`
 help: the following other types implement trait `__ShopifyApiExpect2`
@@ -31,7 +26,7 @@ note: required for `Vec<InputObject<2493993284262097346>>` to implement `main::_
 5 | |         metafields = seo,
 6 | |     );
   | |_____^
-note: required by a bound in `main::__shopify_api_check3`
+note: required by a bound in `main::Checks::check`
  --> tests/ui/literal_wrong_input_type.rs:3:13
   |
 3 |       let _ = shopify_api::graphql!(
@@ -39,5 +34,5 @@ note: required by a bound in `main::__shopify_api_check3`
 4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
 5 | |         metafields = seo,
 6 | |     );
-  | |_____^ required by this bound in `__shopify_api_check3`
+  | |_____^ required by this bound in `Checks::check`
   = note: this error originates in the macro `shopify_api::graphql` (in Nightly builds, run with -Z macro-backtrace for more info)

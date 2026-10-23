@@ -69,13 +69,15 @@ fn list(items: Vec<Value>) -> Value {
     })
 }
 
-/// The code of `input!(name { … })` and the items it needs, or the refusal.
+/// The code of `input!(name { … })` and, after it, its warnings, or the
+/// refusal.
 fn input(name: &str, fields: Vec<(&str, Value)>) -> Result<(String, String), String> {
     let mut literals = Literals::new(admin(), quote!(::shopify_api));
     let code = literals
         .input_object(name, Span::call_site(), &object(fields))
         .map_err(|error| error.message)?;
-    Ok((code.to_string(), literals.finish().to_string()))
+    let all = format!("{code} {}", literals.finish());
+    Ok((code.to_string(), all))
 }
 
 fn refusal(name: &str, fields: Vec<(&str, Value)>) -> String {
@@ -104,6 +106,7 @@ fn an_object_is_sent_field_by_field_in_its_order() {
                 Value::For(Box::new(For {
                     span: Span::call_site(),
                     pattern: quote!(m),
+                    binding: Some(Ident::new("m", Span::call_site())),
                     iterable: quote!(&rows),
                     filter: Some(quote!(!m.value.is_empty())),
                     item: Value::Object(object(vec![
@@ -119,7 +122,7 @@ fn an_object_is_sent_field_by_field_in_its_order() {
     let id = input_object_id("ProductUpdateInput");
     assert!(
         code.starts_with(&format!(
-            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , & :: shopify_api :: __private :: literal :: Object ((:: shopify_api :: __private :: literal :: Field (\"id\" , __shopify_api_check"
+            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , & :: shopify_api :: __private :: literal :: Object ((:: shopify_api :: __private :: literal :: Field (\"id\" , ({{"
         )),
         "{code}"
     );
@@ -439,7 +442,10 @@ fn inline_variables_of_scalars_convert_as_before_and_others_are_literals() {
     let VariableValue::Literal(code) = variable(metafields, rust("rows")).unwrap() else {
         panic!("a literal");
     };
-    assert!(code.to_string().contains("__shopify_api_check"), "{code}");
+    assert!(
+        code.to_string().contains("Checks }) . check ((rows))"),
+        "{code}"
+    );
     assert_eq!(
         variable(metafields, Value::Object(object(vec![]))).unwrap_err(),
         "`$metafields` expects a list of `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })`, not an object"

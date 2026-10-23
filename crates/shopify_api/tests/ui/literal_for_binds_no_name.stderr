@@ -1,0 +1,6 @@
+error: The pattern of `[for pattern in … => …]` binds no name: name what it gives, as `[for _item in … => …]`
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_for_binds_no_name.rs:2:60
+  |
+2 |     let _ = shopify_api::input!(ProductUpdateInput { tags: [for _ in 0..3 => "sale"] });
+  |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^

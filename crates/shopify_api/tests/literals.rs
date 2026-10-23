@@ -399,3 +399,165 @@ async fn a_nullable_input_variable_takes_null_an_option_or_a_literal() {
         )
     );
 }
+
+/// Names like the ones the macros generate, or generated before, given to
+/// the caller's locals, closures, functions, constants and trait methods:
+/// the values sent are the caller's.
+mod hygiene {
+    #![allow(non_upper_case_globals, non_snake_case, dead_code)]
+
+    use serde_json::{Value, json};
+    use shopify_api::{graphql, input};
+
+    /// A trait method by value for every type, named like the methods the
+    /// generated code calls.
+    trait Capture: Sized {
+        fn check(self, _: &str) -> &'static str {
+            "captured"
+        }
+        fn optional(self, _: Option<&str>) -> Option<&'static str> {
+            Some("captured")
+        }
+        fn push(self, _: &str) {}
+        fn variable<T, V>(self, _: &str, _: V) -> Self {
+            self
+        }
+        fn __literal_variable<V>(self, _: &str, _: V) -> Self {
+            self
+        }
+    }
+    impl<T> Capture for T {}
+
+    fn json(value: impl serde::Serialize) -> Value {
+        serde_json::to_value(value).unwrap()
+    }
+
+    #[test]
+    fn locals_and_closures() {
+        let __shopify_api_check1 = |text: &str| format!("closure:{text}");
+        let __shopify_api_check3 = |text: &str| format!("closure:{text}");
+        let __shopify_api_optional1 = |text: &str| Some(format!("closure:{text}"));
+        let __shopify_api_checks = "local";
+        let __shopify_api_items = vec!["local"];
+        let __shopify_api_variable_0 = "local";
+        let check = |text: &str| format!("closure:{text}");
+        let Checks = "local";
+        let value = input!(ProductUpdateInput {
+            title: __shopify_api_check3("a"),
+            vendor: __shopify_api_check1("b"),
+            handle: check("c"),
+            productType: __shopify_api_checks,
+            descriptionHtml: __shopify_api_variable_0,
+            templateSuffix?: __shopify_api_optional1("d"),
+            tags: [for tag in &__shopify_api_items => Checks.to_string() + tag],
+        });
+        assert_eq!(
+            json(&value),
+            json!({
+                "title": "closure:a",
+                "vendor": "closure:b",
+                "handle": "closure:c",
+                "productType": "local",
+                "descriptionHtml": "local",
+                "templateSuffix": "closure:d",
+                "tags": ["locallocal"],
+            })
+        );
+
+        let operation = graphql!(
+            "mutation($product: ProductUpdateInput!, $media: [CreateMediaInput!], $first: Int) { productUpdate(product: $product, media: $media) { product { variants(first: $first) { nodes { id } } } userErrors { message } } }",
+            product = { title: __shopify_api_check3("e"), tags: __shopify_api_items.clone() },
+            media = [for alt in [__shopify_api_variable_0] => { originalSource: check(alt), mediaContentType: IMAGE, alt: alt }],
+            first = __shopify_api_items.len(),
+        );
+        assert_eq!(
+            operation.body().unwrap()["variables"],
+            json!({
+                "product": { "title": "closure:e", "tags": ["local"] },
+                "media": [{ "originalSource": "closure:local", "mediaContentType": "IMAGE", "alt": "local" }],
+                "first": 1,
+            })
+        );
+    }
+
+    mod items {
+        use super::*;
+
+        const __shopify_api_check1: &str = "const";
+        const __shopify_api_checks: &str = "const";
+        const __shopify_api_items: [&str; 1] = ["const"];
+        const __shopify_api_variable_0: &str = "const";
+        const Checks: &str = "const";
+        const checks: &str = "const";
+        const items: &str = "const";
+        static __shopify_api_optional1: &str = "static";
+        fn __shopify_api_check2(text: &str) -> String {
+            format!("fn:{text}")
+        }
+        fn check(text: &str) -> String {
+            format!("fn:{text}")
+        }
+        fn optional(text: Option<&str>) -> Option<String> {
+            text.map(|text| format!("fn:{text}"))
+        }
+
+        #[test]
+        fn functions_constants_and_statics() {
+            let value = input!(ProductUpdateInput {
+                title: __shopify_api_check2("a"),
+                vendor: check("b"),
+                handle: __shopify_api_check1,
+                productType: __shopify_api_checks,
+                descriptionHtml: Checks,
+                templateSuffix?: optional(Some(__shopify_api_optional1)),
+                tags: [for tag in __shopify_api_items => check(tag)],
+            });
+            assert_eq!(
+                json(&value),
+                json!({
+                    "title": "fn:a",
+                    "vendor": "fn:b",
+                    "handle": "const",
+                    "productType": "const",
+                    "descriptionHtml": "const",
+                    "templateSuffix": "fn:static",
+                    "tags": ["fn:const"],
+                })
+            );
+            let operation = graphql!(
+                "mutation($product: ProductUpdateInput!, $media: [CreateMediaInput!], $first: Int) { productUpdate(product: $product, media: $media) { product { variants(first: $first) { nodes { id } } } userErrors { message } } }",
+                product = { title: __shopify_api_variable_0, tags: [for tag in [checks, items] => tag] },
+                first = __shopify_api_items.len(),
+            );
+            assert_eq!(
+                operation.body().unwrap()["variables"],
+                json!({ "product": { "title": "const", "tags": ["const", "const"] }, "first": 1 })
+            );
+        }
+    }
+
+    struct Product {
+        title: &'static str,
+    }
+
+    impl Product {
+        const SUFFIX: &'static str = "suffix";
+
+        /// In a method, where `Self` and `self` are the caller's.
+        fn input(&self) -> Value {
+            json(input!(ProductUpdateInput {
+                title: self.title,
+                templateSuffix: Self::SUFFIX,
+                tags: [for tag in [Self::SUFFIX] => tag],
+            }))
+        }
+    }
+
+    #[test]
+    fn self_and_self_type_are_the_callers() {
+        assert_eq!(
+            Product { title: "t" }.input(),
+            json!({ "title": "t", "templateSuffix": "suffix", "tags": ["suffix"] })
+        );
+    }
+}

@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 
 use crate::analyze::{Scalar, Variable, did_you_mean};
@@ -88,6 +88,8 @@ pub struct For {
     /// Of the brackets.
     pub span: Span,
     pub pattern: TokenStream,
+    /// A name the pattern binds, if it binds one.
+    pub binding: Option<Ident>,
     pub iterable: TokenStream,
     pub filter: Option<TokenStream>,
     pub item: Value,
@@ -153,8 +155,13 @@ enum Place {
     Item,
 }
 
-/// Checks values against a schema and writes their code. The code refers
-/// to items [`Literals::finish`] returns, to put in the same block.
+/// Checks values against a schema and writes their code.
+///
+/// No name the code declares is in scope where a Rust expression of a value
+/// is evaluated, so that none captures or shadows a name of the caller's:
+/// each expression is checked by the method of a type declared in a block
+/// of its own, the receiver of the call, and the code declares no local
+/// that a constant of the caller's could match.
 pub struct Literals<'a> {
     schema: &'a Schema,
     krate: TokenStream,
@@ -183,7 +190,7 @@ impl<'a> Literals<'a> {
         }
     }
 
-    /// The traits, functions and warnings the code written so far needs.
+    /// The warnings the code written so far gives: unnamed constants.
     pub fn finish(self) -> TokenStream {
         let items = self.items;
         quote!(#(#items)*)
@@ -339,14 +346,28 @@ impl<'a> Literals<'a> {
                 let value = self.value(&comprehension.item, item, &site, Place::Item)?;
                 let For {
                     pattern,
+                    binding,
                     iterable,
                     filter,
                     ..
                 } = &**comprehension;
+                // The list is a local named after a name the pattern binds:
+                // the pattern compiles, so no constant of that name is in
+                // scope. Its mixed-site hygiene keeps the two apart.
+                let Some(binding) = binding else {
+                    return error(
+                        comprehension.span,
+                        "The pattern of `[for pattern in … => …]` binds no name: name what it gives, as `[for _item in … => …]`",
+                    );
+                };
+                let name = binding.to_string();
+                let items = match name.strip_prefix("r#") {
+                    Some(name) => Ident::new_raw(name, Span::mixed_site()),
+                    None => Ident::new(&name, Span::mixed_site()),
+                };
                 // Each item is written in its turn of the loop, so that it may
                 // borrow what the loop gives.
-                let items = Ident::new("__shopify_api_items", Span::mixed_site());
-                let push = quote!(#items.push(#krate::__private::literal::to_raw(&#value)););
+                let push = quote!(::std::vec::Vec::push(&mut #items, #krate::__private::literal::to_raw(&#value)););
                 let body = match filter {
                     Some(filter) => quote!(if #filter { #push }),
                     None => push,
@@ -493,10 +514,10 @@ impl<'a> Literals<'a> {
             );
         }
 
-        let value_bound = self.expect(&definition.ty, Place::Field, site);
+        let mut items = Vec::new();
+        let value_bound = self.expect(&definition.ty, Place::Field, site, &mut items);
         let n = self.next();
         let bound = format_ident!("__ShopifyApiOptional{n}");
-        let check = format_ident!("__shopify_api_optional{n}");
         let what = escape(&self.what(&definition.ty));
         let (message, label, maybe_bound) = if null_refused {
             let no_null = format_ident!("__ShopifyApiNoNull{n}");
@@ -504,7 +525,7 @@ impl<'a> Literals<'a> {
                 "{site} is non-null (`{}`): `{key}?:` takes an `Option`, not a `Maybe`, whose `Null` it refuses",
                 definition.ty
             ));
-            self.items.push(quote! {
+            items.push(quote! {
                 #[diagnostic::on_unimplemented(message = #refusal, label = "an `Option`: `None` leaves the field out")]
                 trait #no_null {}
             });
@@ -524,17 +545,22 @@ impl<'a> Literals<'a> {
             )
         };
         // `IntoMaybe` as a supertrait: one refusal, which names the field.
-        self.items.push(quote! {
+        items.push(quote! {
             #[diagnostic::on_unimplemented(message = #message, label = #label)]
             trait #bound<T>: #krate::__private::literal::IntoMaybe<T> {}
             impl<V: #value_bound> #bound<V> for ::core::option::Option<V> {}
             impl<V: #maybe_bound> #bound<V> for #krate::Maybe<V> {}
-            fn #check<T, V: #bound<T>>(value: V) -> #krate::Maybe<T> {
-                #krate::__private::literal::IntoMaybe::into_maybe(value)
-            }
         });
-        let tokens = &expr.tokens;
-        Ok(quote_spanned!(expr.span=> #check(#tokens)))
+        let checks = checks(
+            &items,
+            quote! {
+                fn optional<T, V: #bound<T>>(self, value: V) -> #krate::Maybe<T> {
+                    #krate::__private::literal::IntoMaybe::into_maybe(value)
+                }
+            },
+        );
+        let tokens = argument(&expr);
+        Ok(quote_spanned!(expr.span=> #checks.optional(#tokens)))
     }
 
     /// A Rust expression for a value of type `ty`, checked by a trait.
@@ -559,20 +585,29 @@ impl<'a> Literals<'a> {
             };
             return error(expr.span, message);
         }
-        let bound = self.expect(ty, place, site);
-        let check = format_ident!("__shopify_api_check{}", self.next());
-        self.items.push(quote! {
-            fn #check<V: #bound>(value: V) -> V {
-                value
-            }
-        });
-        let tokens = &expr.tokens;
-        Ok(quote_spanned!(expr.span=> #check(#tokens)))
+        let mut items = Vec::new();
+        let bound = self.expect(ty, place, site, &mut items);
+        let checks = checks(
+            &items,
+            quote! {
+                fn check<V: #bound>(self, value: V) -> V {
+                    value
+                }
+            },
+        );
+        let tokens = argument(expr);
+        Ok(quote_spanned!(expr.span=> #checks.check(#tokens)))
     }
 
     /// The trait a Rust expression of type `ty` must implement at `place`,
     /// whose refusal names the GraphQL type.
-    fn expect(&mut self, ty: &TypeRef, place: Place, site: &Site) -> Ident {
+    fn expect(
+        &mut self,
+        ty: &TypeRef,
+        place: Place,
+        site: &Site,
+        items: &mut Vec<TokenStream>,
+    ) -> Ident {
         let bound = format_ident!("__ShopifyApiExpect{}", self.next());
         let krate = self.krate.clone();
         let what = self.what(ty);
@@ -582,13 +617,18 @@ impl<'a> Literals<'a> {
         if !ty.is_non_null() && place != Place::Field {
             label.push_str(", or an `Option` of it, `None` sending `null`");
             let non_null = TypeRef::NonNull(Box::new(inner.clone()));
-            let value = self.expect(&non_null, place, site);
+            let value = self.expect(&non_null, place, site, items);
             impls.push(quote!(impl<V: #value> #bound for V {}));
             impls.push(quote!(impl<V: #value> #bound for ::core::option::Option<V> {}));
         } else {
             match inner {
                 TypeRef::List(item) => {
-                    let item = self.expect(item, Place::Item, &Site::Item(Box::new(site.clone())));
+                    let item = self.expect(
+                        item,
+                        Place::Item,
+                        &Site::Item(Box::new(site.clone())),
+                        items,
+                    );
                     impls.push(quote! {
                         impl<V: #item> #bound for ::std::vec::Vec<V> {}
                         impl<'a, V: #item> #bound for &'a ::std::vec::Vec<V> {}
@@ -629,7 +669,7 @@ impl<'a> Literals<'a> {
             escape(&what)
         );
         let label = escape(&label);
-        self.items.push(quote! {
+        items.push(quote! {
             #[diagnostic::on_unimplemented(message = #message, label = #label)]
             trait #bound {}
             #(#impls)*
@@ -885,6 +925,31 @@ fn scalar_types(scalar: Scalar, krate: &TokenStream) -> Vec<TokenStream> {
             quote!(&'a #krate::__private::serde_json::Value),
         ],
     }
+}
+
+/// The receiver of a check: a value of a type declared, with what its
+/// method needs, in a block that no expression of the caller's is in. By
+/// value, so that no trait method of the same name wins over the method.
+fn checks(items: &[TokenStream], method: TokenStream) -> TokenStream {
+    quote! {
+        ({
+            #(#items)*
+            struct Checks;
+            impl Checks {
+                #method
+            }
+            Checks
+        })
+    }
+}
+
+/// An expression of the caller's as an argument, in parentheses of the
+/// macro's at its place: its braces are not a method argument of the
+/// caller's to lint, and a refusal points at it.
+pub fn argument(expr: &Expr) -> TokenStream {
+    let mut group = Group::new(Delimiter::Parenthesis, expr.tokens.clone());
+    group.set_span(Span::mixed_site().located_at(expr.span));
+    TokenTree::Group(group).into()
 }
 
 fn ident_expr(ident: &Ident) -> Expr {

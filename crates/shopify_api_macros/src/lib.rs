@@ -517,33 +517,26 @@ fn expand_expression(
         ));
     }
 
-    // Evaluated before the generated types are in scope, so that the
-    // values cannot name them by accident.
+    // The values are arguments of the setters, outside the block that
+    // declares the types of the operation: they cannot name them.
     let mut literals = Literals::new(schema.schema(), krate.clone());
-    let mut values = Vec::new();
     let mut setters = Vec::new();
-    for (index, (declared, value)) in given.iter().enumerate() {
-        let local = Ident::new(
-            &format!("__shopify_api_variable_{index}"),
-            Span::mixed_site(),
-        );
+    for (declared, value) in &given {
         let key = &declared.name;
         match literals
             .variable(declared, value)
             .map_err(|error| schema.literal_error(error))?
         {
             VariableValue::Converted { ty, value } => {
-                let tokens = &value.tokens;
-                values.push(quote!(let #local = #tokens;));
-                setters.push(quote_spanned!(value.span=> .variable::<#ty, _>(#key, #local)));
+                let tokens = literal::argument(&value);
+                setters.push(quote_spanned!(value.span=> .variable::<#ty, _>(#key, #tokens)));
             }
             VariableValue::Literal(code) => {
-                values.push(quote!(let #local = #code;));
-                setters.push(quote!(.__literal_variable(#key, #local)));
+                setters.push(quote!(.__literal_variable(#key, #code)));
             }
         }
     }
-    let checks = literals.finish();
+    let literal_warnings = literals.finish();
 
     let tracking = schema.tracking();
     let file = text.tracking();
@@ -551,18 +544,17 @@ fn expand_expression(
     let types = data_types(&operation, &krate);
     let query = &text.query;
     let constructor = constructor(schema.schema(), &operation, &quote!(#query), &krate);
-    Ok(quote! {{
-        #checks
-        #(#values)*
-        {
+    Ok(quote! {
+        ({
             #tracking
             #file
             #warnings
+            #literal_warnings
             #types
             #constructor
-                #(#setters)*
-        }
-    }})
+        })
+        #(#setters)*
+    })
 }
 
 /// `graphql! { mod name = "…"; }`: the operation as a module that names its types.
