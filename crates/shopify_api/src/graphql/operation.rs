@@ -3,7 +3,8 @@
 use std::borrow::Cow;
 use std::marker::PhantomData;
 
-use serde::Serialize;
+use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 use crate::{ApiVersion, Error, Result};
@@ -211,7 +212,8 @@ pub struct Operation<D> {
     name: Option<Cow<'static, str>>,
     /// The Admin API version of the schema the operation was checked against.
     checked_against: Option<&'static str>,
-    variables: std::result::Result<Map<String, Value>, VariablesFailure>,
+    /// Each variable as the JSON it is sent as, in the order it was set.
+    variables: std::result::Result<Vec<(String, Box<RawValue>)>, VariablesFailure>,
     data: PhantomData<fn() -> D>,
 }
 
@@ -224,7 +226,7 @@ impl<D> Operation<D> {
             query,
             name: None,
             checked_against: None,
-            variables: Ok(Map::new()),
+            variables: Ok(Vec::new()),
             data: PhantomData,
         }
     }
@@ -242,7 +244,7 @@ impl<D> Operation<D> {
             kind,
             name: name.map(Cow::Borrowed),
             checked_against: Some(checked_against),
-            variables: Ok(Map::new()),
+            variables: Ok(Vec::new()),
             data: PhantomData,
         }
     }
@@ -282,11 +284,12 @@ impl<D> Operation<D> {
         }
     }
 
-    fn set(mut self, name: &str, value: serde_json::Result<Value>) -> Self {
+    fn set(mut self, name: &str, value: serde_json::Result<Box<RawValue>>) -> Self {
         match (&mut self.variables, value) {
-            (Ok(variables), Ok(value)) => {
-                variables.insert(name.to_string(), value);
-            }
+            (Ok(variables), Ok(value)) => match variables.iter_mut().find(|(set, _)| set == name) {
+                Some((_, set)) => *set = value,
+                None => variables.push((name.to_string(), value)),
+            },
             (Ok(_), Err(error)) => {
                 self.variables = Err(VariablesFailure::of(Error::variables(Some(name), &error)))
             }
@@ -298,39 +301,98 @@ impl<D> Operation<D> {
     /// Sets a variable to a value convertible to `T`, the Rust type of its
     /// GraphQL type.
     pub fn variable<T: Serialize, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
-        self.set(name, serde_json::to_value(value.into_variable()))
+        self.set(
+            name,
+            serde_json::value::to_raw_value(&value.into_variable()),
+        )
     }
 
     /// Sets a variable to any serializable value, checked by nothing.
     pub fn json_variable<V: Serialize>(self, name: &str, value: V) -> Self {
-        self.set(name, serde_json::to_value(value))
+        self.set(name, serde_json::value::to_raw_value(&value))
     }
 
     /// Replaces the variables with the fields of a serializable struct or map.
     pub fn variables<V: Serialize>(mut self, variables: V) -> Self {
-        self.variables = variables_of(variables).map_err(VariablesFailure::of);
+        self.variables = variables_of(variables)
+            .and_then(|variables| {
+                variables
+                    .into_iter()
+                    .map(
+                        |(name, value)| match serde_json::value::to_raw_value(&value) {
+                            Ok(value) => Ok((name, value)),
+                            Err(error) => Err(Error::variables(Some(&name), &error)),
+                        },
+                    )
+                    .collect()
+            })
+            .map_err(VariablesFailure::of);
         self
     }
 
-    /// The variables, as they are sent.
-    pub fn variables_json(&self) -> Result<&Map<String, Value>> {
-        self.variables
+    /// The variables, read back from the JSON they are sent as.
+    pub fn variables_json(&self) -> Result<Map<String, Value>> {
+        let variables = self
+            .variables
             .as_ref()
-            .map_err(|failure| failure.to_error())
+            .map_err(|failure| failure.to_error())?;
+        variables
+            .iter()
+            .map(|(name, value)| match serde_json::from_str(value.get()) {
+                Ok(value) => Ok((name.clone(), value)),
+                Err(error) => Err(Error::variables(Some(name), &error)),
+            })
+            .collect()
     }
 
-    /// The body Shopify receives: `query`, `variables` and `operationName`.
+    /// The body Shopify receives: `query`, `variables` and `operationName`,
+    /// read back from the JSON it is sent as.
     pub fn body(&self) -> Result<Value> {
-        let mut body = Map::new();
-        body.insert("query".to_string(), Value::String(self.query.to_string()));
-        let variables = self.variables_json()?;
-        if !variables.is_empty() {
-            body.insert("variables".to_string(), Value::Object(variables.clone()));
+        serde_json::from_slice(&self.body_json()?).map_err(|error| Error::variables(None, &error))
+    }
+
+    /// The body as it is sent.
+    pub(crate) fn body_json(&self) -> Result<Vec<u8>> {
+        let variables = self
+            .variables
+            .as_ref()
+            .map_err(|failure| failure.to_error())?;
+        let body = Body {
+            query: &self.query,
+            variables,
+            name: self.name.as_deref(),
+        };
+        serde_json::to_vec(&body).map_err(|error| Error::variables(None, &error))
+    }
+}
+
+struct Body<'a> {
+    query: &'a str,
+    variables: &'a [(String, Box<RawValue>)],
+    name: Option<&'a str>,
+}
+
+impl Serialize for Body<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        struct Variables<'a>(&'a [(String, Box<RawValue>)]);
+        impl Serialize for Variables<'_> {
+            fn serialize<S: Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                serializer.collect_map(self.0.iter().map(|(name, value)| (name, value)))
+            }
         }
-        if let Some(name) = &self.name {
-            body.insert("operationName".to_string(), Value::String(name.to_string()));
+
+        let mut body = serializer.serialize_map(None)?;
+        body.serialize_entry("query", self.query)?;
+        if !self.variables.is_empty() {
+            body.serialize_entry("variables", &Variables(self.variables))?;
         }
-        Ok(Value::Object(body))
+        if let Some(name) = self.name {
+            body.serialize_entry("operationName", name)?;
+        }
+        body.end()
     }
 }
 
@@ -526,7 +588,7 @@ mod tests {
     use serde_json::json;
 
     fn variables<D>(operation: Operation<D>) -> Value {
-        Value::Object(operation.variables_json().unwrap().clone())
+        Value::Object(operation.variables_json().unwrap())
     }
 
     #[test]
@@ -651,7 +713,7 @@ mod tests {
 
     #[test]
     fn variables_can_come_from_a_struct() {
-        #[derive(Serialize)]
+        #[derive(serde::Serialize)]
         struct Variables {
             first: i64,
             #[serde(skip_serializing_if = "Option::is_none")]

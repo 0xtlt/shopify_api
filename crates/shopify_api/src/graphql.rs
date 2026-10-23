@@ -49,8 +49,8 @@ impl Shopify {
         operation: Operation<D>,
     ) -> Result<Response<D>> {
         let version = self.version_for(operation.checked_against())?;
-        let body = operation.body()?;
-        let raw = self.send_graphql(version, &body, operation.kind()).await?;
+        let body = operation.body_json()?;
+        let raw = self.send_graphql(version, body, operation.kind()).await?;
         let (data, extensions) = into_data(raw)?;
         Ok(Response {
             data: crate::decode::from_value(data)?,
@@ -98,7 +98,9 @@ impl Shopify {
             body.insert("variables".to_string(), Value::Object(variables));
         }
         let version = self.version_for(None)?;
-        self.send_graphql(version, &Value::Object(body), OperationKind::of(query))
+        let body = serde_json::to_vec(&Value::Object(body))
+            .map_err(|error| Error::variables(None, &error))?;
+        self.send_graphql(version, body, OperationKind::of(query))
             .await
     }
 
@@ -107,11 +109,10 @@ impl Shopify {
     pub(crate) async fn send_graphql(
         &self,
         version: ApiVersion,
-        body: &Value,
+        body: Vec<u8>,
         kind: OperationKind,
     ) -> Result<RawResponse> {
         let url = self.graphql_url(version);
-        let body = serde_json::to_vec(body).map_err(|error| Error::variables(None, &error))?;
         let endpoint = self.endpoint();
         let mut token = self.shared.tokens.get(endpoint).await?;
         let mut retries = 0;
