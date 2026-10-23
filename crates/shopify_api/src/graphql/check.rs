@@ -5,8 +5,9 @@
 //! [`Error::InvalidValue`] before anything is sent.
 
 use std::borrow::Cow;
+use std::marker::PhantomData;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 
 use crate::error::{SensitiveDetail, is_graphql_name};
@@ -220,34 +221,73 @@ impl<T: VariableType> sealed::Sealed for Vec<T> {
 }
 
 /// The value of a Rust expression in a literal of `graphql!` or `input!`,
-/// checked for the scalar `K` it stands for: [`Int`], [`Float`], [`Json`]
-/// (non-null) or [`Plain`] (anything else). Not a public API.
+/// checked for the kind `K` of the place it stands in, and written. Not a
+/// public API.
 pub trait Validate<K> {
     fn validate(&self) -> Result<(), Invalid>;
+    /// Serializes the value: an array of any length as a list, which serde
+    /// does past 32 items only for slices.
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
 }
 
+/// The Rust types of a value of the scalar `K`, lists and `Option` aside:
+/// what the check of a place of that scalar accepts. `Site` is a type of
+/// the generated code: with it, that no `Option` is accepted is known, and
+/// the check may also have an impl for `Option`. Not a public API.
+pub trait Accepts<K, Site>: Validate<K> {}
+
+/// A value written by [`Validate::write`].
+pub struct Written<'a, V, K>(pub &'a V, PhantomData<fn() -> K>);
+
+impl<'a, V, K> Written<'a, V, K> {
+    pub fn new(value: &'a V) -> Self {
+        Self(value, PhantomData)
+    }
+}
+
+impl<V: Validate<K>, K> Serialize for Written<'_, V, K> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.write(serializer)
+    }
+}
+
+/// The kinds of places: the scalars, `JSON` split by whether `null` is
+/// refused at its top, and input objects.
 #[derive(Debug)]
 pub enum Int {}
 #[derive(Debug)]
 pub enum Float {}
+#[derive(Debug)]
+pub enum Text {}
+#[derive(Debug)]
+pub enum Boolean {}
 /// A non-null `JSON`.
 #[derive(Debug)]
 pub enum Json {}
+/// A nullable `JSON`.
 #[derive(Debug)]
-pub enum Plain {}
+pub enum MaybeJson {}
+#[derive(Debug)]
+pub enum Input {}
 
-macro_rules! validate {
+macro_rules! scalar {
     ($kind:ty: $($ty:ty => |$value:ident| $check:expr),+ $(,)?) => {$(
         impl Validate<$kind> for $ty {
             fn validate(&self) -> Result<(), Invalid> {
                 let $value = self;
                 $check
             }
+
+            fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.serialize(serializer)
+            }
         }
+
+        impl<Site> Accepts<$kind, Site> for $ty {}
     )+};
 }
 
-validate!(Int:
+scalar!(Int:
     i8 => |_value| Ok(()),
     i16 => |_value| Ok(()),
     i32 => |_value| Ok(()),
@@ -259,35 +299,45 @@ validate!(Int:
     u64 => |value| int(i32::try_from(*value).is_ok()),
     usize => |value| int(i32::try_from(*value).is_ok()),
 );
-validate!(Float:
+scalar!(Float:
     f32 => |value| float(f64::from(*value)),
     f64 => |value| float(*value),
     i32 => |_value| Ok(()),
     u32 => |_value| Ok(()),
 );
-validate!(Json:
-    Value => |value| json(value),
-    &Value => |value| json(value),
-);
-validate!(Plain:
+scalar!(Text:
     String => |_value| Ok(()),
     &str => |_value| Ok(()),
     &String => |_value| Ok(()),
     Cow<'_, str> => |_value| Ok(()),
-    bool => |_value| Ok(()),
+);
+scalar!(Boolean: bool => |_value| Ok(()));
+scalar!(Json:
+    Value => |value| json(value),
+    &Value => |value| json(value),
+);
+scalar!(MaybeJson:
     Value => |_value| Ok(()),
     &Value => |_value| Ok(()),
 );
 
-impl<const TYPE: u64> Validate<Plain> for InputObject<TYPE> {
+impl<const TYPE: u64> Validate<Input> for InputObject<TYPE> {
     fn validate(&self) -> Result<(), Invalid> {
         self.invalid()
     }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.serialize(serializer)
+    }
 }
 
-impl<const TYPE: u64> Validate<Plain> for &InputObject<TYPE> {
+impl<const TYPE: u64> Validate<Input> for &InputObject<TYPE> {
     fn validate(&self) -> Result<(), Invalid> {
         self.invalid()
+    }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.serialize(serializer)
     }
 }
 
@@ -298,28 +348,51 @@ impl<K, V: Validate<K>> Validate<K> for Option<V> {
             None => Ok(()),
         }
     }
-}
 
-impl<K, V: Validate<K>> Validate<K> for Vec<V> {
-    fn validate(&self) -> Result<(), Invalid> {
-        items(self, V::validate)
-    }
-}
-
-impl<K, V: Validate<K>> Validate<K> for &Vec<V> {
-    fn validate(&self) -> Result<(), Invalid> {
-        items(*self, V::validate)
-    }
-}
-
-impl<K, V: Validate<K>> Validate<K> for &[V] {
-    fn validate(&self) -> Result<(), Invalid> {
-        items(*self, V::validate)
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Some(value) => value.write(serializer),
+            None => serializer.serialize_none(),
+        }
     }
 }
 
 impl<K, V: Validate<K>, const N: usize> Validate<K> for [V; N] {
     fn validate(&self) -> Result<(), Invalid> {
-        items(self, V::validate)
+        self.as_slice().validate()
+    }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_slice().write(serializer)
+    }
+}
+
+impl<K, V: Validate<K>> Validate<K> for Vec<V> {
+    fn validate(&self) -> Result<(), Invalid> {
+        self.as_slice().validate()
+    }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_slice().write(serializer)
+    }
+}
+
+impl<K, V: Validate<K>> Validate<K> for &Vec<V> {
+    fn validate(&self) -> Result<(), Invalid> {
+        self.as_slice().validate()
+    }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_slice().write(serializer)
+    }
+}
+
+impl<K, V: Validate<K>> Validate<K> for &[V] {
+    fn validate(&self) -> Result<(), Invalid> {
+        items(self.iter(), V::validate)
+    }
+
+    fn write<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter().map(Written::<V, K>::new))
     }
 }

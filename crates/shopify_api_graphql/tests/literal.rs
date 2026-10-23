@@ -122,10 +122,12 @@ fn an_object_is_sent_field_by_field_in_its_order() {
     let id = input_object_id("ProductUpdateInput");
     assert!(
         code.starts_with(&format!(
-            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , :: shopify_api :: __private :: literal :: to_raw (& :: shopify_api :: __private :: literal :: Object ((:: shopify_api :: __private :: literal :: Field (\"id\" , ({{"
+            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , ({{"
         )),
         "{code}"
     );
+    // The items of `[for … => …]` are built in the loop, an argument: after
+    // the fields of the object.
     let keys: Vec<&str> = code
         .match_indices("literal :: Field (\"")
         .chain(code.match_indices("literal :: Optional (\""))
@@ -144,9 +146,9 @@ fn an_object_is_sent_field_by_field_in_its_order() {
             "seo",
             "title",
             "metafields",
+            "tags",
             "key",
             "type",
-            "tags",
             "vendor"
         ]
     );
@@ -168,8 +170,10 @@ fn an_object_is_sent_field_by_field_in_its_order() {
         items.contains("message = \"`vendor?:` takes an `Option` or a `shopify_api::Maybe` of a `String`, not `{Self}`\""),
         "{items}"
     );
+    // The check of a scalar field takes the types of the scalar, not an
+    // `Option`, and says what to write for one.
     assert!(
-        items.contains("message = \"`vendor` of `ProductUpdateInput` takes a `String`, not an `Option`: write `vendor?: value` to leave the field out when it is `None`, or `vendor: null` to send `null`\""),
+        items.contains("note = \"`vendor?: value` takes an `Option`, `None` leaving the field out; `vendor: null` sends `null`\""),
         "{items}"
     );
 }
@@ -316,10 +320,10 @@ fn enum_values_are_checked_and_raw_is_only_for_enums() {
         vec![("status", raw("status")), ("id", rust("id"))],
     )
     .unwrap();
+    // `raw(…)` is an argument, evaluated where the caller wrote it.
+    assert!(code.contains("Field (\"status\" , value0)"), "{code}");
     assert!(
-        code.contains(
-            "Field (\"status\" , :: shopify_api :: __private :: literal :: raw (status))"
-        ),
+        code.contains(". build (:: shopify_api :: __private :: literal :: raw ((status)) , (id))"),
         "{code}"
     );
 }
@@ -443,7 +447,7 @@ fn inline_variables_of_scalars_convert_as_before_and_others_are_literals() {
         panic!("a literal");
     };
     assert!(
-        code.to_string().contains("Checks }) . check ((rows))"),
+        code.to_string().contains("Checks }) . build ((rows))"),
         "{code}"
     );
     assert_eq!(
@@ -498,18 +502,19 @@ fn each_expression_is_checked_for_its_scalar() {
         )
         .unwrap()
         .to_string();
-    let marker = "literal :: Leaf < ";
-    let kinds: Vec<&str> = code
-        .match_indices(marker)
-        .map(|(at, _)| {
-            let rest = &code[at + marker.len()..];
-            let kind = &rest[rest.find("literal :: ").unwrap() + "literal :: ".len()..];
-            &kind[..kind.find(' ').unwrap()]
+    let mut kinds: Vec<(usize, &str)> = ["literal :: leaf :: < ", "literal :: optional :: < "]
+        .iter()
+        .flat_map(|marker| code.match_indices(marker))
+        .map(|(at, marker)| {
+            let kind = &code[at + marker.len() + "literal :: ".len()..];
+            (at, &kind[..kind.find(' ').unwrap()])
         })
         .collect();
+    kinds.sort_unstable();
+    let kinds: Vec<&str> = kinds.into_iter().map(|(_, kind)| kind).collect();
     assert_eq!(
         kinds,
-        ["Int", "Float", "Json", "Json", "Json", "Plain", "Plain"]
+        ["Int", "Float", "Json", "Json", "Json", "MaybeJson", "Text"]
     );
 }
 
@@ -609,4 +614,42 @@ fn integer_literals_outside_of_int_are_refused() {
         )
         .is_ok()
     );
+}
+
+/// A constant of the type of its place is written as it is, with nothing
+/// to check; one of another type is checked, and refused by rustc.
+#[test]
+fn constants_are_written_in_place() {
+    let (code, _) = input(
+        "DraftOrderLineItemInput",
+        vec![
+            ("quantity", rust("-12")),
+            ("title", rust("\"t\"")),
+            ("requiresShipping", rust("true")),
+            (
+                "weight",
+                Value::Object(object(vec![
+                    ("unit", ident("GRAMS")),
+                    ("value", rust("2.5")),
+                ])),
+            ),
+        ],
+    )
+    .unwrap();
+    assert!(!code.contains("Checks"), "{code}");
+    for (field, value) in [
+        ("quantity", "\"12\""),
+        ("quantity", "12i128"),
+        ("quantity", "1.5"),
+        ("title", "12"),
+        ("title", "b\"t\""),
+        ("requiresShipping", "1"),
+    ] {
+        let mut fields = vec![(field, rust(value))];
+        if field != "quantity" {
+            fields.push(("quantity", rust("1")));
+        }
+        let (code, _) = input("DraftOrderLineItemInput", fields).unwrap();
+        assert!(code.contains("Checks"), "{field}: {value}");
+    }
 }

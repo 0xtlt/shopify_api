@@ -521,6 +521,21 @@ fn values_at_the_bounds_are_sent() {
         settings: json!({ "a": null })
     });
     let discount = input!(DiscountCustomerGetsValueInput { percentage?: Some(f64::MIN_POSITIVE) });
+    let constants = input!(DraftOrderLineItemInput {
+        quantity: -2_147_483_648,
+        title: "t",
+        requiresShipping: true,
+        weight: { unit: GRAMS, value: 2 },
+    });
+    assert_eq!(
+        serde_json::to_value(&constants).unwrap(),
+        json!({ "quantity": i32::MIN, "title": "t", "requiresShipping": true, "weight": { "unit": "GRAMS", "value": 2 } })
+    );
+    let tags = input!(ProductUpdateInput { tags: ["t"; 40] });
+    assert_eq!(
+        serde_json::to_value(&tags).unwrap()["tags"],
+        json!(vec!["t"; 40])
+    );
     assert_eq!(
         serde_json::to_value((&line_item, &pixel, &discount)).unwrap(),
         json!([
@@ -550,6 +565,9 @@ mod hygiene {
             Some("captured")
         }
         fn push(self, _: &str) {}
+        fn build<A, B>(self, _: A, _: B) -> &'static str {
+            "captured"
+        }
         fn variable<T, V>(self, _: &str, _: V) -> Self {
             self
         }
@@ -573,6 +591,9 @@ mod hygiene {
         let __shopify_api_variable_0 = "local";
         let check = |text: &str| format!("closure:{text}");
         let Checks = "local";
+        let literal = "local";
+        let value0 = |text: &str| format!("closure:{text}");
+        let V1 = "local";
         let value = input!(ProductUpdateInput {
             title: __shopify_api_check3("a"),
             vendor: __shopify_api_check1("b"),
@@ -580,7 +601,8 @@ mod hygiene {
             productType: __shopify_api_checks,
             descriptionHtml: __shopify_api_variable_0,
             templateSuffix?: __shopify_api_optional1("d"),
-            tags: [for tag in &__shopify_api_items => Checks.to_string() + tag],
+            tags: [for tag in &__shopify_api_items => Checks.to_string() + tag + literal + V1],
+            seo: { title: value0("e"), description: literal },
         });
         assert_eq!(
             json(&value),
@@ -591,7 +613,8 @@ mod hygiene {
                 "productType": "local",
                 "descriptionHtml": "local",
                 "templateSuffix": "closure:d",
-                "tags": ["locallocal"],
+                "tags": ["locallocallocallocal"],
+                "seo": { "title": "closure:e", "description": "local" },
             })
         );
 
@@ -621,6 +644,13 @@ mod hygiene {
         const Checks: &str = "const";
         const checks: &str = "const";
         const items: &str = "const";
+        const literal: &str = "const";
+        const value0: &str = "const";
+        const V1: &str = "const";
+        const value69: &str = "const";
+        fn leaf(text: &str) -> String {
+            format!("fn:{text}")
+        }
         static __shopify_api_optional1: &str = "static";
         fn __shopify_api_check2(text: &str) -> String {
             format!("fn:{text}")
@@ -630,6 +660,86 @@ mod hygiene {
         }
         fn optional(text: Option<&str>) -> Option<String> {
             text.map(|text| format!("fn:{text}"))
+        }
+
+        /// More values than the names `literal::names` has.
+        #[test]
+        fn seventy_values() {
+            let value = input!(ProductUpdateInput {
+                tags: [
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1,
+                    __shopify_api_check1
+                ]
+            });
+            assert_eq!(json(&value)["tags"], json!(vec!["const"; 70]));
         }
 
         #[test]
@@ -642,6 +752,7 @@ mod hygiene {
                 descriptionHtml: Checks,
                 templateSuffix?: optional(Some(__shopify_api_optional1)),
                 tags: [for tag in __shopify_api_items => check(tag)],
+                seo: { title: leaf(literal), description: value0.to_string() + V1 },
             });
             assert_eq!(
                 json(&value),
@@ -653,6 +764,7 @@ mod hygiene {
                     "descriptionHtml": "const",
                     "templateSuffix": "fn:static",
                     "tags": ["fn:const"],
+                    "seo": { "title": "fn:const", "description": "constconst" },
                 })
             );
             let operation = graphql!(

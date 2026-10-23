@@ -158,15 +158,21 @@ enum Place {
 /// Checks values against a schema and writes their code.
 ///
 /// No name the code declares is in scope where a Rust expression of a value
-/// is evaluated, so that none captures or shadows a name of the caller's:
-/// each expression is checked by the method of a type declared in a block
-/// of its own, the receiver of the call, and the code declares no local
-/// that a constant of the caller's could match.
+/// is evaluated, so that none captures or shadows a name of the caller's.
+/// The Rust expressions of a value are the arguments of one method, which
+/// builds the value; the method, and the traits that check each argument,
+/// are declared in a block of their own, the receiver of the call. A
+/// constant (`"text"`, `12`, `true`) is written in place, with nothing to
+/// check. The code declares no local that a constant of the caller's could
+/// match.
 pub struct Literals<'a> {
     schema: &'a Schema,
     krate: TokenStream,
     items: Vec<TokenStream>,
     count: usize,
+    /// Of the names of the traits, from the crate being compiled: rustc
+    /// points at a trait of the same name in another crate otherwise.
+    suffix: u32,
 }
 
 impl fmt::Debug for Literals<'_> {
@@ -187,6 +193,7 @@ impl<'a> Literals<'a> {
             krate,
             items: Vec::new(),
             count: 0,
+            suffix: crate_suffix(),
         }
     }
 
@@ -242,11 +249,9 @@ impl<'a> Literals<'a> {
         if let Some(converted) = converted {
             return Ok(converted);
         }
-        let code = self.value(value, ty, &site, Place::Variable)?;
-        let krate = &self.krate;
-        Ok(VariableValue::Literal(
-            quote!(#krate::__private::literal::to_raw(&#code)),
-        ))
+        let mut build = Build::default();
+        let body = self.value(value, ty, &site, Place::Variable, &mut build)?;
+        Ok(VariableValue::Literal(build.finish(body, &self.krate)))
     }
 
     /// `input!(name { … })`: an `InputObject` of the input object `name`.
@@ -283,21 +288,25 @@ impl<'a> Literals<'a> {
                 );
             }
         };
-        let code = self.object(name, fields, object)?;
+        let mut build = Build::default();
+        let body = self.object(name, fields, object, &mut build)?;
+        let json = build.finish(body, &self.krate);
         let krate = &self.krate;
         let id = input_object_id(name);
         Ok(quote_spanned! {span=>
-            #krate::InputObject::<#id>::__new(#name, #krate::__private::literal::to_raw(&#code))
+            #krate::InputObject::<#id>::__new(#name, #json)
         })
     }
 
-    /// The code of a value of type `ty`: an expression of a serializable value.
+    /// The code that builds a value of type `ty` from the arguments it adds
+    /// to `build`.
     fn value(
         &mut self,
         value: &Value,
         ty: &TypeRef,
         site: &Site,
         place: Place,
+        build: &mut Build,
     ) -> Result<TokenStream, Error> {
         let krate = self.krate.clone();
         let inner = ty.nullable();
@@ -313,17 +322,18 @@ impl<'a> Literals<'a> {
             }
             Value::Raw { keyword, value } => {
                 self.enum_only(ty, *keyword, site)?;
-                let tokens = &value.tokens;
-                Ok(quote_spanned!(value.span=> #krate::__private::literal::raw(#tokens)))
+                let tokens = argument(value);
+                let arg = quote_spanned!(value.span=> #krate::__private::literal::raw(#tokens));
+                Ok(build.argument(None, quote!(::std::string::String), arg))
             }
             Value::Ident(ident) => match self.enum_values(inner) {
                 Some((name, values, deprecated)) => {
                     self.enum_value(ident, name, values, deprecated, site)
                 }
-                None => self.expression(&ident_expr(ident), ty, site, place),
+                None => self.expression(&ident_expr(ident), ty, site, place, build),
             },
             Value::Object(object) => match self.input_fields(inner) {
-                Some((name, fields)) => self.object(name, fields, object),
+                Some((name, fields)) => self.object(name, fields, object, build),
                 None => error(
                     object.span,
                     format!("{site} expects {}, not an object", self.what(ty)),
@@ -334,15 +344,15 @@ impl<'a> Literals<'a> {
                     let site = Site::Item(Box::new(site.clone()));
                     let mut items = Vec::new();
                     for value in &list.items {
-                        items.push(self.value(value, item, &site, Place::Item)?);
+                        items.push(self.value(value, item, &site, Place::Item, build)?);
                     }
                     let nested = items
                         .iter()
                         .rev()
                         .fold(quote!(()), |rest, item| quote!((#item, #rest)));
-                    Ok(quote!(#krate::__private::literal::List(#nested)))
+                    Ok(quote!(literal::List(#nested)))
                 }
-                (_, Some(rust)) => self.expression(rust, ty, site, place),
+                (_, Some(rust)) => self.expression(rust, ty, site, place, build),
                 (_, None) => error(
                     list.span,
                     format!("{site} expects {}, not a list", self.what(ty)),
@@ -356,7 +366,9 @@ impl<'a> Literals<'a> {
                     );
                 };
                 let site = Site::Item(Box::new(site.clone()));
-                let value = self.value(&comprehension.item, item, &site, Place::Item)?;
+                let mut each = Build::default();
+                let value = self.value(&comprehension.item, item, &site, Place::Item, &mut each)?;
+                let value = each.finish(value, &krate);
                 let For {
                     pattern,
                     binding,
@@ -381,18 +393,19 @@ impl<'a> Literals<'a> {
                 // Each item is written in its turn of the loop, so that it may
                 // borrow what the loop gives.
                 let push =
-                    quote!(#krate::__private::literal::Collected::push(&mut #items, &#value););
+                    quote!(#krate::__private::literal::Collected::push(&mut #items, #value););
                 let body = match filter {
                     Some(filter) => quote!(if #filter { #push }),
                     None => push,
                 };
-                Ok(quote! {{
+                let list = quote! {{
                     let mut #items = #krate::__private::literal::Collected::new();
                     for #pattern in #iterable { #body }
                     #items
-                }})
+                }};
+                Ok(build.argument(None, quote!(#krate::__private::literal::Collected), list))
             }
-            Value::Rust(expr) => self.expression(expr, ty, site, place),
+            Value::Rust(expr) => self.expression(expr, ty, site, place, build),
         }
     }
 
@@ -402,8 +415,8 @@ impl<'a> Literals<'a> {
         name: &str,
         definitions: &BTreeMap<String, InputValue>,
         object: &Object,
+        build: &mut Build,
     ) -> Result<TokenStream, Error> {
-        let krate = self.krate.clone();
         let mut given: Vec<&str> = Vec::new();
         let mut fields = Vec::new();
         for field in &object.fields {
@@ -446,12 +459,13 @@ impl<'a> Literals<'a> {
                             ),
                         );
                     }
-                    let value = self.optional(field, definition, &site)?;
-                    quote!(#krate::__private::literal::Optional(#key, #value))
+                    let value = self.optional(field, definition, &site, build)?;
+                    quote!(literal::Optional(#key, #value))
                 }
                 None => {
-                    let value = self.value(&field.value, &definition.ty, &site, Place::Field)?;
-                    quote!(#krate::__private::literal::Field(#key, #value))
+                    let value =
+                        self.value(&field.value, &definition.ty, &site, Place::Field, build)?;
+                    quote!(literal::Field(#key, #value))
                 }
             };
             fields.push(code);
@@ -479,7 +493,7 @@ impl<'a> Literals<'a> {
             .iter()
             .rev()
             .fold(quote!(()), |rest, field| quote!((#field, #rest)));
-        Ok(quote!(#krate::__private::literal::Object(#nested)))
+        Ok(quote!(literal::Object(#nested)))
     }
 
     /// `field?: value`, the field being optional: `Maybe<V>` of the value.
@@ -488,6 +502,7 @@ impl<'a> Literals<'a> {
         field: &Field,
         definition: &InputValue,
         site: &Site,
+        build: &mut Build,
     ) -> Result<TokenStream, Error> {
         let krate = self.krate.clone();
         let key = &field.name;
@@ -496,15 +511,15 @@ impl<'a> Literals<'a> {
         let expr = match &field.value {
             Value::Raw { keyword, value } => {
                 self.enum_only(&definition.ty, *keyword, site)?;
-                let tokens = &value.tokens;
+                let tokens = argument(value);
                 let convert = if null_refused {
                     quote!(raw_option)
                 } else {
                     quote!(raw_optional)
                 };
-                return Ok(
-                    quote_spanned!(value.span=> #krate::__private::literal::#convert(#tokens)),
-                );
+                let arg =
+                    quote_spanned!(value.span=> #krate::__private::literal::#convert(#tokens));
+                return Ok(build.argument(None, quote!(#krate::Maybe<::std::string::String>), arg));
             }
             Value::Rust(expr) => expr.clone(),
             Value::Ident(ident) => ident_expr(ident),
@@ -529,18 +544,18 @@ impl<'a> Literals<'a> {
         }
 
         self.int_literals(&expr.tokens, &definition.ty, site)?;
-        let mut items = Vec::new();
-        let value_bound = self.expect(&definition.ty, Place::Field, site, &mut items);
+        let kind = self.kind(&definition.ty);
+        let value_bound = self.expect(&definition.ty, Place::Field, site, &kind, build);
         let n = self.next();
-        let bound = format_ident!("__ShopifyApiOptional{n}");
+        let bound = self.name("Optional", n);
         let what = escape(&self.what(&definition.ty));
         let (message, label, maybe_bound) = if null_refused {
-            let no_null = format_ident!("__ShopifyApiNoNull{n}");
+            let no_null = self.name("NoNull", n);
             let refusal = escape(&format!(
                 "{site} is non-null (`{}`): `{key}?:` takes an `Option`, not a `Maybe`, whose `Null` it refuses",
                 definition.ty
             ));
-            items.push(quote! {
+            build.items.push(quote! {
                 #[diagnostic::on_unimplemented(message = #refusal, label = "an `Option`: `None` leaves the field out")]
                 trait #no_null {}
             });
@@ -559,24 +574,24 @@ impl<'a> Literals<'a> {
                 quote!(#value_bound),
             )
         };
-        // `IntoMaybe` as a supertrait: one refusal, which names the field.
-        items.push(quote! {
+        // `OptionalValue` as a supertrait: one refusal, which names the field.
+        build.items.push(quote! {
             #[diagnostic::on_unimplemented(message = #message, label = #label)]
-            trait #bound<T>: #krate::__private::literal::IntoMaybe<T> {}
-            impl<V: #value_bound> #bound<V> for ::core::option::Option<V> {}
-            impl<V: #maybe_bound> #bound<V> for #krate::Maybe<V> {}
+            trait #bound: literal::OptionalValue<#kind> {}
+            impl<V: #value_bound> #bound for ::core::option::Option<V> {}
+            impl<V: #maybe_bound> #bound for #krate::Maybe<V> {}
         });
-        let kind = self.kind(&definition.ty);
-        let checks = checks(
-            &items,
-            quote! {
-                fn optional<T, V: #bound<T>>(self, value: V) -> #krate::Maybe<#krate::__private::literal::Leaf<T, #kind>> {
-                    #krate::__private::literal::optional(#krate::__private::literal::IntoMaybe::into_maybe(value))
-                }
-            },
+        let generic = format_ident!("V{n}");
+        let value = build.argument(
+            Some(quote!(#generic: #bound)),
+            quote!(#generic),
+            argument(&expr),
         );
-        let tokens = argument(&expr);
-        Ok(quote_spanned!(expr.span=> #checks.optional(#tokens)))
+        Ok(quote! {
+            literal::optional::<#kind, _>(
+                literal::OptionalValue::<#kind>::into_maybe(#value)
+            )
+        })
     }
 
     /// A Rust expression for a value of type `ty`, checked by a trait.
@@ -586,6 +601,7 @@ impl<'a> Literals<'a> {
         ty: &TypeRef,
         site: &Site,
         place: Place,
+        build: &mut Build,
     ) -> Result<TokenStream, Error> {
         if self.is_enum(ty) {
             let name = ty.name();
@@ -602,20 +618,62 @@ impl<'a> Literals<'a> {
             return error(expr.span, message);
         }
         self.int_literals(&expr.tokens, ty, site)?;
-        let mut items = Vec::new();
-        let bound = self.expect(ty, place, site, &mut items);
-        let krate = &self.krate;
         let kind = self.kind(ty);
-        let checks = checks(
-            &items,
-            quote! {
-                fn check<V: #bound>(self, value: V) -> #krate::__private::literal::Leaf<V, #kind> {
-                    #krate::__private::literal::leaf(value)
-                }
-            },
+        if let Some(constant) = self.constant(expr, ty) {
+            return Ok(constant);
+        }
+        let bound = self.expect(ty, place, site, &kind, build);
+        let generic = format_ident!("V{}", self.next());
+        let value = build.argument(
+            Some(quote!(#generic: #bound)),
+            quote!(#generic),
+            argument(expr),
         );
-        let tokens = argument(expr);
-        Ok(quote_spanned!(expr.span=> #checks.check(#tokens)))
+        Ok(quote!(literal::leaf::<#kind, _>(#value)))
+    }
+
+    /// A literal that has the type `ty` whatever its context, written in
+    /// place: a string for a string scalar, an integer for an `Int` (checked
+    /// already) or a `Float`, a float for a `Float`, `true` or `false`.
+    fn constant(&self, expr: &Expr, ty: &TypeRef) -> Option<TokenStream> {
+        let TypeRef::Named(name) = ty.nullable() else {
+            return None;
+        };
+        if !matches!(self.schema.get(name), Some(TypeDef::Scalar)) {
+            return None;
+        }
+        let trees: Vec<TokenTree> = expr.tokens.clone().into_iter().collect();
+        let literal = match trees.as_slice() {
+            [TokenTree::Ident(ident)] if ident == "true" || ident == "false" => {
+                return (Scalar::of(name) == Scalar::Boolean).then(|| expr.tokens.clone());
+            }
+            [TokenTree::Literal(literal)] => literal.to_string(),
+            [TokenTree::Punct(minus), TokenTree::Literal(literal)] if minus.as_char() == '-' => {
+                literal.to_string()
+            }
+            _ => return None,
+        };
+        let tokens = &expr.tokens;
+        match (Scalar::of(name), number(&literal)) {
+            (Scalar::String, _)
+                if literal.starts_with('"')
+                    || literal.starts_with("r\"")
+                    || literal.starts_with("r#") =>
+            {
+                (!trees.iter().any(|tree| matches!(tree, TokenTree::Punct(_))))
+                    .then(|| tokens.clone())
+            }
+            (Scalar::Int, Some(Number::Int(suffix)))
+                if suffix.is_empty() || INT_TYPES.contains(&suffix) =>
+            {
+                Some(quote!(literal::leaf::<literal::Int, _>(#tokens)))
+            }
+            (
+                Scalar::Float,
+                Some(Number::Int("" | "i32" | "u32") | Number::Float("" | "f32" | "f64")),
+            ) => Some(quote!(literal::leaf::<literal::Float, _>(#tokens))),
+            _ => None,
+        }
     }
 
     /// The trait a Rust expression of type `ty` must implement at `place`,
@@ -625,18 +683,21 @@ impl<'a> Literals<'a> {
         ty: &TypeRef,
         place: Place,
         site: &Site,
-        items: &mut Vec<TokenStream>,
+        kind: &TokenStream,
+        build: &mut Build,
     ) -> Ident {
-        let bound = format_ident!("__ShopifyApiExpect{}", self.next());
+        let n = self.next();
+        let bound = self.name("Expect", n);
         let krate = self.krate.clone();
         let what = self.what(ty);
         let mut label = accepted(self.schema, ty.nullable());
         let mut impls = Vec::new();
+        let mut note = None;
         let inner = ty.nullable();
         if !ty.is_non_null() && place != Place::Field {
             label.push_str(", or an `Option` of it, `None` sending `null`");
             let non_null = TypeRef::NonNull(Box::new(inner.clone()));
-            let value = self.expect(&non_null, place, site, items);
+            let value = self.expect(&non_null, place, site, kind, build);
             impls.push(quote!(impl<V: #value> #bound for V {}));
             impls.push(quote!(impl<V: #value> #bound for ::core::option::Option<V> {}));
         } else {
@@ -646,7 +707,8 @@ impl<'a> Literals<'a> {
                         item,
                         Place::Item,
                         &Site::Item(Box::new(site.clone())),
-                        items,
+                        kind,
+                        build,
                     );
                     impls.push(quote! {
                         impl<V: #item> #bound for ::std::vec::Vec<V> {}
@@ -663,16 +725,21 @@ impl<'a> Literals<'a> {
                             impl<'a> #bound for &'a #krate::InputObject<#id> {}
                         });
                     }
-                    _ => {
-                        for ty in scalar_types(Scalar::of(name), &krate) {
-                            impls.push(quote!(impl<'a> #bound for #ty {}));
-                        }
-                    }
+                    // One impl for the types of the scalar: the refusal is this
+                    // trait's, which names the place.
+                    _ => impls.push(quote! {
+                        #[diagnostic::do_not_recommend]
+                        impl<V: literal::Accepts<#kind, Checks>> #bound for V {}
+                    }),
                 },
                 TypeRef::NonNull(_) => unreachable!("`nullable` removes the `!`"),
             }
             if place == Place::Field {
-                impls.push(self.no_option(&bound, ty, site));
+                if self.is_scalar(inner) {
+                    note = self.option_note(ty, site);
+                } else {
+                    impls.push(self.no_option(&bound, ty, site, kind));
+                }
             }
         }
         // The type of an `InputObject` is a hash: the message names the
@@ -688,19 +755,48 @@ impl<'a> Literals<'a> {
             escape(&what)
         );
         let label = escape(&label);
-        items.push(quote! {
-            #[diagnostic::on_unimplemented(message = #message, label = #label)]
-            trait #bound {}
+        let note = note.map(|note: String| {
+            let note = escape(&note);
+            quote!(, note = #note)
+        });
+        // `Validate` as a supertrait: what a value is checked for when it is
+        // built follows from its type being accepted.
+        build.items.push(quote! {
+            #[diagnostic::on_unimplemented(message = #message, label = #label #note)]
+            trait #bound: literal::Validate<#kind> {}
             #(#impls)*
         });
         bound
     }
 
+    /// What to write for an `Option` in a nullable field of a scalar, whose
+    /// check takes the types of the scalar only: shown with any refusal.
+    fn option_note(&self, ty: &TypeRef, site: &Site) -> Option<String> {
+        let Site::Field { name, .. } = site else {
+            return None;
+        };
+        (!ty.is_non_null()).then(|| {
+            format!(
+                "`{name}?: value` takes an `Option`, `None` leaving the field out; `{name}: null` sends `null`"
+            )
+        })
+    }
+
+    fn is_scalar(&self, ty: &TypeRef) -> bool {
+        matches!(ty, TypeRef::Named(name) if matches!(self.schema.get(name), Some(TypeDef::Scalar)))
+    }
+
     /// Refuses an `Option` in a field, saying what to write instead: sending
     /// `null` for `None` would clear the field.
-    fn no_option(&mut self, bound: &Ident, ty: &TypeRef, site: &Site) -> TokenStream {
+    fn no_option(
+        &mut self,
+        bound: &Ident,
+        ty: &TypeRef,
+        site: &Site,
+        kind: &TokenStream,
+    ) -> TokenStream {
         let n = self.next();
-        let no_option = format_ident!("__ShopifyApiNoOption{n}");
+        let no_option = self.name("NoOption", n);
         let Site::Field { name, .. } = site else {
             unreachable!("a field has a field site")
         };
@@ -721,7 +817,7 @@ impl<'a> Literals<'a> {
         let (message, label) = (escape(&message), escape(&label));
         quote! {
             #[diagnostic::on_unimplemented(message = #message, label = #label)]
-            trait #no_option {}
+            trait #no_option: literal::Validate<#kind> {}
             impl<V: #no_option> #bound for ::core::option::Option<V> {}
         }
     }
@@ -817,15 +913,17 @@ impl<'a> Literals<'a> {
     /// What a Rust expression of type `ty` is checked for when it is built:
     /// the `Int`, `Float` or non-null `JSON` its innermost type is.
     fn kind(&self, ty: &TypeRef) -> TokenStream {
-        let krate = &self.krate;
         let (name, non_null) = innermost(ty);
         let kind = match (self.schema.get(name), Scalar::of(name)) {
             (Some(TypeDef::Scalar), Scalar::Int) => quote!(Int),
             (Some(TypeDef::Scalar), Scalar::Float) => quote!(Float),
+            (Some(TypeDef::Scalar), Scalar::Boolean) => quote!(Boolean),
             (Some(TypeDef::Scalar), Scalar::Json) if non_null => quote!(Json),
-            _ => quote!(Plain),
+            (Some(TypeDef::Scalar), Scalar::Json) => quote!(MaybeJson),
+            (Some(TypeDef::Scalar), _) => quote!(Text),
+            _ => quote!(Input),
         };
-        quote!(#krate::__private::literal::#kind)
+        quote!(literal::#kind)
     }
 
     /// Refuses an integer literal outside of the 32 bits of `Int`, where
@@ -915,10 +1013,22 @@ impl<'a> Literals<'a> {
         }
     }
 
+    fn name(&self, what: &str, n: usize) -> Ident {
+        format_ident!("__ShopifyApi{what}{n}_{:08x}", self.suffix)
+    }
+
     fn next(&mut self) -> usize {
         self.count += 1;
         self.count
     }
+}
+
+/// A hash of the name of the crate being compiled, which cargo gives the
+/// macros.
+fn crate_suffix() -> u32 {
+    let name = std::env::var("CARGO_CRATE_NAME").unwrap_or_default();
+    let hash = input_object_id(&name);
+    (hash ^ (hash >> 32)) as u32
 }
 
 fn literal_after_question(key: &str) -> String {
@@ -948,40 +1058,6 @@ fn accepted(schema: &Schema, ty: &TypeRef) -> String {
             }
             .to_string()
         }
-    }
-}
-
-/// The Rust types of a scalar, as `IntoVariable` accepts them; they may
-/// borrow for `'a`.
-fn scalar_types(scalar: Scalar, krate: &TokenStream) -> Vec<TokenStream> {
-    match scalar {
-        Scalar::String => vec![
-            quote!(::std::string::String),
-            quote!(&'a ::core::primitive::str),
-            quote!(&'a ::std::string::String),
-            quote!(::std::borrow::Cow<'a, ::core::primitive::str>),
-        ],
-        Scalar::Int => [
-            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize",
-        ]
-        .iter()
-        .map(|name| {
-            let ident = Ident::new(name, Span::call_site());
-            quote!(::core::primitive::#ident)
-        })
-        .collect(),
-        Scalar::Float => ["f32", "f64", "i32", "u32"]
-            .iter()
-            .map(|name| {
-                let ident = Ident::new(name, Span::call_site());
-                quote!(::core::primitive::#ident)
-            })
-            .collect(),
-        Scalar::Boolean => vec![quote!(::core::primitive::bool)],
-        Scalar::Json => vec![
-            quote!(#krate::__private::serde_json::Value),
-            quote!(&'a #krate::__private::serde_json::Value),
-        ],
     }
 }
 
@@ -1072,20 +1148,115 @@ fn innermost(ty: &TypeRef) -> (&str, bool) {
     }
 }
 
-/// The receiver of a check: a value of a type declared, with what its
-/// method needs, in a block that no expression of the caller's is in. By
-/// value, so that no trait method of the same name wins over the method.
-fn checks(items: &[TokenStream], method: TokenStream) -> TokenStream {
-    quote! {
-        ({
-            #(#items)*
-            struct Checks;
-            impl Checks {
-                #method
-            }
-            Checks
-        })
+/// The Rust expressions of a value, which are the arguments of the method
+/// that builds it, and the traits that check them.
+#[derive(Default)]
+struct Build {
+    items: Vec<TokenStream>,
+    generics: Vec<TokenStream>,
+    params: Vec<TokenStream>,
+    args: Vec<TokenStream>,
+}
+
+impl Build {
+    /// Takes `arg` as an argument of type `ty`: the name the code that
+    /// builds the value refers to it by.
+    fn argument(
+        &mut self,
+        generic: Option<TokenStream>,
+        ty: TokenStream,
+        arg: TokenStream,
+    ) -> TokenStream {
+        let name = format_ident!("value{}", self.params.len());
+        self.generics.extend(generic);
+        self.params.push(quote!(#name: #ty));
+        self.args.push(arg);
+        quote!(#name)
     }
+
+    /// The code of the JSON of the value, or of why it is refused: a
+    /// `Result<Box<RawValue>, Invalid>`, a type that does not depend on the
+    /// arguments, so that a refused argument is reported once, at it.
+    fn finish(self, body: TokenStream, krate: &TokenStream) -> TokenStream {
+        let Self {
+            items,
+            generics,
+            params,
+            args,
+        } = self;
+        let json = quote!(literal::to_raw(&#body));
+        // `literal`, in a block that no expression of the caller's is in.
+        let path = quote!(#[allow(unused_imports)] use #krate::__private::literal;);
+        if args.is_empty() {
+            return quote!({ #path #json });
+        }
+        // The parameters shadow functions of these names, and so no
+        // constant: `literal::names` has the first ones.
+        let names = (NAMES..params.len()).map(|n| {
+            let name = format_ident!("value{n}");
+            quote!(#[allow(dead_code)] fn #name() {})
+        });
+        quote! {
+            ({
+                #path
+                #[allow(unused_imports)]
+                use #krate::__private::literal::names::*;
+                #(#names)*
+                #(#items)*
+                struct Checks;
+                impl Checks {
+                    #[allow(clippy::too_many_arguments)]
+                    fn build<#(#generics),*>(self, #(#params),*) -> ::core::result::Result<
+                        ::std::boxed::Box<#krate::__private::serde_json::value::RawValue>,
+                        literal::Invalid,
+                    > {
+                        #json
+                    }
+                }
+                Checks
+            })
+            .build(#(#args),*)
+        }
+    }
+}
+
+/// How many names of parameters `literal::names` has.
+const NAMES: usize = 64;
+
+const INT_TYPES: [&str; 10] = [
+    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+];
+
+/// A number literal and its suffix.
+enum Number<'a> {
+    Int(&'a str),
+    Float(&'a str),
+}
+
+/// The kind of the number literal `text`, if it is one.
+fn number(text: &str) -> Option<Number<'_>> {
+    if !text.starts_with(|first: char| first.is_ascii_digit()) {
+        return None;
+    }
+    if integer(text).is_some() {
+        let suffix = INT_TYPES
+            .iter()
+            .chain(&["i128", "u128"])
+            .find(|suffix| text.ends_with(*suffix))
+            .copied()
+            .unwrap_or("");
+        return Some(Number::Int(suffix));
+    }
+    let (digits, suffix) = ["f32", "f64"]
+        .iter()
+        .find_map(|suffix| Some((text.strip_suffix(suffix)?, *suffix)))
+        .unwrap_or((text, ""));
+    digits
+        .chars()
+        .all(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | '_' | 'e' | 'E' | '+' | '-')
+        })
+        .then_some(Number::Float(suffix))
 }
 
 /// An expression of the caller's as an argument, in parentheses of the

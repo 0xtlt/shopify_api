@@ -12,7 +12,9 @@ use std::marker::PhantomData;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::value::RawValue;
 
-pub use super::check::{Float, Int, Invalid, Json, Plain, Validate};
+pub use super::check::{
+    Accepts, Boolean, Float, Input, Int, Invalid, Json, MaybeJson, Text, Validate,
+};
 use crate::Maybe;
 
 /// The JSON of a value, or why it is refused.
@@ -69,9 +71,9 @@ impl<V: Validate<K>, K> Check for Leaf<V, K> {
     }
 }
 
-impl<V: Serialize, K> Serialize for Leaf<V, K> {
+impl<V: Validate<K>, K> Serialize for Leaf<V, K> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
+        self.0.write(serializer)
     }
 }
 
@@ -92,11 +94,11 @@ impl Collected {
         }
     }
 
-    pub fn push(&mut self, value: &(impl Check + Serialize)) {
+    pub fn push(&mut self, value: Result<Box<RawValue>, Invalid>) {
         if self.invalid.is_some() {
             return;
         }
-        match to_raw(value) {
+        match value {
             Ok(item) => self.items.push(item),
             Err(invalid) => self.invalid = Some(invalid.index(self.items.len())),
         }
@@ -116,6 +118,21 @@ impl Serialize for Collected {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(&self.items)
     }
+}
+
+/// Functions named like the parameters of the method the macros generate,
+/// imported where it is declared: a parameter may shadow a function, so no
+/// constant of the caller's of the same name turns it into a pattern.
+pub mod names {
+    macro_rules! names {
+        ($($name:ident)*) => {$(
+            pub fn $name() {}
+        )*};
+    }
+
+    names!(
+        value0 value1 value2 value3 value4 value5 value6 value7 value8 value9 value10 value11 value12 value13 value14 value15 value16 value17 value18 value19 value20 value21 value22 value23 value24 value25 value26 value27 value28 value29 value30 value31 value32 value33 value34 value35 value36 value37 value38 value39 value40 value41 value42 value43 value44 value45 value46 value47 value48 value49 value50 value51 value52 value53 value54 value55 value56 value57 value58 value59 value60 value61 value62 value63
+    );
 }
 
 #[derive(Debug)]
@@ -304,19 +321,23 @@ pub fn raw_option(value: impl RawOption) -> Maybe<String> {
     value.into_maybe()
 }
 
-/// The value of `field?: value`: `None` leaves the field out.
-pub trait IntoMaybe<T> {
-    fn into_maybe(self) -> Maybe<T>;
+/// The value of `field?: value`, checked as a `K`: `None` leaves the field
+/// out.
+pub trait OptionalValue<K> {
+    type Value: Validate<K>;
+    fn into_maybe(self) -> Maybe<Self::Value>;
 }
 
-impl<T> IntoMaybe<T> for Option<T> {
-    fn into_maybe(self) -> Maybe<T> {
+impl<K, V: Validate<K>> OptionalValue<K> for Option<V> {
+    type Value = V;
+    fn into_maybe(self) -> Maybe<V> {
         option(self)
     }
 }
 
-impl<T> IntoMaybe<T> for Maybe<T> {
-    fn into_maybe(self) -> Maybe<T> {
+impl<K, V: Validate<K>> OptionalValue<K> for Maybe<V> {
+    type Value = V;
+    fn into_maybe(self) -> Maybe<V> {
         self
     }
 }
@@ -390,7 +411,10 @@ mod tests {
         );
         let mut collected = Collected::new();
         for quantity in [1_usize, 2, 1 << 40, 3, usize::MAX] {
-            collected.push(&Object((Field("quantity", leaf::<Int, _>(quantity)), ())));
+            collected.push(to_raw(&Object((
+                Field("quantity", leaf::<Int, _>(quantity)),
+                (),
+            ))));
         }
         assert_eq!(
             refused(to_raw(&Object((Field("items", &collected), ())))),
@@ -399,7 +423,7 @@ mod tests {
         // `null` of a nullable `JSON`, and nulls inside a `JSON`, are sent.
         assert_eq!(
             to_raw(&List((
-                leaf::<Plain, _>(Value::Null),
+                leaf::<MaybeJson, _>(Value::Null),
                 (leaf::<Json, _>(serde_json::json!([null])), ())
             )))
             .unwrap()
