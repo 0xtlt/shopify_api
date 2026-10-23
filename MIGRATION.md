@@ -55,6 +55,7 @@ to keep that.
 | `GraphqlErrors(Vec<GraphqlError>)` | `Graphql(GraphqlErrors { errors, data })` |
 | `JsonParseError`, `NotWantedJsonFormat`, `NotJson`, `ResponseBroken` | `Decode { path, message, detail }`: a body that is not JSON, or `data` that does not fit its type. `path` and `message` hold no text of the answer (a map key is `[key]`); serde's message is `error.sensitive_detail()` |
 | Variables that do not serialize | `Variables { message, detail }`: what a `Serialize` implementation wrote is `error.sensitive_detail()`, not the message |
+| A `Float` that is NaN or infinite, an `Int` beyond 32 bits, `null` for a non-null `JSON`, sent as they were | `InvalidValue { path, reason, detail }`, before anything is sent: `` invalid value at `$product.metafields[2].value`: not a finite Float `` |
 | `Authentication(text)` | `Auth { message, detail }`: what the token endpoint wrote is `error.sensitive_detail()` |
 | `MissingGraphqlData`, `InvalidHeaderValue`, `Other` | Gone |
 
@@ -172,3 +173,7 @@ The input objects of `graphql!` changed before the release.
 | `shopify.execute(module::operation(module::Variables { … }))` | The same, or `shopify.execute(module::Variables { … })` |
 | `Variables` always `Default` and `PartialEq` | `Default` when no variable is required, `PartialEq` when it holds no input object |
 | `Operation::variables_json()` returned `&Map` | It returns the `Map`, read back from the JSON kept for each variable |
+| `shopify.execute(module::Variables { … }.into())` | Drop the `.into()`: `execute` takes `impl Into<Operation<D>>`, so `.into()` has no single target (E0283) |
+| `Operation::variable::<T, _>` with a `T` of yours | `T` is a `VariableType`: one of the Rust types `graphql!` picks (`String`, `i64`, `f64`, `bool`, `Value`, `InputObject`, in `Option` and `Vec`). `json_variable` takes anything else |
+| A `u64` beyond `i64` saturated to `i64::MAX`; NaN and infinity sent as `null`; `null` sent for a non-null `JSON` | Refused: `Error::InvalidValue` when the operation runs, before the request; an integer literal out of the range of `Int` is a compile error |
+| `[for _ in … => …]` | `[for _item in … => …]`: the pattern binds a name |

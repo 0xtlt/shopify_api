@@ -127,7 +127,8 @@ variable, so the usual spellings work:
 | List | A `Vec`, a slice, an array or a `&Vec` of accepted values |
 
 Another type is a compile error on the value: `` `&str` is not a value for a
-GraphQL variable of Rust type `i64` `` (see [`IntoVariable`]).
+GraphQL variable of Rust type `i64` `` (see [`IntoVariable`]). The value is
+then checked, as for [input values](#values-shopify-would-not-read-as-written).
 
 An enum value is written bare, and checked: `sortKey = TITLE`. A string
 known at run time goes through `raw(…)`, which nothing checks:
@@ -230,8 +231,42 @@ What reads as what, when Rust could read it too:
 - A lone identifier is an enum value where an enum is expected, and a Rust
   variable everywhere else.
 
+- The pattern of `[for … in … => …]` binds a name: `[for _item in 0..3 => …]`
+  rather than `[for _ in 0..3 => …]`. The generated code names the list after
+  it, which no constant of the caller's can match.
+
 Nothing goes through a `serde_json::Value`: each literal is written straight
 to the JSON sent, and a value of `input!` holds its JSON already.
+
+# Values Shopify would not read as written
+
+Every value is checked when it is built (a literal, an `input!`, the
+`Variables` of a module, [`Operation::variable`]), for what JSON or GraphQL
+would turn into something else:
+
+| Value | Refused when | Reason shown |
+| --- | --- | --- |
+| A `Float` | NaN or infinite: JSON writes it `null`, which clears the field | `not a finite Float` |
+| An `Int`, of any integer type | Outside of 32 bits, GraphQL's `Int` | `Int out of 32-bit range` |
+| A non-null `JSON` | `null` at its top; `null` inside it is sent | `null for a non-null JSON field` |
+| Any value | Its `Serialize` fails | `could not serialize` |
+
+An integer literal out of range is a compile error at the literal: `-1`,
+`2_147_483_648_i64`, `0x8000_0000`, `Some(…)` of one, or an item of `[…]` or
+`vec![…]`. A value known at run time is kept as refused, and the operation
+fails with [`Error::InvalidValue`] when it is sent, or when
+[`Operation::body`] or [`Operation::variables_json`] reads it, before any
+request. Its `Display` names the place in GraphQL terms and the reason, never
+the value:
+
+```text
+invalid value at `$product.metafields[2].value`: not a finite Float
+```
+
+A serializer's message, which may quote the value, is only in
+[`Error::sensitive_detail`]. Shopify's string-encoded scalars, such as
+`UnsignedInt64`, are strings, and not checked. An [`InputObject`] that is
+refused also fails to serialize on its own, with the same message.
 
 # Named operations
 
@@ -367,3 +402,7 @@ scripts an answer that leaves out a non-null field.
 - Enum values are checked where they are written; the `String` fields of
   `Variables` and `raw(…)` are not.
 - The generated code refers to `::shopify_api`: the dependency cannot be renamed.
+- Under `#![no_implicit_prelude]`, a literal or an `input!` that holds a Rust
+  expression does not compile: its messages are `#[diagnostic::on_unimplemented]`,
+  whose `diagnostic` namespace that attribute hides. Literals of constants,
+  modules and variables of scalars compile there.

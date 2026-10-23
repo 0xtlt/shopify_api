@@ -146,6 +146,17 @@ shopify.execute(graphql!(
 A value of another input type is refused, the message naming both GraphQL
 types: `` an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })` ``.
 
+### Values Shopify would not read as written
+
+A value is checked when it is built, in a literal, an `input!`, a module's
+`Variables` or `Operation::variable`: an `Int` must fit in 32 bits, a `Float`
+must be finite (JSON has no NaN or infinity, and `null` would clear the
+field), and a non-null `JSON` must not be `null` at its top (`null` inside it
+is fine). An integer literal out of range is a compile error at the literal.
+A value known at run time makes `execute` fail before anything is sent, with
+`Error::InvalidValue`, which says where and why, never the value:
+`` invalid value at `$input.lineItems[2].quantity`: Int out of 32-bit range ``.
+
 ### Named
 
 `graphql! { pub mod name = "…"; … }` names the types, for functions and
@@ -194,6 +205,9 @@ type, and `graphql_raw` returns the whole answer, `errors` included.
 - rustc's own errors, outside those of the macros, show an input object as
   `InputObject<N>`, `N` a hash of its name.
 - Enum fields of a module's `Variables` and `raw(…)` are strings nothing checks.
+- Under `#![no_implicit_prelude]`, a literal or an `input!` that holds a
+  Rust expression does not compile: its messages need `#[diagnostic::…]`,
+  which that attribute hides. Constants, modules and variables of scalars do.
 
 The full reference of `graphql!`, with the mapping of every GraphQL type and
 the rules of literals, is

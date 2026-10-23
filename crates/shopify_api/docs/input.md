@@ -49,6 +49,13 @@ message that names both places in GraphQL terms:
 error[E0277]: an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })`
 ```
 
+A value that Shopify would not read as written, a `Float` that is not
+finite, an `Int` beyond 32 bits, `null` for a non-null `JSON`, is kept as
+refused: the operation that holds it fails with
+[`Error::InvalidValue`](crate::Error::InvalidValue) before it is sent (see
+[`graphql!`](crate::graphql!#values-shopify-would-not-read-as-written)).
+`input!` needs no `?`.
+
 The fields are checked against the schema of the crate where `input!` is
 written. A value built in another crate, against another schema or version,
 has the same Rust type as long as the GraphQL name is the same.
