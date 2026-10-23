@@ -223,14 +223,9 @@ pub fn topic_enum(topic: &str) -> String {
 
 graphql! {
     mod list = file("graphql/operations/webhooks_list.graphql");
-}
-
-graphql! {
     mod create = file("graphql/operations/webhooks_create.graphql");
-}
-
-graphql! {
     mod update = file("graphql/operations/webhooks_update.graphql");
+    mod delete = file("graphql/operations/webhooks_delete.graphql");
 }
 
 /// The input of `create` or `update` for a spec. An update sends every
@@ -250,10 +245,6 @@ macro_rules! input {
             ..Default::default()
         }
     }};
-}
-
-graphql! {
-    mod delete = file("graphql/operations/webhooks_delete.graphql");
 }
 
 /// A webhook subscription of a shop.

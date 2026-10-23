@@ -67,25 +67,10 @@ const ERROR_BODY_LIMIT: usize = 1024 * 1024;
 
 graphql! {
     mod run_query = file("graphql/operations/bulk_run_query.graphql");
-}
-
-graphql! {
     mod run_mutation = file("graphql/operations/bulk_run_mutation.graphql");
-}
-
-graphql! {
     mod get = file("graphql/operations/bulk_get.graphql");
-}
-
-graphql! {
     mod list = file("graphql/operations/bulk_list.graphql");
-}
-
-graphql! {
     mod cancel = file("graphql/operations/bulk_cancel.graphql");
-}
-
-graphql! {
     mod staged_uploads = file("graphql/operations/bulk_staged_uploads.graphql");
 }
 

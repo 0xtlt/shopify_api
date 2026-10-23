@@ -63,40 +63,59 @@ impl Parse for Source {
     }
 }
 
-/// `graphql!(SOURCE, name = value, …)` or `graphql! { pub mod name = SOURCE; }`.
+/// `graphql!(SOURCE, name = value, …)`, or modules:
+/// `graphql! { pub mod name = SOURCE; mod other = SOURCE }`.
 enum Input {
     Expression {
         source: Source,
         variables: Vec<(Ident, Expr)>,
     },
-    Module {
-        attributes: Vec<Attribute>,
-        visibility: Visibility,
-        name: Ident,
-        source: Source,
-    },
+    Modules(Vec<Module>),
+}
+
+struct Module {
+    attributes: Vec<Attribute>,
+    visibility: Visibility,
+    name: Ident,
+    source: Source,
 }
 
 impl Parse for Input {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let attributes = input.call(Attribute::parse_outer)?;
-        let visibility: Visibility = input.parse()?;
+        let mut attributes = input.call(Attribute::parse_outer)?;
+        let mut visibility: Visibility = input.parse()?;
 
         if input.peek(Token![mod]) {
-            input.parse::<Token![mod]>()?;
-            let name: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            let source: Source = input.parse()?;
-            input.parse::<Option<Token![;]>>()?;
-            if !input.is_empty() {
-                return Err(input.error("expected the end of the `graphql!` module"));
+            let mut modules = Vec::new();
+            loop {
+                input.parse::<Token![mod]>()?;
+                let name: Ident = input.parse()?;
+                input.parse::<Token![=]>()?;
+                let source: Source = input.parse()?;
+                modules.push(Module {
+                    attributes,
+                    visibility,
+                    name,
+                    source,
+                });
+                if input.is_empty() {
+                    break;
+                }
+                input.parse::<Token![;]>().map_err(|error| {
+                    syn::Error::new(error.span(), "expected `;` after the module")
+                })?;
+                if input.is_empty() {
+                    break;
+                }
+                attributes = input.call(Attribute::parse_outer)?;
+                visibility = input.parse()?;
+                if !input.peek(Token![mod]) {
+                    return Err(input.error(
+                        "expected another module, `mod name = \"…\";`, or the end of `graphql!`",
+                    ));
+                }
             }
-            return Ok(Self::Module {
-                attributes,
-                visibility,
-                name,
-                source,
-            });
+            return Ok(Self::Modules(modules));
         }
 
         if let Some(attribute) = attributes.first() {
@@ -504,13 +523,13 @@ fn expand_expression(
 }
 
 /// `graphql! { mod name = "…"; }`: the operation as a module that names its types.
-fn expand_module(
-    schema: &LoadedSchema,
-    attributes: &[Attribute],
-    visibility: &Visibility,
-    name: &Ident,
-    source: &Source,
-) -> syn::Result<TokenStream> {
+fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStream> {
+    let Module {
+        attributes,
+        visibility,
+        name,
+        source,
+    } = module;
     let krate = quote!(::shopify_api);
     let text = Text::read(source)?;
     let operation = schema.check(&text)?;
@@ -576,12 +595,13 @@ fn expand(input: Input, schema: Result<LoadedSchema, String>) -> syn::Result<Tok
     let schema = schema.map_err(|message| syn::Error::new(Span::call_site(), message))?;
     match input {
         Input::Expression { source, variables } => expand_expression(&schema, &source, &variables),
-        Input::Module {
-            attributes,
-            visibility,
-            name,
-            source,
-        } => expand_module(&schema, &attributes, &visibility, &name, &source),
+        Input::Modules(modules) => {
+            let mut expanded = TokenStream::new();
+            for module in &modules {
+                expanded.extend(expand_module(&schema, module)?);
+            }
+            Ok(expanded)
+        }
     }
 }
 
@@ -711,24 +731,33 @@ mod tests {
         let module: Input =
             syn::parse_str("#[doc = \"Docs.\"] pub mod shop_name = \"{ shop { name } }\";")
                 .unwrap();
-        let Input::Module {
-            attributes, name, ..
-        } = module
-        else {
+        let Input::Modules(modules) = module else {
             panic!("a module");
         };
-        assert_eq!(name, "shop_name");
-        assert_eq!(attributes.len(), 1);
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].name, "shop_name");
+        assert_eq!(modules[0].attributes.len(), 1);
 
-        let module: Input =
-            syn::parse_str(r#"pub(crate) mod shop_name = file("graphql/shop.graphql");"#).unwrap();
-        assert!(matches!(
-            module,
-            Input::Module {
-                source: Source::File(_),
-                ..
-            }
-        ));
+        // Several modules, `;` between them and optional after the last.
+        for text in [
+            r#"#[doc = "A."] pub mod a = "{ shop { name } }"; pub(crate) mod b = file("b.graphql"); mod c = "{ shop { id } }""#,
+            r#"#[doc = "A."] pub mod a = "{ shop { name } }"; pub(crate) mod b = file("b.graphql"); mod c = "{ shop { id } }";"#,
+        ] {
+            let Input::Modules(modules) = syn::parse_str::<Input>(text).unwrap() else {
+                panic!("modules");
+            };
+            let names: Vec<String> = modules
+                .iter()
+                .map(|module| module.name.to_string())
+                .collect();
+            assert_eq!(names, ["a", "b", "c"]);
+            assert_eq!(modules[0].attributes.len(), 1);
+            assert!(modules[1].attributes.is_empty());
+            assert!(matches!(modules[0].visibility, Visibility::Public(_)));
+            assert!(matches!(modules[1].visibility, Visibility::Restricted(_)));
+            assert!(matches!(modules[1].source, Source::File(_)));
+            assert!(matches!(modules[2].visibility, Visibility::Inherited));
+        }
 
         for (source, message) in [
             (
@@ -750,7 +779,11 @@ mod tests {
             ),
             (
                 r#"mod shop = "{ shop { name } }"; 1"#,
-                "expected the end of the `graphql!` module",
+                "expected another module, `mod name = \"…\";`, or the end of `graphql!`",
+            ),
+            (
+                r#"mod a = "{ shop { name } }" mod b = "{ shop { id } }""#,
+                "expected `;` after the module",
             ),
         ] {
             let error = syn::parse_str::<Input>(source)
