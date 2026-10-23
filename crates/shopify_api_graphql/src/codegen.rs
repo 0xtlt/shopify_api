@@ -1,6 +1,6 @@
 //! Rust types for the result and the variables of an analyzed operation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
@@ -8,7 +8,7 @@ use quote::{quote, quote_spanned};
 use crate::analyze::{
     FieldBase, Operation, Scalar, SelectedField, Selection, Variable, VariableBase,
 };
-use crate::schema::{InputValue, Schema, TypeDef, TypeRef};
+use crate::schema::{Schema, TypeDef, TypeRef};
 
 /// The name of the type generated for the `data` of an operation.
 pub const DATA_TYPE: &str = "Data";
@@ -219,7 +219,7 @@ pub fn data_types(operation: &Operation, krate: &TokenStream) -> TokenStream {
 // ─── Variables ───────────────────────────────────────────────────────
 
 /// The Rust type a variable value is converted to, or `None` when the variable
-/// holds an input object, which has no type outside a `graphql!` module.
+/// holds an input object, which is an [`InputObject`](https://docs.rs/shopify_api/latest/shopify_api/struct.InputObject.html).
 pub fn variable_type(variable: &Variable, krate: &TokenStream) -> Option<TokenStream> {
     let base = match variable.base {
         VariableBase::Scalar(scalar) => scalar_type(scalar, krate),
@@ -249,171 +249,126 @@ pub fn deprecation_warning(span: Span, note: &str) -> TokenStream {
     }
 }
 
-struct InputTypes<'a> {
-    schema: &'a Schema,
-    krate: &'a TokenStream,
-    generated: BTreeSet<String>,
-    items: Vec<TokenStream>,
+/// The input objects a value of input type `name` may hold, `name` included.
+fn reachable_inputs<'a>(schema: &'a Schema, name: &'a str, found: &mut BTreeSet<&'a str>) {
+    if let Some(TypeDef::Input { fields }) = schema.get(name)
+        && found.insert(name)
+    {
+        for field in fields.values() {
+            reachable_inputs(schema, field.ty.name(), found);
+        }
+    }
 }
 
-impl InputTypes<'_> {
-    /// The Rust type of a named input type, generating input objects on the way.
-    fn named(&mut self, name: &str) -> TokenStream {
-        match self.schema.get(name) {
-            Some(TypeDef::Input { fields }) => {
-                if self.generated.insert(name.to_string()) {
-                    self.input_object(name, fields);
-                }
-                let ident = Ident::new(name, Span::call_site());
+/// [`VARIABLES_TYPE`], `operation(variables)`, `From<Variables>` for the
+/// operation, and a type alias, named as in the schema, for each input object
+/// the variables may hold.
+///
+/// `constructor` builds the operation without its variables; `krate` is the
+/// path of the `shopify_api` crate in the generated code.
+pub fn variables_types(
+    schema: &Schema,
+    operation: &Operation,
+    krate: &TokenStream,
+    constructor: &TokenStream,
+) -> TokenStream {
+    let mut inputs = BTreeSet::new();
+    for variable in &operation.variables {
+        reachable_inputs(schema, variable.ty.name(), &mut inputs);
+    }
+    let aliases = inputs.iter().map(|name| {
+        let ident = Ident::new(name, Span::call_site());
+        let id = input_object_id(name);
+        let doc = format!(" The input object `{name}`: build it with `input!({name} {{ … }})`.");
+        quote! {
+            #[doc = #doc]
+            #[allow(dead_code)]
+            pub type #ident = #krate::InputObject<#id>;
+        }
+    });
+
+    let mut taken = BTreeSet::new();
+    let mut fields = Vec::new();
+    let mut setters = Vec::new();
+    for variable in &operation.variables {
+        let base = match variable.base {
+            VariableBase::Scalar(scalar) => scalar_type(scalar, krate),
+            VariableBase::Enum => scalar_type(Scalar::String, krate),
+            VariableBase::Input => {
+                let ident = Ident::new(variable.ty.name(), Span::call_site());
                 quote!(#ident)
             }
-            Some(TypeDef::Enum { .. }) => scalar_type(Scalar::String, self.krate),
-            _ => scalar_type(Scalar::of(name), self.krate),
+        };
+        let (ident, rename) = field_ident(&variable.name, &mut taken);
+        let key = &variable.name;
+        let doc = format!(" `${key}: {}`", variable.ty);
+        if variable.is_required() {
+            let ty = wrap(&variable.ty, &base);
+            fields.push(quote! {
+                #[doc = #doc]
+                #rename
+                pub #ident: #ty,
+            });
+            setters.push(quote! {
+                let operation = operation.json_variable(#key, variables.#ident);
+            });
+        } else {
+            // `wrap` of a nullable type is already an `Option`.
+            let ty = wrap(variable.ty.nullable(), &base);
+            fields.push(quote! {
+                #[doc = #doc]
+                #rename
+                #[serde(skip_serializing_if = "::core::option::Option::is_none")]
+                pub #ident: #ty,
+            });
+            setters.push(quote! {
+                let operation = match variables.#ident {
+                    ::core::option::Option::Some(value) => operation.json_variable(#key, value),
+                    ::core::option::Option::None => operation,
+                };
+            });
         }
     }
 
-    fn input_object(&mut self, name: &str, fields: &BTreeMap<String, InputValue>) {
-        let mut taken = BTreeSet::new();
-        let fields: Vec<TokenStream> = fields
-            .iter()
-            .map(|(field, value)| {
-                let mut base = self.named(value.ty.name());
-                // A value cannot contain itself: break direct cycles with a box.
-                let nested_directly = !contains_list(&value.ty);
-                if nested_directly && self.reaches(value.ty.name(), name) {
-                    base = quote!(::std::boxed::Box<#base>);
-                }
-                let note = value.deprecation.as_ref().map(|reason| {
-                    format!(
-                        "`{name}.{field}` is deprecated in the Shopify Admin API {}: {reason}",
-                        self.schema.api_version
-                    )
-                });
-                input_field(field, value, note, &base, &mut taken)
-            })
-            .collect();
-
-        let doc = format!(" The input object `{name}`. Fields left to `None` are not sent.");
-        self.items
-            .push(input_struct(name, &doc, &fields, self.krate));
+    // `Default` only when it cannot leave out a required variable;
+    // `InputObject` has no `PartialEq`.
+    let mut derives = vec![
+        quote!(::core::fmt::Debug),
+        quote!(::core::clone::Clone),
+        quote!(#krate::__private::serde::Serialize),
+    ];
+    if inputs.is_empty() {
+        derives.push(quote!(::core::cmp::PartialEq));
     }
-
-    /// Whether a value of input type `from` can hold one of type `to` without a list in between.
-    fn reaches(&self, from: &str, to: &str) -> bool {
-        let mut seen = BTreeSet::new();
-        let mut stack = vec![from];
-        while let Some(name) = stack.pop() {
-            if name == to {
-                return true;
-            }
-            if !seen.insert(name) {
-                continue;
-            }
-            if let Some(TypeDef::Input { fields }) = self.schema.get(name) {
-                stack.extend(
-                    fields
-                        .values()
-                        .filter(|value| !contains_list(&value.ty))
-                        .map(|value| value.ty.name()),
-                );
-            }
-        }
-        false
+    if !operation.variables.iter().any(Variable::is_required) {
+        derives.push(quote!(::core::default::Default));
     }
-}
-
-fn contains_list(ty: &TypeRef) -> bool {
-    match ty {
-        TypeRef::Named(_) => false,
-        TypeRef::List(_) => true,
-        TypeRef::NonNull(inner) => contains_list(inner),
-    }
-}
-
-/// A field of an input object or of the variables. A value that may be left
-/// out is an `Option` that is not sent when `None`. A deprecated input field
-/// is marked `#[deprecated]` with `note`, so that setting it warns.
-fn input_field(
-    name: &str,
-    value: &InputValue,
-    note: Option<String>,
-    base: &TokenStream,
-    taken: &mut BTreeSet<String>,
-) -> TokenStream {
-    let (ident, rename) = field_ident(name, taken);
-    let ty = &value.ty;
-    let doc = format!(" `{name}: {ty}`");
-    let deprecated = note.map(|note| quote!(#[deprecated(note = #note)]));
-    if value.is_required() {
-        let ty = wrap(ty, base);
-        quote! {
-            #[doc = #doc]
-            #deprecated
-            #rename
-            pub #ident: #ty,
-        }
-    } else {
-        // `wrap` of a nullable type is already an `Option`.
-        let ty = wrap(ty.nullable(), base);
-        quote! {
-            #[doc = #doc]
-            #deprecated
-            #rename
-            #[serde(skip_serializing_if = "::core::option::Option::is_none")]
-            pub #ident: #ty,
-        }
-    }
-}
-
-/// A struct that is only sent: an input object, or the variables.
-fn input_struct(name: &str, doc: &str, fields: &[TokenStream], krate: &TokenStream) -> TokenStream {
-    let ident = Ident::new(name, Span::call_site());
     let serde = serde_path(krate);
+    let data = Ident::new(DATA_TYPE, Span::call_site());
+    let variables = Ident::new(VARIABLES_TYPE, Span::call_site());
     quote! {
-        #[doc = #doc]
-        #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::cmp::PartialEq, ::core::default::Default, #krate::__private::serde::Serialize)]
+        #(#aliases)*
+
+        /// The variables of the operation; those left to `None` are not
+        /// sent. `Shopify::execute` runs it.
+        #[derive(#(#derives),*)]
         #[serde(crate = #serde)]
-        pub struct #ident {
+        pub struct #variables {
             #(#fields)*
         }
-    }
-}
 
-/// [`VARIABLES_TYPE`] and the input objects it refers to, named as in the schema.
-pub fn variables_types(schema: &Schema, operation: &Operation, krate: &TokenStream) -> TokenStream {
-    let mut inputs = InputTypes {
-        schema,
-        krate,
-        generated: BTreeSet::new(),
-        items: Vec::new(),
-    };
-    let mut taken = BTreeSet::new();
-    let fields: Vec<TokenStream> = operation
-        .variables
-        .iter()
-        .map(|variable| {
-            let base = inputs.named(variable.ty.name());
-            let value = InputValue {
-                ty: variable.ty.clone(),
-                // A variable with a default may be left out, as an argument with one.
-                has_default: variable.has_default,
-                deprecation: None,
-            };
-            input_field(&variable.name, &value, None, &base, &mut taken)
-        })
-        .collect();
+        /// The operation with its variables, for `Shopify::execute`.
+        pub fn operation(variables: #variables) -> #krate::Operation<#data> {
+            let operation = #constructor;
+            #(#setters)*
+            operation
+        }
 
-    let items = inputs.items;
-    let variables = input_struct(
-        VARIABLES_TYPE,
-        " The variables of the operation. Those left to `None` are not sent.",
-        &fields,
-        krate,
-    );
-    quote! {
-        #(#items)*
-
-        #variables
+        impl ::core::convert::From<#variables> for #krate::Operation<#data> {
+            fn from(variables: #variables) -> Self {
+                operation(variables)
+            }
+        }
     }
 }
 

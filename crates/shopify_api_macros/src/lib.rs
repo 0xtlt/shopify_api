@@ -11,9 +11,7 @@ use std::time::SystemTime;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
-use shopify_api_graphql::codegen::{
-    DATA_TYPE, VARIABLES_TYPE, data_types, deprecation_warning, variables_types,
-};
+use shopify_api_graphql::codegen::{DATA_TYPE, data_types, deprecation_warning, variables_types};
 use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
 use shopify_api_graphql::project::{
     DownloadError, metadata_snippet, previous_api_version, up_to_date_schema,
@@ -580,26 +578,15 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
     let operation = schema.check(&text)?;
     let data = format_ident!("{}", DATA_TYPE);
     let constructor = constructor(schema.schema(), &operation, &quote!(QUERY), &krate);
-    let (variables, function) = if operation.variables.is_empty() {
-        let function = quote! {
+    let variables = if operation.variables.is_empty() {
+        quote! {
             /// The operation, for `Shopify::execute`.
             pub fn operation() -> #krate::Operation<#data> {
                 #constructor
             }
-        };
-        (TokenStream::new(), function)
+        }
     } else {
-        let variables = format_ident!("{}", VARIABLES_TYPE);
-        let function = quote! {
-            /// The operation with its variables, for `Shopify::execute`.
-            pub fn operation(variables: #variables) -> #krate::Operation<#data> {
-                #constructor.variables(variables)
-            }
-        };
-        (
-            variables_types(schema.schema(), &operation, &krate),
-            function,
-        )
+        variables_types(schema.schema(), &operation, &krate, &constructor)
     };
 
     let tracking = schema.tracking();
@@ -631,7 +618,6 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
 
             #types
             #variables
-            #function
         }
     })
 }

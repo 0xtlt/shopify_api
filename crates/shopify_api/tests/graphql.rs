@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 use shopify_api::testing::{MockTransport, client};
-use shopify_api::{ApiVersion, Error, OperationKind, graphql};
+use shopify_api::{ApiVersion, Error, OperationKind, graphql, input};
 
 graphql! {
     /// Writes metafields and reports what Shopify refused.
@@ -165,13 +165,12 @@ async fn a_module_names_its_types_and_builds_input_objects() {
     let shopify = client(&mock);
 
     let variables = metafields_set::Variables {
-        metafields: vec![metafields_set::MetafieldsSetInput {
-            owner_id: "gid://shopify/Product/1".to_string(),
-            namespace: Some("custom".to_string()),
-            key: "color".to_string(),
-            value: "blue".to_string(),
-            ..Default::default()
-        }],
+        metafields: vec![input!(MetafieldsSetInput {
+            ownerId: "gid://shopify/Product/1",
+            namespace: "custom",
+            key: "color",
+            value: "blue",
+        })],
     };
     let data: metafields_set::Data = shopify
         .execute(metafields_set::operation(variables))
@@ -184,7 +183,6 @@ async fn a_module_names_its_types_and_builds_input_objects() {
     assert_eq!(metafields_set::NAME, Some("MetafieldsSet"));
     assert_eq!(metafields_set::KIND, OperationKind::Mutation);
     assert_eq!(metafields_set::API_VERSION, ApiVersion::DEFAULT.to_string());
-    // Fields left to `None` are not sent.
     assert_eq!(
         mock.graphql_requests()[0].variables,
         json!({ "metafields": [{ "ownerId": "gid://shopify/Product/1", "namespace": "custom", "key": "color", "value": "blue" }] })

@@ -21,7 +21,8 @@ use crate::transport::{HttpRequest, Method};
 use crate::{ApiVersion, Error, Result, Shopify};
 
 impl Shopify {
-    /// Runs an operation and returns its typed `data`.
+    /// Runs an operation and returns its typed `data`: an [`Operation`], or
+    /// the `Variables` of a [`graphql!`](crate::graphql!) module.
     ///
     /// Fails when Shopify answers with `errors` (after retrying a throttled
     /// request), and when `data` does not fit the operation. The `userErrors`
@@ -41,7 +42,10 @@ impl Shopify {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn execute<D: DeserializeOwned>(&self, operation: Operation<D>) -> Result<D> {
+    pub async fn execute<D: DeserializeOwned>(
+        &self,
+        operation: impl Into<Operation<D>>,
+    ) -> Result<D> {
         Ok(self.execute_response(operation).await?.data)
     }
 
@@ -49,8 +53,9 @@ impl Shopify {
     /// the operation and the state of the rate limit.
     pub async fn execute_response<D: DeserializeOwned>(
         &self,
-        operation: Operation<D>,
+        operation: impl Into<Operation<D>>,
     ) -> Result<Response<D>> {
+        let operation = operation.into();
         let version = self.version_for(operation.checked_against())?;
         let body = operation.body_json()?;
         let raw = self.send_graphql(version, body, operation.kind()).await?;

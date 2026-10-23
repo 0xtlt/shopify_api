@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use crate::{Error, Result, ShopDomain, Shopify, UserError};
-use shopify_api_macros::__graphql_internal as graphql;
+use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
 
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
 /// `body` with `secret`, the client secret of the app. Compares in constant time.
@@ -230,21 +230,19 @@ graphql! {
 
 /// The input of `create` or `update` for a spec. An update sends every
 /// option, empty when the spec has none, so that it replaces the old ones.
-macro_rules! input {
-    ($module:ident, $spec:expr, $replace:expr) => {{
-        let spec: &WebhookSubscriptionSpec = $spec;
-        let replace: bool = $replace;
-        let list = |values: &Vec<String>| (replace || !values.is_empty()).then(|| values.clone());
-        $module::WebhookSubscriptionInput {
-            uri: Some(spec.uri.clone()),
-            format: Some(spec.format.clone().unwrap_or_else(|| "JSON".to_string())),
-            filter: spec.filter.clone().or_else(|| replace.then(String::new)),
-            include_fields: list(&spec.include_fields),
-            metafield_namespaces: list(&spec.metafield_namespaces),
-            name: spec.name.clone(),
-            ..Default::default()
-        }
-    }};
+fn subscription_input(
+    spec: &WebhookSubscriptionSpec,
+    replace: bool,
+) -> create::WebhookSubscriptionInput {
+    let list = |values: &Vec<String>| (replace || !values.is_empty()).then(|| values.clone());
+    input!(WebhookSubscriptionInput {
+        uri: &spec.uri,
+        format: raw(spec.format.as_deref().unwrap_or("JSON")),
+        filter?: spec.filter.as_deref().or(replace.then_some("")),
+        includeFields?: list(&spec.include_fields),
+        metafieldNamespaces?: list(&spec.metafield_namespaces),
+        name?: spec.name.as_deref(),
+    })
 }
 
 /// A webhook subscription of a shop.
@@ -450,12 +448,11 @@ impl Shopify {
         &self,
         spec: &WebhookSubscriptionSpec,
     ) -> Result<WebhookSubscription> {
-        let input = input!(create, spec, false);
         let data = self
-            .execute(create::operation(create::Variables {
+            .execute(create::Variables {
                 topic: spec.topic.clone(),
-                webhook_subscription: input,
-            }))
+                webhook_subscription: subscription_input(spec, false),
+            })
             .await?;
         let payload = data.webhook_subscription_create.ok_or_else(|| {
             Error::decode(
@@ -477,7 +474,7 @@ impl Shopify {
 
     pub async fn delete_webhook_subscription(&self, id: &str) -> Result<()> {
         let data = self
-            .execute(delete::operation(delete::Variables { id: id.to_string() }))
+            .execute(delete::Variables { id: id.to_string() })
             .await?;
         let payload = data.webhook_subscription_delete.ok_or_else(|| {
             Error::decode(
@@ -497,10 +494,10 @@ impl Shopify {
         spec: &WebhookSubscriptionSpec,
     ) -> Result<WebhookSubscription> {
         let data = self
-            .execute(update::operation(update::Variables {
+            .execute(update::Variables {
                 id: id.to_string(),
-                webhook_subscription: input!(update, spec, true),
-            }))
+                webhook_subscription: subscription_input(spec, true),
+            })
             .await?;
         let payload = data.webhook_subscription_update.ok_or_else(|| {
             Error::decode(

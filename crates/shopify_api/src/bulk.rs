@@ -52,7 +52,7 @@ use tokio::time::Instant;
 
 use crate::transport::{HttpRequest, Method};
 use crate::{Error, Page, Result, Shopify, UserError};
-use shopify_api_macros::__graphql_internal as graphql;
+use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
 
 mod rows;
 
@@ -392,10 +392,10 @@ impl Shopify {
         group_objects: bool,
     ) -> Result<BulkOperation> {
         let data = self
-            .execute(run_query::operation(run_query::Variables {
+            .execute(run_query::Variables {
                 query: query.to_string(),
                 group_objects,
-            }))
+            })
             .await?;
         let payload = data
             .bulk_operation_run_query
@@ -481,11 +481,11 @@ impl Shopify {
         client_identifier: Option<&str>,
     ) -> Result<BulkOperation> {
         let data = self
-            .execute(run_mutation::operation(run_mutation::Variables {
+            .execute(run_mutation::Variables {
                 mutation: mutation.to_string(),
                 staged_upload_path: staged_upload_path.to_string(),
                 client_identifier: client_identifier.map(str::to_string),
-            }))
+            })
             .await?;
         let payload = data
             .bulk_operation_run_mutation
@@ -517,15 +517,14 @@ impl Shopify {
         I::Item: Serialize,
     {
         let data = self
-            .execute(staged_uploads::operation(staged_uploads::Variables {
-                input: vec![staged_uploads::StagedUploadInput {
-                    filename: "bulk_op_vars.jsonl".to_string(),
-                    mime_type: "text/jsonl".to_string(),
-                    resource: "BULK_MUTATION_VARIABLES".to_string(),
-                    http_method: Some("POST".to_string()),
-                    ..Default::default()
-                }],
-            }))
+            .execute(staged_uploads::Variables {
+                input: vec![input!(StagedUploadInput {
+                    filename: "bulk_op_vars.jsonl",
+                    mimeType: "text/jsonl",
+                    resource: BULK_MUTATION_VARIABLES,
+                    httpMethod: POST,
+                })],
+            })
             .await?;
         let payload = data
             .staged_uploads_create
@@ -589,9 +588,7 @@ impl Shopify {
 
     /// A bulk operation by ID, `None` when the shop has none of that ID.
     pub async fn bulk_operation(&self, id: &str) -> Result<Option<BulkOperation>> {
-        let data = self
-            .execute(get::operation(get::Variables { id: id.to_string() }))
-            .await?;
+        let data = self.execute(get::Variables { id: id.to_string() }).await?;
         data.bulk_operation.as_ref().map(operation_of).transpose()
     }
 
@@ -601,12 +598,12 @@ impl Shopify {
         filter: BulkOperationsFilter,
     ) -> Result<Page<BulkOperation>> {
         let data = self
-            .execute(list::operation(list::Variables {
+            .execute(list::Variables {
                 first: i64::from(filter.first),
                 after: filter.after,
                 query: filter.query,
                 reverse: Some(true),
-            }))
+            })
             .await?;
         let connection = data.bulk_operations;
         let items = connection
@@ -624,7 +621,7 @@ impl Shopify {
     /// Asks Shopify to cancel a running bulk operation.
     pub async fn cancel_bulk_operation(&self, id: &str) -> Result<BulkOperation> {
         let data = self
-            .execute(cancel::operation(cancel::Variables { id: id.to_string() }))
+            .execute(cancel::Variables { id: id.to_string() })
             .await?;
         let payload = data
             .bulk_operation_cancel

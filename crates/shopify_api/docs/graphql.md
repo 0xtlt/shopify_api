@@ -124,18 +124,19 @@ spellings work:
 | `JSON` | `Value`, `&Value` |
 | Nullable | The bare value, or an `Option` of it |
 | List | A `Vec`, a slice, an array or a `&Vec` of accepted values |
-| Input object | Any serializable value, such as `json!({ … })`, checked by nothing: use a module to check its fields |
+| Input object | A value of [`input!`](crate::input!), or a `Vec`, a slice or an array of them for a list |
 
 Another type is a compile error on the value: `` `&str` is not a value for a
 GraphQL variable of Rust type `i64` `` (see [`IntoVariable`]).
 
 # Named operations
 
-A module names the types of an operation: to share it, to return its data
-from a function, or to build input objects whose fields are checked.
+A module names the types of an operation: to share it, or to return its
+data from a function. One `graphql!` holds any number of modules, each with
+its attributes, visibility and source; `;` goes between them.
 
 ```rust,no_run
-use shopify_api::{Shopify, graphql};
+use shopify_api::{Shopify, graphql, input};
 
 graphql! {
     /// Writes metafields and returns what Shopify refused.
@@ -145,20 +146,28 @@ graphql! {
             userErrors { field message code }
         }
     }";
+    pub(crate) mod shop_name = "query ShopName { shop { name } }";
 }
 
-async fn set_color(shopify: &Shopify, product_id: &str) -> shopify_api::Result<Vec<String>> {
-    let variables = metafields_set::Variables {
-        metafields: vec![metafields_set::MetafieldsSetInput {
-            owner_id: product_id.to_string(),
-            namespace: Some("custom".to_string()),
-            key: "color".to_string(),
-            value: "blue".to_string(),
-            ..Default::default()
-        }],
-    };
-    let data: metafields_set::Data = shopify.execute(metafields_set::operation(variables)).await?;
+struct Row { product_id: String, color: String }
 
+fn color_metafields(rows: &[Row]) -> Vec<metafields_set::MetafieldsSetInput> {
+    rows.iter()
+        .filter(|row| !row.color.is_empty())
+        .map(|row| input!(MetafieldsSetInput {
+            ownerId: &row.product_id,
+            namespace: "custom",
+            key: "color",
+            value: &row.color,
+            type: "single_line_text_field",
+        }))
+        .collect()
+}
+
+async fn set_colors(shopify: &Shopify, rows: &[Row]) -> shopify_api::Result<Vec<String>> {
+    let data = shopify
+        .execute(metafields_set::Variables { metafields: color_metafields(rows) })
+        .await?;
     let payload = data.metafields_set.expect("a payload");
     Ok(payload.user_errors.into_iter().map(|error| error.message).collect())
 }
@@ -169,15 +178,15 @@ async fn set_color(shopify: &Shopify, product_id: &str) -> shopify_api::Result<V
 | `QUERY` | The text of the operation. |
 | `NAME`, `KIND`, `API_VERSION` | Its name, query or mutation, and the version it was checked against. |
 | `Data` and nested structs | The result. A nested struct is named after its path: `DataMetafieldsSetUserErrors`. |
-| `Variables` | A field per variable. Absent when there is none. |
-| Input objects | A struct per input object the variables use, named as in the schema. |
+| `Variables` | A field per variable, absent when there is none. [`Shopify::execute`] runs it: `Operation<Data>` implements `From<Variables>`. |
+| Input objects | `pub type MetafieldsSetInput = InputObject<…>` for each input object the variables may hold, the type every [`input!`](crate::input!)`(MetafieldsSetInput { … })` builds. |
 | `operation(variables)` | The operation, for `execute`. Takes nothing when there are no variables. |
 
-In `Variables` and in input objects, a field that may be left out is an
-`Option`, not sent when `None`; the structs implement `Default`. A deprecated
-input field is `#[deprecated]`: setting it warns. An explicit `null` cannot be
-written this way: use [`Shopify::graphql`] with a `json!` value for the few
-mutations that need one.
+In `Variables`, a variable that may be left out is an `Option`, not sent when
+`None`. `Variables` implements `Default` when no variable is required, so that
+`..Default::default()` never leaves out a required one, and `PartialEq` when it
+holds no input object. A variable of an enum is a `String` there, which
+nothing checks.
 
 Operations kept in files read the same, and editors that know GraphQL help
 writing them:
@@ -185,6 +194,7 @@ writing them:
 ```rust,ignore
 graphql! {
     pub mod order = file("graphql/order.graphql");
+    pub mod orders = file("graphql/orders.graphql");
 }
 ```
 
