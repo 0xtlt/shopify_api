@@ -512,3 +512,101 @@ fn each_expression_is_checked_for_its_scalar() {
         ["Int", "Float", "Json", "Json", "Json", "Plain", "Plain"]
     );
 }
+
+/// An integer literal outside of the 32 bits of `Int` is refused where an
+/// `Int` is expected: a field, a `?:` value, an item, a variable.
+#[test]
+fn integer_literals_outside_of_int_are_refused() {
+    let refused = |fields: Vec<(&str, Value)>| refusal("DraftOrderLineItemInput", fields);
+    for (text, site) in [
+        (
+            "2_147_483_648_i64",
+            "`quantity` of `DraftOrderLineItemInput`",
+        ),
+        ("-2147483649", "`quantity` of `DraftOrderLineItemInput`"),
+        ("0x8000_0000", "`quantity` of `DraftOrderLineItemInput`"),
+        ("(3000000000)", "`quantity` of `DraftOrderLineItemInput`"),
+        (
+            "340282366920938463463374607431768211456",
+            "`quantity` of `DraftOrderLineItemInput`",
+        ),
+    ] {
+        assert_eq!(
+            refused(vec![("quantity", rust(text))]),
+            format!(
+                "The integer is outside the range of `Int`, a 32-bit integer, given for {site}"
+            ),
+            "{text}"
+        );
+    }
+    let message = |site: &str| {
+        format!("The integer is outside the range of `Int`, a 32-bit integer, given for {site}")
+    };
+    assert_eq!(
+        refused(vec![
+            ("quantity", rust("1")),
+            ("grams?", rust("Some(3_000_000_000)"))
+        ]),
+        message("`grams` of `DraftOrderLineItemInput`")
+    );
+    assert_eq!(
+        refusal(
+            "DraftOrderInput",
+            vec![(
+                "lineItems",
+                list(vec![Value::Object(object(vec![(
+                    "quantity",
+                    rust("-2_147_483_649")
+                )]))])
+            )]
+        ),
+        message("`quantity` of `DraftOrderLineItemInput`")
+    );
+    let first = "query($first: Int!) { products(first: $first) { nodes { id } } }";
+    assert_eq!(
+        variable(first, rust("4_294_967_296_u64")).unwrap_err(),
+        message("`$first`")
+    );
+    let schema = Schema::from_json(
+        r#"{"format": 1, "apiVersion": "2026-10", "query": "Q", "types": {
+            "Int": "s", "String": "s",
+            "T": {"i": {"l": "[Int!]", "m": "[[Int]]"}},
+            "Q": {"o": {"f": {"echo": ["String", {"input": "T!"}]}}}
+        }}"#,
+    )
+    .unwrap();
+    for (field, value) in [
+        ("l", rust("vec![1, 2_147_483_648]")),
+        ("l", list(vec![rust("1"), rust("2_147_483_648")])),
+        ("m", rust("[[Some(1)], [Some(2_147_483_648)]]")),
+    ] {
+        let error = Literals::new(&schema, quote!(::shopify_api))
+            .input_object("T", Span::call_site(), &object(vec![(field, value)]))
+            .unwrap_err();
+        assert!(
+            error
+                .message
+                .starts_with("The integer is outside the range of `Int`"),
+            "{}",
+            error.message
+        );
+    }
+    // At the bounds, and computed: checked when the value is built.
+    assert!(
+        input(
+            "DraftOrderLineItemInput",
+            vec![
+                ("quantity", rust("-2_147_483_648")),
+                ("grams?", rust("Some(1 << 40)"))
+            ]
+        )
+        .is_ok()
+    );
+    assert!(
+        input(
+            "DraftOrderLineItemInput",
+            vec![("quantity", rust("0x7fff_ffff_i64"))]
+        )
+        .is_ok()
+    );
+}

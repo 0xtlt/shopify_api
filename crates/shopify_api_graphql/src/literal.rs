@@ -204,6 +204,15 @@ impl<'a> Literals<'a> {
         let ty = &variable.ty;
         let site = Site::Variable(variable.name.clone());
         let scalar = matches!(self.schema.get(ty.name()), Some(TypeDef::Scalar));
+        if scalar {
+            match value {
+                Value::Rust(expr) => self.int_literals(&expr.tokens, ty, &site)?,
+                Value::List(List {
+                    rust: Some(rust), ..
+                }) => self.int_literals(&rust.tokens, ty, &site)?,
+                _ => {}
+            }
+        }
         let rust_type = variable_type(variable, &self.krate);
         let convert = |value: Expr| {
             rust_type
@@ -519,6 +528,7 @@ impl<'a> Literals<'a> {
             );
         }
 
+        self.int_literals(&expr.tokens, &definition.ty, site)?;
         let mut items = Vec::new();
         let value_bound = self.expect(&definition.ty, Place::Field, site, &mut items);
         let n = self.next();
@@ -591,6 +601,7 @@ impl<'a> Literals<'a> {
             };
             return error(expr.span, message);
         }
+        self.int_literals(&expr.tokens, ty, site)?;
         let mut items = Vec::new();
         let bound = self.expect(ty, place, site, &mut items);
         let krate = &self.krate;
@@ -817,6 +828,31 @@ impl<'a> Literals<'a> {
         quote!(#krate::__private::literal::#kind)
     }
 
+    /// Refuses an integer literal outside of the 32 bits of `Int`, where
+    /// the innermost type of `ty` is `Int`: written alone, negated, in
+    /// `Some(…)`, in parentheses, or as an item of `[…]` or `vec![…]`.
+    fn int_literals(&self, tokens: &TokenStream, ty: &TypeRef, site: &Site) -> Result<(), Error> {
+        if !matches!(self.schema.get(ty.name()), Some(TypeDef::Scalar))
+            || Scalar::of(ty.name()) != Scalar::Int
+        {
+            return Ok(());
+        }
+        let mut found = Vec::new();
+        int_literals(tokens, &mut found);
+        match found
+            .into_iter()
+            .find(|(value, _)| i32::try_from(*value).is_err())
+        {
+            Some((_, span)) => error(
+                span,
+                format!(
+                    "The integer is outside the range of `Int`, a 32-bit integer, given for {site}"
+                ),
+            ),
+            None => Ok(()),
+        }
+    }
+
     /// The innermost type of `ty` is an input object.
     fn holds_input(&self, ty: &TypeRef) -> bool {
         matches!(self.schema.get(ty.name()), Some(TypeDef::Input { .. }))
@@ -947,6 +983,81 @@ fn scalar_types(scalar: Scalar, krate: &TokenStream) -> Vec<TokenStream> {
             quote!(&'a #krate::__private::serde_json::Value),
         ],
     }
+}
+
+/// The integer literals of `tokens` in the forms
+/// [`Literals::int_literals`] reads, and their spans; one beyond `i128` is
+/// `i128::MAX`.
+fn int_literals(tokens: &TokenStream, found: &mut Vec<(i128, Span)>) {
+    let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    match trees.as_slice() {
+        [TokenTree::Literal(literal)] => {
+            if let Some(value) = integer(&literal.to_string()) {
+                found.push((value, literal.span()));
+            }
+        }
+        [TokenTree::Punct(minus), TokenTree::Literal(literal)] if minus.as_char() == '-' => {
+            if let Some(value) = integer(&literal.to_string()) {
+                found.push((value.saturating_neg(), literal.span()));
+            }
+        }
+        [TokenTree::Group(group)] => match group.delimiter() {
+            Delimiter::Parenthesis | Delimiter::None => int_literals(&group.stream(), found),
+            Delimiter::Bracket => items(&group.stream(), found),
+            Delimiter::Brace => {}
+        },
+        [TokenTree::Ident(some), TokenTree::Group(group)]
+            if some == "Some" && group.delimiter() == Delimiter::Parenthesis =>
+        {
+            int_literals(&group.stream(), found);
+        }
+        [
+            TokenTree::Ident(vec),
+            TokenTree::Punct(bang),
+            TokenTree::Group(group),
+        ] if vec == "vec" && bang.as_char() == '!' && group.delimiter() == Delimiter::Bracket => {
+            items(&group.stream(), found);
+        }
+        _ => {}
+    }
+
+    fn items(tokens: &TokenStream, found: &mut Vec<(i128, Span)>) {
+        let mut item = TokenStream::new();
+        for tree in tokens.clone() {
+            match &tree {
+                TokenTree::Punct(comma) if comma.as_char() == ',' => {
+                    int_literals(&std::mem::take(&mut item), found);
+                }
+                _ => item.extend([tree]),
+            }
+        }
+        int_literals(&item, found);
+    }
+}
+
+/// The value of the text of an integer literal: `2_147_483_648_i64`,
+/// `0x8000_0000`, `0b1`; `None` for any other literal.
+fn integer(text: &str) -> Option<i128> {
+    const SUFFIXES: [&str; 12] = [
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+    ];
+    let (radix, digits) = [(16, "0x"), (8, "0o"), (2, "0b")]
+        .into_iter()
+        .find_map(|(radix, prefix)| Some((radix, text.strip_prefix(prefix)?)))
+        .unwrap_or((10, text));
+    let digits = SUFFIXES
+        .iter()
+        .find_map(|suffix| digits.strip_suffix(suffix))
+        .unwrap_or(digits);
+    let digits: String = digits.chars().filter(|&digit| digit != '_').collect();
+    if digits.is_empty() || !digits.chars().all(|digit| digit.is_digit(radix)) {
+        return None;
+    }
+    Some(
+        u128::from_str_radix(&digits, radix).map_or(i128::MAX, |value| {
+            i128::try_from(value).unwrap_or(i128::MAX)
+        }),
+    )
 }
 
 /// The innermost named type of `ty`, and whether it is non-null.
