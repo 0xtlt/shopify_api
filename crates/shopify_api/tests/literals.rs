@@ -406,6 +406,178 @@ async fn a_nullable_input_variable_takes_null_an_option_or_a_literal() {
     );
 }
 
+graphql! {
+    mod defaults = "query Defaults($first: Int! = 10, $query: String! = \"a\", $sortKey: ProductSortKeys! = TITLE) {
+        products(first: $first, query: $query, sortKey: $sortKey) { nodes { id } }
+    }";
+    mod pixel = "mutation Pixel($settings: JSON! = {}) { webPixelCreate(webPixel: {settings: $settings}) { userErrors { message } } }";
+    mod weight = "mutation Weight($id: ID!, $value: Float! = 1.0) {
+        inventoryItemUpdate(id: $id, input: {measurement: {weight: {value: $value, unit: KILOGRAMS}}}) { userErrors { message } }
+    }";
+    mod draft = "mutation Draft($input: DraftOrderInput! = {}, $items: [DraftOrderLineItemInput!]! = [], $tags: [String!]! = []) {
+        a: draftOrderCreate(input: $input) { userErrors { message } }
+        b: draftOrderCreate(input: {lineItems: $items, tags: $tags}) { userErrors { message } }
+    }";
+}
+
+/// A non-null variable with a default: `None` leaves it out, for Shopify
+/// to use the default; a value is checked as non-null, never sent as `null`.
+#[test]
+fn a_defaulted_non_null_variable_is_left_out_or_checked_as_non_null() {
+    use serde_json::Value;
+    use shopify_api::{Error, InvalidValueReason};
+
+    let reason = |body: shopify_api::Result<String>| match body {
+        Err(Error::InvalidValue { reason, .. }) => reason,
+        other => panic!("not refused: {other:?}"),
+    };
+    let big: i64 = 1 << 31;
+    let line_item = input!(DraftOrderLineItemInput { quantity: big });
+
+    // Left out.
+    let operation = defaults::operation(defaults::Variables::default());
+    assert_eq!(operation.variable_json("first").unwrap(), None);
+    assert_eq!(operation.variable_json("query").unwrap(), None);
+    assert_eq!(operation.variable_json("sortKey").unwrap(), None);
+    assert_eq!(
+        pixel::operation(pixel::Variables::default())
+            .variable_json("settings")
+            .unwrap(),
+        None
+    );
+    let operation = weight::operation(weight::Variables {
+        id: "gid://shopify/InventoryItem/1".into(),
+        value: None,
+    });
+    assert_eq!(operation.variable_json("value").unwrap(), None);
+    let operation = draft::operation(draft::Variables {
+        input: None,
+        items: None,
+        tags: None,
+    });
+    assert_eq!(variables(&operation), Value::Null);
+
+    // Sent.
+    let operation = defaults::operation(defaults::Variables {
+        first: Some(i64::from(i32::MAX)),
+        query: Some("b".into()),
+        sort_key: Some("ID".into()),
+    });
+    assert_eq!(
+        variables(&operation),
+        json!({ "first": i32::MAX, "query": "b", "sortKey": "ID" })
+    );
+    let operation = pixel::operation(pixel::Variables {
+        settings: Some(json!({ "a": null })),
+    });
+    assert_eq!(
+        operation.variable_json("settings").unwrap(),
+        Some(r#"{"a":null}"#)
+    );
+    let operation = weight::operation(weight::Variables {
+        id: "gid://shopify/InventoryItem/1".into(),
+        value: Some(2.5),
+    });
+    assert_eq!(operation.variable_json("value").unwrap(), Some("2.5"));
+    let operation = draft::operation(draft::Variables {
+        input: Some(input!(DraftOrderInput { note: "n" })),
+        items: Some(vec![input!(DraftOrderLineItemInput { quantity: 1 })]),
+        tags: Some(vec!["t".into()]),
+    });
+    assert_eq!(
+        variables(&operation),
+        json!({ "input": { "note": "n" }, "items": [{ "quantity": 1 }], "tags": ["t"] })
+    );
+
+    // Refused: the module and the inline operation alike.
+    for (body, expected) in [
+        (
+            defaults::operation(defaults::Variables {
+                first: Some(big),
+                ..Default::default()
+            })
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+        (
+            graphql!(
+                "query Defaults($first: Int! = 10, $query: String! = \"a\", $sortKey: ProductSortKeys! = TITLE) { products(first: $first, query: $query, sortKey: $sortKey) { nodes { id } } }",
+                first = big,
+            )
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+        (
+            pixel::operation(pixel::Variables {
+                settings: Some(Value::Null),
+            })
+            .body(),
+            InvalidValueReason::NullJson,
+        ),
+        (
+            graphql!(
+                "mutation Pixel($settings: JSON! = {}) { webPixelCreate(webPixel: {settings: $settings}) { userErrors { message } } }",
+                settings = Value::Null,
+            )
+            .body(),
+            InvalidValueReason::NullJson,
+        ),
+        (
+            weight::operation(weight::Variables {
+                id: "gid://shopify/InventoryItem/1".into(),
+                value: Some(f64::NAN),
+            })
+            .body(),
+            InvalidValueReason::NotFiniteFloat,
+        ),
+        (
+            graphql!(
+                "mutation Weight($id: ID!, $value: Float! = 1.0) { inventoryItemUpdate(id: $id, input: {measurement: {weight: {value: $value, unit: KILOGRAMS}}}) { userErrors { message } } }",
+                id = "gid://shopify/InventoryItem/1",
+                value = f64::INFINITY,
+            )
+            .body(),
+            InvalidValueReason::NotFiniteFloat,
+        ),
+        (
+            draft::operation(draft::Variables {
+                input: Some(input!(DraftOrderInput { lineItems: [line_item.clone()] })),
+                items: None,
+                tags: None,
+            })
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+        (
+            draft::operation(draft::Variables {
+                input: None,
+                items: Some(vec![line_item.clone()]),
+                tags: None,
+            })
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+        (
+            graphql!(
+                "mutation Draft($input: DraftOrderInput! = {}, $items: [DraftOrderLineItemInput!]! = [], $tags: [String!]! = []) { a: draftOrderCreate(input: $input) { userErrors { message } } b: draftOrderCreate(input: {lineItems: $items, tags: $tags}) { userErrors { message } } }",
+                input = { lineItems: [{ quantity: big }] },
+            )
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+        (
+            graphql!(
+                "mutation Draft($input: DraftOrderInput! = {}, $items: [DraftOrderLineItemInput!]! = [], $tags: [String!]! = []) { a: draftOrderCreate(input: $input) { userErrors { message } } b: draftOrderCreate(input: {lineItems: $items, tags: $tags}) { userErrors { message } } }",
+                items = [line_item.clone()],
+            )
+            .body(),
+            InvalidValueReason::IntOutOfRange,
+        ),
+    ] {
+        assert_eq!(reason(body), expected);
+    }
+}
+
 /// What Shopify would not read as written: an `Int` beyond 32 bits, a
 /// `Float` that is not finite, `null` for a non-null `JSON`. The operation
 /// fails before anything is sent, saying where and why, never the value.

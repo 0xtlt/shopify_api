@@ -321,10 +321,16 @@ pub fn variables_types(
                 #[serde(skip_serializing_if = "::core::option::Option::is_none")]
                 pub #ident: #ty,
             });
+            // `None` leaves the variable out. A non-null variable with a
+            // default takes its value out of the `Some`, checked as non-null.
+            let value = if variable.ty.is_non_null() {
+                quote!(::core::option::Option::Some(value))
+            } else {
+                quote!(value @ ::core::option::Option::Some(_))
+            };
             setters.push(quote! {
                 let operation = match variables.#ident {
-                    // In `Some`: the value of a nullable variable may be `null`.
-                    value @ ::core::option::Option::Some(_) => operation.__variable(#key, value),
+                    #value => operation.__variable(#key, value),
                     ::core::option::Option::None => operation,
                 };
             });
