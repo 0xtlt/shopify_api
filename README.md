@@ -37,8 +37,8 @@ async fn main() -> shopify_api::Result<()> {
 - **Checked operations.** A field, argument, enum value or variable that does
   not exist is a compile error, with a suggestion. A deprecated one is a
   compiler warning with Shopify's reason.
-- **Typed variables and results**, input objects included, generated with no
-  build script and no generated file.
+- **Typed variables and results**, input objects included, written as
+  literals checked field by field, with no build script and no generated file.
 - **Tokens handled**: static tokens, the client credentials grant, expiring
   offline tokens. Obtained, renewed before they expire, renewed once when
   Shopify refuses one, and saved where you say.
@@ -82,32 +82,92 @@ println!("{} {:?} {}", order.name, order.display_financial_status, order.total_p
 Values are converted to the variable's type: any integer for an `Int`, `&str`
 or `String` for an `ID`, a bare value or an `Option` for a nullable variable,
 a slice or an array for a list. A value of the wrong type does not compile.
+An enum value is written bare, `sortKey = TITLE`, and checked.
+
+### Input objects
+
+An input object is written as an object literal, checked against the schema
+field by field while the crate compiles:
+
+```rust,ignore
+shopify.execute(graphql!(
+    "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { field message } } }",
+    product = {
+        id: product_id,                   // any Rust expression
+        title: format!("{name} (promo)"),
+        status: ACTIVE,                   // an enum value, checked
+        descriptionHtml: null,            // sends null
+        vendor?: new_vendor,              // an Option: None leaves the field out
+        seo: { title: seo_title },        // a nested object
+        metafields: [for m in &rows if !m.value.is_empty() => {
+            namespace: "custom", key: &m.key, value: &m.value, type: "single_line_text_field",
+        }],
+    },
+)).await?;
+```
+
+A field is written one of four ways:
+
+| Field | Sends |
+| --- | --- |
+| `title: value` | The value |
+| `title: null` | `null`: Shopify clears the field |
+| `title?: option` | The value of `Some`; nothing for `None`, so Shopify keeps what it has |
+| `title?: maybe` | A `shopify_api::Maybe`: `Value`, `Null`, or nothing for `Absent` |
+
+`title: option` does not compile: sending `null` for `None` would clear the
+field, so the error points to `title?:` or `title: null`. An unknown field, a
+field given twice, a missing required field, `null` for a non-null field, an
+unknown enum value and `?:` on a required field are compile errors at the
+token. For an enum value known only at run time, `raw(value)` sends the
+string unchecked: `status: raw(row.status)`.
+
+`input!` builds an input object ahead of the call, in a loop for instance.
+Every `input!` of one GraphQL type gives the same Rust type, so the values of
+two call sites go in one `Vec`:
+
+```rust,ignore
+use shopify_api::input;
+
+let mut metafields = Vec::new();
+for row in &rows {
+    if row.color.is_empty() { continue; }
+    metafields.push(input!(MetafieldsSetInput {
+        ownerId: &row.product_id, namespace: "custom", key: "color", value: &row.color,
+        type: "single_line_text_field", compareDigest?: row.digest.as_deref(),
+    }));
+}
+shopify.execute(graphql!(
+    "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
+    metafields = metafields,
+)).await?;
+```
+
+A value of another input type is refused, the message naming both GraphQL
+types: `` an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })` ``.
 
 ### Named
 
-`graphql! { pub mod name = "…"; }` names the types, for functions, sharing and
-typed input objects:
+`graphql! { pub mod name = "…"; … }` names the types, for functions and
+sharing. One block holds several modules. `Variables` runs as it is, and each
+input object the variables hold is a type of the module:
 
 ```rust,ignore
 graphql! {
     pub mod metafields_set = "mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-            metafields { id key }
-            userErrors { field message code }
-        }
+        metafieldsSet(metafields: $metafields) { metafields { id key } userErrors { field message code } }
     }";
+    pub mod shop_name = "query ShopName { shop { name } }";
 }
 
-let variables = metafields_set::Variables {
-    metafields: vec![metafields_set::MetafieldsSetInput {
-        owner_id: product_id.to_string(),
-        namespace: Some("custom".to_string()),
-        key: "color".to_string(),
-        value: "blue".to_string(),
-        ..Default::default()
-    }],
-};
-let data: metafields_set::Data = shopify.execute(metafields_set::operation(variables)).await?;
+fn color_metafields(rows: &[Row]) -> Vec<metafields_set::MetafieldsSetInput> {
+    rows.iter()
+        .map(|row| input!(MetafieldsSetInput { ownerId: &row.product_id, key: "color", value: &row.color }))
+        .collect()
+}
+
+let data = shopify.execute(metafields_set::Variables { metafields: color_metafields(&rows) }).await?;
+let shop = shopify.execute(shop_name::operation()).await?;
 ```
 
 ### From a file
@@ -124,7 +184,19 @@ For an operation built at run time, `shopify.graphql(query, variables)`
 returns `data` as a `serde_json::Value`, `graphql_as::<T>` reads it as your
 type, and `graphql_raw` returns the whole answer, `errors` included.
 
-The full reference of `graphql!`, with the mapping of every GraphQL type, is
+### Limits
+
+- A literal and an `input!` are checked against the schema of the crate
+  where they are written; values of `input!` from another crate have the same
+  type for the same GraphQL name.
+- There is no `if`/`else` value form: a Rust expression returning an `Option`,
+  a `Maybe` or a value of `input!` covers it.
+- rustc's own errors, outside those of the macros, show an input object as
+  `InputObject<N>`, `N` a hash of its name.
+- Enum fields of a module's `Variables` and `raw(…)` are strings nothing checks.
+
+The full reference of `graphql!`, with the mapping of every GraphQL type and
+the rules of literals, is
 [on docs.rs](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html).
 
 ## API versions

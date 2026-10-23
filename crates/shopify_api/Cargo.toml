@@ -88,5 +88,9 @@ required-features = ["rustls"]
 name = "bulk_export"
 required-features = ["rustls"]
 
+[[example]]
+name = "metafields"
+required-features = ["rustls"]
+
 [lints]
 workspace = true

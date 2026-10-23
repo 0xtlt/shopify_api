@@ -87,6 +87,20 @@ let data: ShopQuery = shopify.graphql_as("query { shop { name } }", ()).await?;
 Variables are now anything that serializes to an object, by value or by
 reference, or `()` for none.
 
+With `graphql!`, an input object is a literal checked against the schema,
+in place of a `json!` value:
+
+```rust,ignore
+// 0.10
+shopify.graphql::<Value>(mutation, &json!({ "product": { "id": id, "title": title } })).await?;
+
+// 1.0
+shopify.execute(graphql!(
+    "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
+    product = { id: id, title: title },
+)).await?;
+```
+
 ## Bulk operations
 
 | 0.10 | 1.0 |
@@ -142,3 +156,19 @@ Topics are accepted as `orders/create` or `ORDERS_CREATE`.
 - `utils::read_json_tree`: `serde_json::Value::pointer`.
 - `utils::deserialize_from_value` and `deserialize_from_str`: errors name the path of a mismatch.
 - The `debug` and `graphql-client` features, and the `simple_logger` dependency: logs go through `tracing`.
+
+# Upgrading from a 1.0 preview
+
+The input objects of `graphql!` changed before the release.
+
+| 1.0 preview | 1.0 |
+| --- | --- |
+| `module::MetafieldsSetInput { owner_id: id.to_string(), namespace: Some("custom".into()), ..Default::default() }` | `input!(MetafieldsSetInput { ownerId: id, namespace: "custom", … })`: GraphQL field names, every required field, `?:` for an `Option` |
+| `module::MetafieldsSetInput` as a struct | The same name, a type alias of the `InputObject` every `input!(MetafieldsSetInput { … })` builds |
+| An inline input object variable given `json!({ … })` or any `Serialize` value | An object literal, `product = { id: id, … }`, or values of `input!`; `json!` goes through `Shopify::graphql` |
+| An enum variable given a string, `sortKey = "TITLE"` or `sortKey = key` | `sortKey = TITLE`, checked, or `sortKey = raw(key)` |
+| No way to send `null` for an input field | `field: null`, or `field?: Maybe::Null` |
+| One module per `graphql! { … }` | Several, `;` between them |
+| `shopify.execute(module::operation(module::Variables { … }))` | The same, or `shopify.execute(module::Variables { … })` |
+| `Variables` always `Default` and `PartialEq` | `Default` when no variable is required, `PartialEq` when it holds no input object |
+| `Operation::variables_json()` returned `&Map` | It returns the `Map`, read back from the JSON kept for each variable |

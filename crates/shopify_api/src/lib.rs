@@ -38,7 +38,8 @@
 //! ```
 //!
 //! See the [`graphql!`] macro for the mapping of types, named operations,
-//! input objects and the schema of other API versions.
+//! input values and the schema of other API versions, and [`input!`] for an
+//! input object built ahead of a call.
 //!
 //! # Features
 //!

@@ -112,22 +112,126 @@ carry them, convert them to your own types, or use a [module](#named-operations)
 
 Values follow the operation as `name = value`. A variable that is non-null
 without a default needs one; the others can be left out, and are then not sent.
-A value is converted to the Rust type of its variable, so the usual
-spellings work:
+
+A Rust value for a scalar variable is converted to the Rust type of the
+variable, so the usual spellings work:
 
 | Variable | Accepted values |
 | --- | --- |
-| `String`, `ID`, enums, string-encoded scalars | `String`, `&str`, `&String`, `Cow<str>` |
+| `String`, `ID`, string-encoded scalars | `String`, `&str`, `&String`, `Cow<str>` |
 | `Int` | Any integer type |
 | `Float` | `f32`, `f64`, `i32`, `u32` |
 | `Boolean` | `bool` |
 | `JSON` | `Value`, `&Value` |
-| Nullable | The bare value, or an `Option` of it |
+| Nullable | The bare value, or an `Option` of it: `None` sends `null` |
 | List | A `Vec`, a slice, an array or a `&Vec` of accepted values |
-| Input object | A value of [`input!`](crate::input!), or a `Vec`, a slice or an array of them for a list |
 
 Another type is a compile error on the value: `` `&str` is not a value for a
 GraphQL variable of Rust type `i64` `` (see [`IntoVariable`]).
+
+An enum value is written bare, and checked: `sortKey = TITLE`. A string
+known at run time goes through `raw(…)`, which nothing checks:
+`sortKey = raw(key)`, an `Option` for a nullable variable.
+
+An input object is written as an object literal, checked field by field
+against the schema, or given as a value built by [`input!`](crate::input!):
+
+```rust,no_run
+use shopify_api::{Shopify, graphql};
+
+struct Row { key: String, value: String }
+
+async fn promote(shopify: &Shopify, product_id: &str, name: &str, new_vendor: Option<String>, rows: &[Row])
+    -> shopify_api::Result<()> {
+    let data = shopify
+        .execute(graphql!(
+            "mutation($product: ProductUpdateInput!) {
+               productUpdate(product: $product) { userErrors { field message } }
+             }",
+            product = {
+                id: product_id,
+                title: format!("{name} (promo)"),
+                status: ACTIVE,
+                descriptionHtml: null,
+                vendor?: new_vendor,
+                seo: { title: name },
+                metafields: [for row in rows if !row.value.is_empty() => {
+                    namespace: "custom", key: &row.key, value: &row.value, type: "single_line_text_field",
+                }],
+            },
+        ))
+        .await?;
+    for error in data.product_update.into_iter().flat_map(|payload| payload.user_errors) {
+        eprintln!("{:?}: {}", error.field, error.message);
+    }
+    Ok(())
+}
+```
+
+# Input values
+
+A value written for an input type reads by the GraphQL type expected where
+it stands:
+
+| Form | Where | Sent |
+| --- | --- | --- |
+| `null` | A nullable type | `null` |
+| `{ field: value, field?: option, … }` | An input object | The object, its fields in the order written |
+| `[value, …]` | A list | The list; a single value is not taken for a list |
+| `[for pattern in iterable => value]`, `[for … if condition => value]` | A list | One item per turn of the loop |
+| `NAME` | An enum | The value, checked against the enum |
+| `raw(string)` | An enum | The string, as is: any `Into<String>` |
+| Any other Rust expression | Anywhere | Its value, its type checked as below |
+
+In an object, the field names are the GraphQL ones, Rust keywords included
+(`type: "single_line_text_field"`). A field that does not exist, a field
+given twice, a required field left out (every one is named), `null` for a
+non-null type, an unknown enum value (the valid ones are listed) and an
+object or a list where the type wants another form are compile errors that
+point at the token. A deprecated field or enum value is a warning that gives
+Shopify's reason.
+
+A field is written one of four ways:
+
+| Field | Sends |
+| --- | --- |
+| `title: value` | The value |
+| `title: null` | `null`: Shopify clears the field |
+| `title?: option` | The value of `Some`; nothing for `None`, so Shopify keeps what it has |
+| `title?: maybe` | A [`Maybe`]: `Value`, `Null` or nothing for `Absent` |
+
+An `Option` given to `title: …` does not compile: sending `null` for `None`
+would clear the field. The error says to write `title?: …` or `title: null`.
+A required field (non-null without a default) cannot take `?:`; a non-null
+field with a default takes an `Option` there, not a [`Maybe`], whose `Null` it
+refuses. On an enum field, `status?: raw(option)` takes an `Option` or a
+`Maybe` of a string. A variable keeps its own rule: `name = option` sends
+`null` for `None`.
+
+A Rust expression is checked by a trait written for its place, whose error
+names the GraphQL type: `` `title` of `ProductUpdateInput` expects a `String`,
+not `i32` ``. It takes what a variable takes (the table above), except for an
+`Option` in a field. Where an input object is expected, it takes a value of
+[`input!`](crate::input!) for that type, or a `Vec`, a slice or an array of
+them for a list: `` `$metafields` expects a list of `MetafieldsSetInput`, built
+with `input!(MetafieldsSetInput { … })` ``. An enum takes a bare value or
+`raw(…)`, never another expression.
+
+What reads as what, when Rust could read it too:
+
+- `{` starts an object when the braces are empty or start with `name:` or
+  `name?:`, which no Rust block does: `first = { compute() }` stays a block.
+- `[a, b]` is a list where a list is expected and a Rust array elsewhere;
+  `[x; 3]` is an array. A variable of a list of scalars given plain Rust
+  values, `ids = [a, b]`, is converted as before.
+- `null` and `raw(…)` are those forms only as a whole value: a Rust variable
+  named `null` is written `(null)`, a function `raw` is called as
+  `self::raw(x)` or `(raw(x))`.
+- A lone identifier is an enum value where an enum is expected, and a Rust
+  variable everywhere else.
+
+Nothing goes through a `serde_json::Value`: each literal is written straight
+to the JSON sent, and a value of `input!` holds its JSON already.
 
 # Named operations
 
@@ -245,7 +349,21 @@ scripts an answer that leaves out a non-null field.
 
 # Limits
 
-- Subscriptions are refused, and one `graphql!` takes one operation.
-- The error points at the whole operation; the line and column in its message
-  locate the mistake inside it.
+- Subscriptions are refused, and one inline `graphql!` takes one operation.
+- An error in the operation points at the whole operation; the line and
+  column in its message locate the mistake inside it. An error in a value
+  points at the value.
+- A literal or an `input!` is checked against the schema of the crate where
+  it is written. Values of `input!` from another crate have the same Rust
+  type, checked against that crate's schema.
+- rustc's own errors, outside the messages of `graphql!` and `input!`, name an
+  input object `InputObject<N>`, `N` being a hash of its GraphQL name: when a
+  `Vec` mixes two input types, for one.
+- A `Maybe::Null` alone has no type to infer: write `field: null`, or
+  `Maybe::<String>::Null`.
+- A value is a literal, a list built by `for`, or a Rust expression: there is
+  no `if`/`else` form; an expression that returns an `Option`, a `Maybe` or a
+  value of `input!` covers it.
+- Enum values are checked where they are written; the `String` fields of
+  `Variables` and `raw(…)` are not.
 - The generated code refers to `::shopify_api`: the dependency cannot be renamed.
