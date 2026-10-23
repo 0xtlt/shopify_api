@@ -530,6 +530,14 @@ fn integer_literals_outside_of_int_are_refused() {
             "2_147_483_648_i64",
             "`quantity` of `DraftOrderLineItemInput`",
         ),
+        (
+            "2_147_483_648i64",
+            "`quantity` of `DraftOrderLineItemInput`",
+        ),
+        (
+            "0x1_0000_0000_i64",
+            "`quantity` of `DraftOrderLineItemInput`",
+        ),
         ("-2147483649", "`quantity` of `DraftOrderLineItemInput`"),
         ("0x8000_0000", "`quantity` of `DraftOrderLineItemInput`"),
         ("(3000000000)", "`quantity` of `DraftOrderLineItemInput`"),
@@ -625,6 +633,25 @@ fn integer_literals_outside_of_int_are_refused() {
         input(
             "DraftOrderLineItemInput",
             vec![("quantity", rust("0x7fff_ffff_i64"))]
+        )
+        .is_ok()
+    );
+    for text in [
+        "0xffff_ffff_i32",
+        "2_147_483_648_i32",
+        "-129i8",
+        "256u8",
+        "0x1_0000_0000_usize",
+    ] {
+        assert!(
+            input("DraftOrderLineItemInput", vec![("quantity", rust(text))]).is_ok(),
+            "a literal its suffix's type cannot hold is checked when built: {text}"
+        );
+    }
+    assert!(
+        input(
+            "DraftOrderLineItemInput",
+            vec![("quantity", rust("-2_147_483_648_i32"))]
         )
         .is_ok()
     );

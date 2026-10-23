@@ -782,6 +782,20 @@ mod int_forms {
     }
 }
 
+/// A suffixed literal its type cannot hold is the value the compiler gives
+/// it under `allow(overflowing_literals)`, checked when it is built.
+#[test]
+#[allow(overflowing_literals, reason = "a literal that wraps to `-1`")]
+fn a_wrapping_suffixed_literal_is_its_rust_value() {
+    let value = input!(DraftOrderLineItemInput {
+        quantity: 0xffff_ffff_i32
+    });
+    assert_eq!(
+        serde_json::to_value(value).unwrap(),
+        json!({ "quantity": -1 })
+    );
+}
+
 /// Names like the ones the macros generate, or generated before, given to
 /// the caller's locals, closures, functions, constants and trait methods:
 /// the values sent are the caller's.

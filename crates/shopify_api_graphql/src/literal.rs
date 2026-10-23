@@ -1053,18 +1053,18 @@ fn accepted(schema: &Schema, ty: &TypeRef) -> String {
 
 /// The integer literals of `tokens` in the forms
 /// [`Literals::int_literals`] reads, and their spans; one beyond `i128` is
-/// `i128::MAX`.
+/// `i128::MAX`, and one whose suffix's type cannot hold it is left out.
 fn int_literals(tokens: &TokenStream, found: &mut Vec<(i128, Span)>) {
     let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
     match trees.as_slice() {
         [TokenTree::Literal(literal)] => {
-            if let Some(value) = integer(&literal.to_string()) {
+            if let Some(value) = int_literal(&literal.to_string(), false) {
                 found.push((value, literal.span()));
             }
         }
         [TokenTree::Punct(minus), TokenTree::Literal(literal)] if minus.as_char() == '-' => {
-            if let Some(value) = integer(&literal.to_string()) {
-                found.push((value.saturating_neg(), literal.span()));
+            if let Some(value) = int_literal(&literal.to_string(), true) {
+                found.push((value, literal.span()));
             }
         }
         [TokenTree::Group(group)] => match group.delimiter() {
@@ -1092,6 +1092,44 @@ fn int_literals(tokens: &TokenStream, found: &mut Vec<(i128, Span)>) {
 /// The value of the text of an integer literal: `2_147_483_648_i64`,
 /// `0x8000_0000`, `0b1`; `None` for any other literal.
 fn integer(text: &str) -> Option<i128> {
+    let (magnitude, _) = integer_parts(text)?;
+    Some(magnitude.map_or(i128::MAX, |value| {
+        i128::try_from(value).unwrap_or(i128::MAX)
+    }))
+}
+
+/// The value of an integer literal, negated or not, when the compiler gives
+/// it the value written; `None` when its suffix's type cannot hold it, as
+/// `0xffff_ffff_i32`, which `allow(overflowing_literals)` makes `-1`: only
+/// the value built from it is known. `isize` and `usize` are taken as 32
+/// bits, the narrowest a target may have.
+fn int_literal(text: &str, negated: bool) -> Option<i128> {
+    let (magnitude, suffix) = integer_parts(text)?;
+    if let Some(suffix) = suffix {
+        let bits = match &suffix[1..] {
+            "size" => 32,
+            bits => bits.parse().ok()?,
+        };
+        let largest = if suffix.starts_with('i') {
+            (1_u128 << (bits - 1)) - u128::from(!negated)
+        } else {
+            u128::MAX >> (128 - bits)
+        };
+        if magnitude? > largest {
+            return None;
+        }
+    }
+    let value = integer(text)?;
+    Some(if negated {
+        value.saturating_neg()
+    } else {
+        value
+    })
+}
+
+/// The digits of an integer literal as a number, `None` beyond `u128`, and
+/// its suffix; `None` for any other literal.
+fn integer_parts(text: &str) -> Option<(Option<u128>, Option<&'static str>)> {
     const SUFFIXES: [&str; 12] = [
         "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
     ];
@@ -1099,19 +1137,15 @@ fn integer(text: &str) -> Option<i128> {
         .into_iter()
         .find_map(|(radix, prefix)| Some((radix, text.strip_prefix(prefix)?)))
         .unwrap_or((10, text));
-    let digits = SUFFIXES
+    let (digits, suffix) = SUFFIXES
         .iter()
-        .find_map(|suffix| digits.strip_suffix(suffix))
-        .unwrap_or(digits);
+        .find_map(|suffix| Some((digits.strip_suffix(suffix)?, Some(*suffix))))
+        .unwrap_or((digits, None));
     let digits: String = digits.chars().filter(|&digit| digit != '_').collect();
     if digits.is_empty() || !digits.chars().all(|digit| digit.is_digit(radix)) {
         return None;
     }
-    Some(
-        u128::from_str_radix(&digits, radix).map_or(i128::MAX, |value| {
-            i128::try_from(value).unwrap_or(i128::MAX)
-        }),
-    )
+    Some((u128::from_str_radix(&digits, radix).ok(), suffix))
 }
 
 /// The innermost named type of `ty`, and whether it is non-null.
@@ -1168,7 +1202,7 @@ impl Build {
         } = self;
         let json = quote!(literal::to_raw(&#body));
         // `literal`, in a block that no expression of the caller's is in.
-        let path = quote!(#[allow(unused_imports, reason = "not every value uses it")] use #krate::__private::literal;);
+        let path = quote!(use #krate::__private::literal;);
         if args.is_empty() {
             return quote!({ #path #json });
         }
