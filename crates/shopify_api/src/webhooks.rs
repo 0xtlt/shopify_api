@@ -618,7 +618,7 @@ mod tests {
         }
         assert_eq!(webhook.payload::<Order>().unwrap().name, "#1001");
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Wrong {
             name: u32,
         }

@@ -676,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn a_decode_error_names_its_line_shows_nothing_of_it_and_the_stream_goes_on() {
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Row {
             id: u64,
         }
@@ -938,12 +938,12 @@ mod tests {
     #[tokio::test]
     async fn groups_read_typed_parents_and_children_and_hide_bad_values() {
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Product {
             id: String,
         }
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Variant {
             id: String,
             price: u64,

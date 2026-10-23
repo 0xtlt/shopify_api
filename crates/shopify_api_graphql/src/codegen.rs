@@ -160,7 +160,7 @@ impl DataTypes<'_> {
             #[doc = #doc]
             #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::cmp::PartialEq, #krate::__private::serde::Serialize, #krate::__private::serde::Deserialize)]
             #[serde(crate = #serde)]
-            #[allow(dead_code)]
+            #[allow(dead_code, reason = "the caller may read only some fields")]
             pub struct #ident {
                 #(#fields)*
             }
@@ -282,7 +282,7 @@ pub fn variables_types(
         let doc = format!(" The input object `{name}`: build it with `input!({name} {{ … }})`.");
         quote! {
             #[doc = #doc]
-            #[allow(dead_code)]
+            #[allow(dead_code, reason = "the caller may not name every input object")]
             pub type #ident = #krate::InputObject<#id>;
         }
     });

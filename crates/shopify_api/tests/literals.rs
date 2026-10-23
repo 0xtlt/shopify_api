@@ -786,7 +786,12 @@ mod int_forms {
 /// the caller's locals, closures, functions, constants and trait methods:
 /// the values sent are the caller's.
 mod hygiene {
-    #![allow(non_upper_case_globals, non_snake_case, dead_code)]
+    #![allow(
+        non_upper_case_globals,
+        non_snake_case,
+        dead_code,
+        reason = "names and items that look like the generated ones"
+    )]
 
     use serde_json::{Value, json};
     use shopify_api::{graphql, input};

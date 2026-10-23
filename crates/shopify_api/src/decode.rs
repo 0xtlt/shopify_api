@@ -1015,7 +1015,7 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
     struct Order {
         name: String,
         lines: Vec<Line>,
@@ -1023,14 +1023,14 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
     struct Line {
         quantity: u64,
         kind: Kind,
     }
 
     #[derive(Debug, Deserialize)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
     enum Kind {
         Physical,
         Digital { url: String },

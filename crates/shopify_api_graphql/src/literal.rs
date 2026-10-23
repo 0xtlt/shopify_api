@@ -1168,7 +1168,7 @@ impl Build {
         } = self;
         let json = quote!(literal::to_raw(&#body));
         // `literal`, in a block that no expression of the caller's is in.
-        let path = quote!(#[allow(unused_imports)] use #krate::__private::literal;);
+        let path = quote!(#[allow(unused_imports, reason = "not every value uses it")] use #krate::__private::literal;);
         if args.is_empty() {
             return quote!({ #path #json });
         }
@@ -1178,7 +1178,7 @@ impl Build {
                 #(#items)*
                 struct Checks;
                 impl Checks {
-                    #[allow(clippy::too_many_arguments)]
+                    #[allow(clippy::too_many_arguments, reason = "one per Rust expression of the value")]
                     fn build<#(#generics),*>(self, #(#params),*) -> ::core::result::Result<
                         ::std::boxed::Box<#krate::__private::serde_json::value::RawValue>,
                         literal::Invalid,

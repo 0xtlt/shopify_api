@@ -1102,12 +1102,12 @@ mod tests {
             ..Default::default()
         };
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Data {
             orders: Vec<Order>,
         }
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Order {
             count: u64,
         }

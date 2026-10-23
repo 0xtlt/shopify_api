@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(rows[1]["id"], 2);
 
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
         struct Row {
             id: String,
         }

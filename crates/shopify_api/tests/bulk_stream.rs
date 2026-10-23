@@ -539,7 +539,7 @@ async fn measure_the_memory_of_a_200_mb_export() {
     let total = chunk.len() * chunks;
 
     #[derive(Deserialize)]
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "decoded for the memory it takes, never read")]
     struct Row {
         id: String,
         title: String,
