@@ -38,7 +38,7 @@ sha2 = "0.11"
 syn = { version = "3", features = ["full"] }
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde", "display"] }
 trybuild = "1"
 ureq = "3.4"
 

@@ -52,6 +52,22 @@ pub fn metadata_snippet(version: &str) -> String {
     format!("[package.metadata.{METADATA_TABLE}]\n{API_VERSION_KEY} = \"{version}\"")
 }
 
+/// The lines to add to a `Cargo.toml` to select `version` and the schema
+/// file at `path`, relative to it: `path` is written with `/` separators, as
+/// a TOML string, so that any file name reads back as it is.
+pub fn schema_snippet(version: &str, path: &Path) -> String {
+    let path = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!(
+        "{}\n{SCHEMA_KEY} = {}",
+        metadata_snippet(version),
+        toml::Value::from(path)
+    )
+}
+
 /// The newest stable Admin API version at `now`: Shopify releases one on the
 /// first day of each quarter, named after it (`2026-10` on October 1st).
 pub fn latest_api_version(now: SystemTime) -> String {
@@ -887,6 +903,29 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn the_schema_snippet_reads_back_as_the_path() {
+        let mut names = vec!["schemas/a\"b.json", "schemas/tab\t'q'.json", "admin.json"];
+        // A backslash is a separator on Windows, and part of a name elsewhere.
+        if cfg!(unix) {
+            names.push("schemas/a\\b.json");
+        }
+        for name in names {
+            let snippet = schema_snippet("2026-07", Path::new(name));
+            let config = config_in(&format!("[package]\nname = \"app\"\n\n{snippet}\n"));
+            assert_eq!(
+                config,
+                Ok(PackageConfig {
+                    api_version: Some("2026-07".to_string()),
+                    schema: Some(PathBuf::from(name)),
+                }),
+                "{snippet}"
+            );
+        }
+        let nested: PathBuf = ["schemas", "admin.json"].iter().collect();
+        assert!(schema_snippet("2026-07", &nested).ends_with("schema = \"schemas/admin.json\""));
     }
 
     #[test]

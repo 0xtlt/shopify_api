@@ -1,6 +1,6 @@
-//! `shopify-api`: downloads the Shopify Admin schema of a crate's API version
-//! (the one its `Cargo.toml` declares, else the latest), and checks
-//! `.graphql` files against it.
+//! `shopify-api`: downloads the Shopify Admin schema of the version a crate's
+//! `Cargo.toml` pins, else of the latest version, and checks `.graphql` files
+//! against a schema.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use shopify_api_graphql::project::{
-    API_VERSION_KEY, METADATA_TABLE, SCHEMA_KEY, package_config, previous_api_version,
-    project_schema, write_atomically,
+    inside_package, package_config, previous_api_version, project_schema, schema_snippet,
+    write_atomically,
 };
 use shopify_api_graphql::{Schema, SchemaSource, analyze, latest_api_version, schema_source};
 
@@ -209,12 +209,18 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
     } else if !args.introspection {
         let absolute = std::path::absolute(&out).unwrap_or_else(|_| out.clone());
         let named = absolute.strip_prefix(&root).unwrap_or(&absolute);
-        eprintln!(
-            "For `graphql!` to use it, name it in {}:\n\n\
-             [package.metadata.{METADATA_TABLE}]\n{API_VERSION_KEY} = \"{version}\"\n{SCHEMA_KEY} = \"{}\"",
-            root.join("Cargo.toml").display(),
-            named.display()
-        );
+        match inside_package(named) {
+            Ok(named) => eprintln!(
+                "For `graphql!` to use it, name it in {}:\n\n{}",
+                root.join("Cargo.toml").display(),
+                schema_snippet(&version.to_string(), &named)
+            ),
+            Err(_) => eprintln!(
+                "`graphql!` cannot use it: it is outside the package of {}, \
+                 and `cargo package` ships only the package's files.",
+                root.join("Cargo.toml").display()
+            ),
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
