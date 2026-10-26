@@ -225,7 +225,9 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
 }
 
 /// The `schema` value that names `out`, a file just written, for the
-/// package in `root`, if any: a path [`inside_package`] accepts.
+/// package in `root`, if any: a path [`inside_package`] accepts, that leads
+/// to that same file. `a/../x.json` is normalized to `x.json`, which is
+/// another file when `a` links to a directory elsewhere.
 fn schema_key(root: &Path, out: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let absolute = std::path::absolute(out).ok()?;
@@ -240,7 +242,10 @@ fn schema_key(root: &Path, out: &Path) -> Option<PathBuf> {
         })
         .collect::<Option<Vec<_>>>()?
         .join("/");
-    inside_package(&value).ok()
+    let normal = inside_package(&value).ok()?;
+    let written = out.canonicalize().ok()?;
+    let named = root.join(&normal).canonicalize().ok()?;
+    (named == written).then_some(normal)
 }
 
 /// The introspection result for `version`, from Shopify's public endpoint or
@@ -453,5 +458,29 @@ mod tests {
             let out = package.write(name);
             assert_eq!(schema_key(&package.0, &out), None, "{name}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_followed_by_dot_dot_names_another_file() {
+        let package = Dir::new("key-link");
+        let outside = Dir::new("key-link-outside");
+        std::fs::create_dir_all(outside.0.join("dir")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("dir"), package.0.join("a")).unwrap();
+        // Written through the link, `a/../x.json` is `outside/x.json`.
+        let out = package.0.join("a/../x.json");
+        std::fs::write(&out, "{}").unwrap();
+        assert!(outside.0.join("x.json").is_file());
+        assert_eq!(schema_key(&package.0, &out), None);
+        // Even when the package has an `x.json` of its own.
+        package.write("x.json");
+        assert_eq!(schema_key(&package.0, &out), None);
+        // A link inside the package to a file elsewhere is followed by both.
+        std::os::unix::fs::symlink(outside.0.join("x.json"), package.0.join("linked.json"))
+            .unwrap();
+        assert_eq!(
+            schema_key(&package.0, &package.0.join("linked.json")),
+            Some(PathBuf::from("linked.json"))
+        );
     }
 }
