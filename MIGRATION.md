@@ -253,6 +253,16 @@ rule as `Webhook::verify`.
 
 Topics are accepted as `orders/create` or `ORDERS_CREATE`.
 
+## OAuth and session tokens
+
+New in 1.0, under the `oauth` feature: `ShopifyApp`. Its
+`verify_session_token` takes only the session tokens of Shopify admin, which
+a staff member's browser sends; trust them to load a shop's stored token.
+The token of a checkout or customer account UI extension, which any buyer
+gets, verifies with `verify_extension_session_token`, as an
+`ExtensionSessionToken` (`shop()`, `customer()`), and is refused by
+`verify_session_token`.
+
 ## Schema download
 
 | 0.10 | 1.0 |

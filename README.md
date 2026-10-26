@@ -458,12 +458,29 @@ let session = app.verify_session_token(bearer)?;
 let token = app.exchange_session_token(&session, RequestedToken::ExpiringOffline).await?;
 let shopify = app.client(session.shop(), token)?;
 
+// Or, once the token is stored: verify the session, then load the shop's token.
+let session = app.verify_session_token(bearer)?;
+let shopify = app.client(session.shop(), my_database.offline_token(session.shop())?)?;
+
+// A checkout or customer account UI extension: the shop, and the customer if logged in.
+let extension = app.verify_extension_session_token(bearer)?;
+let customer = extension.customer(); // Some("gid://shopify/Customer/…")
+
 // Install link and callback, admin launches, app proxies.
 let link = app.authorization_url(&shop, &request);
 let callback = app.verify_query(query_string)?;
 let token = app.exchange_code(&callback).await?;
 let proxied = app.verify_app_proxy(query_string)?;
 ```
+
+`verify_session_token` takes only the tokens of Shopify admin (`dest` and
+`iss` exactly `https://{shop}.myshopify.com` and its `/admin`), which Shopify
+gives a staff member: they may open the admin side of the app, such as the
+stored offline token of the shop. The tokens of checkout and customer account
+UI extensions are signed with the same secret, but any buyer of the shop gets
+one, logged in or not: `verify_extension_session_token` verifies them, as an
+`ExtensionSessionToken` that does not exchange for a token, so that one can
+never pass for the other.
 
 ## Testing your code
 

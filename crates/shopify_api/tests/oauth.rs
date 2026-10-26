@@ -110,6 +110,7 @@ async fn an_online_token_names_its_staff_member() {
     let app = app(&mock);
     let now = now();
     let bearer = app.sign_session_token(&json!({
+        "iss": "https://my-shop.myshopify.com/admin",
         "dest": "https://my-shop.myshopify.com",
         "aud": "client-id",
         "exp": now + 60,
@@ -127,7 +128,7 @@ async fn an_online_token_names_its_staff_member() {
 }
 
 #[test]
-fn a_checkout_extension_session_token_verifies() {
+fn a_checkout_extension_session_token_verifies_on_its_own_path() {
     let app = ShopifyApp::new("client-id", "client-secret");
     let now = now();
     // As a checkout UI extension sends it: `dest` without `https://`, no `iss`, a customer.
@@ -140,16 +141,70 @@ fn a_checkout_extension_session_token_verifies() {
         "jti": "6c992878-dbaf-48d1-bb9d-6d9b59814fd1",
         "sub": "gid://shopify/Customer/1",
     }));
-    let session = app.verify_session_token(&bearer).unwrap();
+    let session = app.verify_extension_session_token(&bearer).unwrap();
     assert_eq!(session.shop().as_str(), "store-name.myshopify.com");
-    assert_eq!(session.subject(), Some("gid://shopify/Customer/1"));
+    assert_eq!(session.customer(), Some("gid://shopify/Customer/1"));
+    assert!(app.verify_session_token(&bearer).is_err());
 
     // A bare handle, or another host, is still not a shop.
     for dest in ["store-name", "store-name.example.com", "https://store-name"] {
         let bearer =
             app.sign_session_token(&json!({ "dest": dest, "aud": "client-id", "exp": now + 60 }));
-        assert!(app.verify_session_token(&bearer).is_err(), "{dest}");
+        assert!(
+            app.verify_extension_session_token(&bearer).is_err(),
+            "{dest}"
+        );
     }
+}
+
+/// The reproduction of the review of 1.0: the token any buyer gets from
+/// `shopify.sessionToken.get()` in a checkout UI extension (no `iss`, no `sid`,
+/// no `sub`, `dest` without `https://`) must not pass as an admin session,
+/// which an app trusts to load the stored offline token of `shop()`.
+#[test]
+fn a_buyer_checkout_token_is_not_an_admin_session() {
+    let app = ShopifyApp::new("client-id", "client-secret");
+    let now = now();
+    let checkout = app.sign_session_token(&json!({
+        "dest": "victim.myshopify.com", "aud": "client-id", "exp": now + 300, "nbf": now - 1,
+        "iat": now, "jti": "x"
+    }));
+    assert_eq!(
+        app.verify_session_token(&checkout).unwrap_err().to_string(),
+        "verification failed: the `dest` of the session token is not the admin of a shop"
+    );
+    let extension = app.verify_extension_session_token(&checkout).unwrap();
+    assert_eq!(extension.shop().as_str(), "victim.myshopify.com");
+    assert_eq!(extension.customer(), None);
+
+    // With `https://` added to `dest`, it still has no `iss`.
+    let checkout = app.sign_session_token(&json!({
+        "dest": "https://victim.myshopify.com", "aud": "client-id", "exp": now + 300,
+    }));
+    assert!(app.verify_session_token(&checkout).is_err());
+
+    // The admin token of the same shop verifies on both paths.
+    let admin = app.sign_session_token(&json!({
+        "iss": "https://victim.myshopify.com/admin", "dest": "https://victim.myshopify.com",
+        "aud": "client-id", "sub": "42", "sid": "s", "exp": now + 60, "nbf": now - 1
+    }));
+    let session = app.verify_session_token(&admin).unwrap();
+    assert_eq!(session.shop().as_str(), "victim.myshopify.com");
+    assert_eq!(session.user_id(), Some("42"));
+    assert_eq!(session.session_id(), Some("s"));
+}
+
+/// `iss` was compared as a prefix: a host that starts with the shop's passed.
+#[test]
+fn an_issuer_that_only_starts_with_the_shop_is_refused() {
+    let app = ShopifyApp::new("client-id", "client-secret");
+    let now = now();
+    let token = app.sign_session_token(&json!({
+        "iss": "https://s.myshopify.com.evil.example/admin", "dest": "https://s.myshopify.com",
+        "aud": "client-id", "exp": now + 60,
+    }));
+    assert!(app.verify_session_token(&token).is_err());
+    assert!(app.verify_extension_session_token(&token).is_err());
 }
 
 #[derive(Default, Clone)]

@@ -18,6 +18,13 @@
 //! # }
 //! ```
 //!
+//! [`verify_session_token`](ShopifyApp::verify_session_token) takes only the
+//! tokens of Shopify admin, which a staff member's browser sends. The tokens
+//! of checkout and customer account UI extensions, which any buyer gets, are
+//! verified by [`verify_extension_session_token`](ShopifyApp::verify_extension_session_token),
+//! as an [`ExtensionSessionToken`]: a type of its own, so that one never
+//! passes for the other.
+//!
 //! An app outside Shopify admin installs through a link and a callback:
 //!
 //! ```no_run
@@ -192,13 +199,18 @@ pub enum RequestedToken {
     Online,
 }
 
-/// A session token whose signature and dates were verified.
+/// A session token of Shopify admin, from [`ShopifyApp::verify_session_token`]:
+/// its signature, dates, `dest` and `iss` were verified.
+///
+/// Only Shopify admin issues it, to a staff member of the shop: it is what
+/// opens the admin side of an app. The tokens of checkout and customer account
+/// UI extensions, which any buyer gets, are an [`ExtensionSessionToken`].
 ///
 /// `Debug` hides the token itself, which is a bearer.
 #[derive(Clone, PartialEq)]
 pub struct SessionToken {
     shop: ShopDomain,
-    subject: Option<String>,
+    user_id: Option<String>,
     session_id: Option<String>,
     expires_at: DateTime<Utc>,
     claims: Value,
@@ -210,7 +222,7 @@ impl std::fmt::Debug for SessionToken {
         formatter
             .debug_struct("SessionToken")
             .field("shop", &self.shop)
-            .field("subject", &self.subject)
+            .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
@@ -223,11 +235,9 @@ impl SessionToken {
         &self.shop
     }
 
-    /// `sub`: the ID of the staff member for a token of Shopify admin
-    /// (`42`), the GID of the customer for a token of a checkout or customer
-    /// account UI extension (`gid://shopify/Customer/1`), when one is logged in.
-    pub fn subject(&self) -> Option<&str> {
-        self.subject.as_deref()
+    /// `sub`: the ID of the staff member, such as `42`.
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
     }
 
     /// The session, `sid`.
@@ -247,6 +257,103 @@ impl SessionToken {
     /// The token itself, as the frontend sent it.
     pub fn as_str(&self) -> &str {
         &self.token
+    }
+}
+
+/// A session token of a checkout or customer account UI extension, from
+/// [`ShopifyApp::verify_extension_session_token`]: its signature, dates and
+/// `dest` were verified.
+///
+/// Any buyer of the shop gets one, logged in or not: it proves which shop
+/// and, through [`customer`](Self::customer), which customer, never a staff
+/// member. It is not a [`SessionToken`], and does not exchange for a token.
+///
+/// `Debug` hides the token itself, which is a bearer.
+#[derive(Clone, PartialEq)]
+pub struct ExtensionSessionToken {
+    shop: ShopDomain,
+    customer: Option<String>,
+    expires_at: DateTime<Utc>,
+    claims: Value,
+    token: String,
+}
+
+impl std::fmt::Debug for ExtensionSessionToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExtensionSessionToken")
+            .field("shop", &self.shop)
+            .field("customer", &self.customer)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ExtensionSessionToken {
+    /// The shop of `dest`.
+    pub fn shop(&self) -> &ShopDomain {
+        &self.shop
+    }
+
+    /// `sub`: the GID of the logged-in customer, such as
+    /// `gid://shopify/Customer/1`. Shopify only sends it when a customer is
+    /// logged in and the app may read customers.
+    pub fn customer(&self) -> Option<&str> {
+        self.customer.as_deref()
+    }
+
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.expires_at
+    }
+
+    /// Every claim of the token.
+    pub fn claims(&self) -> &Value {
+        &self.claims
+    }
+
+    /// The token itself, as the extension sent it.
+    pub fn as_str(&self) -> &str {
+        &self.token
+    }
+}
+
+/// The claims of a session token whose signature, dates and audience were verified.
+struct Verified {
+    claims: Value,
+    expires_at: DateTime<Utc>,
+    token: String,
+}
+
+impl Verified {
+    fn text(&self, name: &str) -> Option<String> {
+        self.claims
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    fn claim(&self, name: &str) -> Option<&str> {
+        self.claims.get(name).and_then(Value::as_str)
+    }
+}
+
+/// The shop of a host that is a whole `*.myshopify.com` domain.
+fn shop_of_host(host: &str) -> Result<ShopDomain> {
+    Some(host)
+        // A whole domain: a bare handle is not what Shopify writes.
+        .filter(|host| host.to_ascii_lowercase().ends_with(".myshopify.com"))
+        .and_then(|host| ShopDomain::new(host).ok())
+        .ok_or_else(|| invalid("the `dest` of the session token is not a shop"))
+}
+
+/// Checks that `iss` is exactly the admin of `shop`.
+fn check_admin_issuer(issuer: &str, shop: &ShopDomain) -> Result<()> {
+    if issuer == format!("{}/admin", shop.origin()) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "the `iss` of the session token is not the admin of its `dest`",
+        ))
     }
 }
 
@@ -471,18 +578,84 @@ impl ShopifyApp {
 
     // ─── Session tokens ──────────────────────────────────────────────
 
-    /// Verifies a session token from the app's frontend (the bearer of its
-    /// requests): signed by the app's secret with HS256, issued for the app,
-    /// within its dates, from a shop.
+    /// Verifies a session token of Shopify admin (the bearer of the requests
+    /// of the app's embedded frontend): signed by the app's secret with HS256,
+    /// issued for the app, within its dates, with a `dest` of exactly
+    /// `https://{shop}.myshopify.com` and an `iss` of exactly
+    /// `https://{shop}.myshopify.com/admin`.
     ///
-    /// The tokens of Shopify admin and of UI extensions both verify: the
-    /// `dest` of an extension's token is the shop's domain without `https://`,
-    /// and it may have no `iss`.
+    /// Only Shopify admin issues such a token, to a staff member: trust it to
+    /// open the admin side of the app, such as loading the shop's stored
+    /// offline token. The tokens of checkout and customer account UI
+    /// extensions, which any buyer gets, are refused here: verify them with
+    /// [`verify_extension_session_token`](Self::verify_extension_session_token).
     pub fn verify_session_token(&self, token: &str) -> Result<SessionToken> {
         self.verify_session_token_at(token, Utc::now())
     }
 
     fn verify_session_token_at(&self, token: &str, now: DateTime<Utc>) -> Result<SessionToken> {
+        let verified = self.verify_jwt(token, now)?;
+        let destination = verified
+            .claim("dest")
+            .ok_or_else(|| invalid("the session token has no `dest`"))?;
+        let shop = destination
+            .strip_prefix("https://")
+            .ok_or_else(|| invalid("the `dest` of the session token is not the admin of a shop"))
+            .and_then(shop_of_host)?;
+        if destination != shop.origin() {
+            return Err(invalid("the `dest` of the session token is not a shop"));
+        }
+        let issuer = verified.claim("iss").ok_or_else(|| {
+            invalid("the session token has no `iss`: it is not from Shopify admin")
+        })?;
+        check_admin_issuer(issuer, &shop)?;
+        Ok(SessionToken {
+            user_id: verified.text("sub"),
+            session_id: verified.text("sid"),
+            shop,
+            expires_at: verified.expires_at,
+            claims: verified.claims,
+            token: verified.token,
+        })
+    }
+
+    /// Verifies the session token of a checkout or customer account UI
+    /// extension (`shopify.sessionToken.get()`): signed by the app's secret with
+    /// HS256, issued for the app, within its dates, with a `dest` that is a
+    /// `*.myshopify.com` domain (Shopify writes it without `https://`). An
+    /// `iss`, when there is one, must be exactly `https://{shop}.myshopify.com/admin`.
+    ///
+    /// Any buyer of the shop can get such a token: it proves the shop and,
+    /// when one is logged in, the customer, never a staff member. It is a type
+    /// of its own so that it cannot reach what a [`SessionToken`] opens.
+    pub fn verify_extension_session_token(&self, token: &str) -> Result<ExtensionSessionToken> {
+        self.verify_extension_session_token_at(token, Utc::now())
+    }
+
+    fn verify_extension_session_token_at(
+        &self,
+        token: &str,
+        now: DateTime<Utc>,
+    ) -> Result<ExtensionSessionToken> {
+        let verified = self.verify_jwt(token, now)?;
+        let destination = verified
+            .claim("dest")
+            .ok_or_else(|| invalid("the session token has no `dest`"))?;
+        let shop = shop_of_host(destination.strip_prefix("https://").unwrap_or(destination))?;
+        if let Some(issuer) = verified.claim("iss") {
+            check_admin_issuer(issuer, &shop)?;
+        }
+        Ok(ExtensionSessionToken {
+            customer: verified.text("sub"),
+            shop,
+            expires_at: verified.expires_at,
+            claims: verified.claims,
+            token: verified.token,
+        })
+    }
+
+    /// The signature, dates and audience of a session token, the same for every kind.
+    fn verify_jwt(&self, token: &str, now: DateTime<Utc>) -> Result<Verified> {
         let token = token.trim();
         let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let mut parts = token.split('.');
@@ -530,32 +703,11 @@ impl ShopifyApp {
         if !audience_matches {
             return Err(invalid("the session token was issued for another app"));
         }
-        let destination = claims
-            .get("dest")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid("the session token has no `dest`"))?;
-        // `https://shop.myshopify.com` from Shopify admin, `shop.myshopify.com` from an extension.
-        let host = destination.strip_prefix("https://").unwrap_or(destination);
-        let shop = Some(host)
-            // A whole domain: a bare handle is not what Shopify writes.
-            .filter(|host| host.to_ascii_lowercase().ends_with(".myshopify.com"))
-            .and_then(|host| ShopDomain::new(host).ok())
-            .ok_or_else(|| invalid("the `dest` of the session token is not a shop"))?;
-        let issuer = claims.get("iss").and_then(Value::as_str);
-        if issuer.is_some_and(|issuer| !issuer.starts_with(&shop.origin())) {
-            return Err(invalid(
-                "the `iss` and `dest` of the session token name different shops",
-            ));
-        }
-        let text = |name: &str| claims.get(name).and_then(Value::as_str).map(str::to_string);
-        Ok(SessionToken {
-            subject: text("sub"),
-            session_id: text("sid"),
+        Ok(Verified {
             expires_at: Utc
                 .timestamp_opt(expires, 0)
                 .single()
                 .ok_or_else(|| invalid("the `exp` of the session token is out of range"))?,
-            shop,
             claims,
             token: token.to_string(),
         })
@@ -848,7 +1000,8 @@ mod tests {
             .verify_session_token_at(&format!("Bearer {token}"), at(now))
             .unwrap();
         assert_eq!(session.shop().as_str(), "my-shop.myshopify.com");
-        assert_eq!(session.subject(), Some("42"));
+        assert_eq!(session.user_id(), Some("42"));
+        assert_eq!(session.session_id(), claims(now)["sid"].as_str());
         assert_eq!(session.expires_at(), at(now + 60));
         assert_eq!(session.as_str(), token);
 
@@ -890,7 +1043,7 @@ mod tests {
         mixed["iss"] = json!("https://other-shop.myshopify.com/admin");
         assert_eq!(
             refusal(&app().sign_session_token(&mixed), now),
-            "verification failed: the `iss` and `dest` of the session token name different shops"
+            "verification failed: the `iss` of the session token is not the admin of its `dest`"
         );
         // A token whose header claims another algorithm is refused before its signature.
         let unsigned = format!(
@@ -906,6 +1059,151 @@ mod tests {
             refusal("a.b", now),
             "verification failed: the session token is not a JWT"
         );
+    }
+
+    #[test]
+    fn an_admin_session_token_has_exactly_the_admin_issuer_and_destination() {
+        let now = 1_800_000_000;
+        let refusal = |claims: &Value| {
+            app()
+                .verify_session_token_at(&app().sign_session_token(claims), at(now))
+                .unwrap_err()
+                .to_string()
+        };
+        let not_admin =
+            "verification failed: the `iss` of the session token is not the admin of its `dest`";
+        // `iss` is compared whole: a host that only starts with the shop's is another host.
+        for issuer in [
+            "https://my-shop.myshopify.com.evil.example/admin",
+            "https://my-shop.myshopify.com",
+            "https://my-shop.myshopify.com/admin/",
+            "https://my-shop.myshopify.com/adminx",
+            "http://my-shop.myshopify.com/admin",
+        ] {
+            let mut token = claims(now);
+            token["iss"] = json!(issuer);
+            assert_eq!(refusal(&token), not_admin, "{issuer}");
+        }
+        let mut no_issuer = claims(now);
+        no_issuer.as_object_mut().unwrap().remove("iss");
+        assert_eq!(
+            refusal(&no_issuer),
+            "verification failed: the session token has no `iss`: it is not from Shopify admin"
+        );
+        let mut bare = claims(now);
+        bare["dest"] = json!("my-shop.myshopify.com");
+        assert_eq!(
+            refusal(&bare),
+            "verification failed: the `dest` of the session token is not the admin of a shop"
+        );
+        for destination in [
+            "https://my-shop.myshopify.com/",
+            "https://my-shop.myshopify.com/admin",
+        ] {
+            let mut token = claims(now);
+            token["dest"] = json!(destination);
+            assert!(
+                app()
+                    .verify_session_token_at(&app().sign_session_token(&token), at(now))
+                    .is_err(),
+                "{destination}"
+            );
+        }
+    }
+
+    /// The payload of Shopify's documentation of the Session Token API of
+    /// checkout and customer account UI extensions: no `iss`, no `sid`, a
+    /// `dest` without `https://`, and `sub` only for a logged-in customer.
+    fn extension_claims(now: i64) -> Value {
+        json!({
+            "dest": "store-name.myshopify.com",
+            "aud": "client-id",
+            "exp": now + 300,
+            "nbf": now,
+            "iat": now,
+            "jti": "6c992878-dbaf-48d1-bb9d-6d9b59814fd1",
+            "sub": "gid://shopify/Customer/1",
+        })
+    }
+
+    #[test]
+    fn verifies_extension_session_tokens() {
+        let now = 1_800_000_000;
+        let verify = |claims: &Value| {
+            app().verify_extension_session_token_at(&app().sign_session_token(claims), at(now))
+        };
+        let session = verify(&extension_claims(now)).unwrap();
+        assert_eq!(session.shop().as_str(), "store-name.myshopify.com");
+        assert_eq!(session.customer(), Some("gid://shopify/Customer/1"));
+        assert_eq!(session.expires_at(), at(now + 300));
+        assert_eq!(
+            session.claims()["jti"],
+            "6c992878-dbaf-48d1-bb9d-6d9b59814fd1"
+        );
+
+        // An anonymous buyer: no `sub`.
+        let mut anonymous = extension_claims(now);
+        anonymous.as_object_mut().unwrap().remove("sub");
+        assert_eq!(verify(&anonymous).unwrap().customer(), None);
+        // `dest` with `https://`, and an `iss` that is the admin of the same shop.
+        let mut admin_shaped = extension_claims(now);
+        admin_shaped["dest"] = json!("https://store-name.myshopify.com");
+        admin_shaped["iss"] = json!("https://store-name.myshopify.com/admin");
+        assert!(verify(&admin_shaped).is_ok());
+        // An admin token verifies here too: it proves its shop as well.
+        assert_eq!(
+            verify(&claims(now)).unwrap().shop().as_str(),
+            "my-shop.myshopify.com"
+        );
+
+        // An `iss` is compared whole here as well.
+        let mut prefixed = extension_claims(now);
+        prefixed["iss"] = json!("https://store-name.myshopify.com.evil.example/admin");
+        assert_eq!(
+            verify(&prefixed).unwrap_err().to_string(),
+            "verification failed: the `iss` of the session token is not the admin of its `dest`"
+        );
+        // A bare handle, or another host, is still not a shop.
+        for destination in ["store-name", "store-name.example.com", "https://store-name"] {
+            let mut token = extension_claims(now);
+            token["dest"] = json!(destination);
+            assert!(verify(&token).is_err(), "{destination}");
+        }
+        // The checks every session token gets.
+        let mut other_app = extension_claims(now);
+        other_app["aud"] = json!("other");
+        assert!(verify(&other_app).is_err());
+        assert!(
+            app()
+                .verify_extension_session_token_at(
+                    &app().sign_session_token(&extension_claims(now)),
+                    at(now + 311)
+                )
+                .is_err()
+        );
+        let foreign =
+            ShopifyApp::new("client-id", "other").sign_session_token(&extension_claims(now));
+        assert!(
+            app()
+                .verify_extension_session_token_at(&foreign, at(now))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_extension_session_token_is_not_an_admin_session() {
+        let now = 1_800_000_000;
+        let mut anonymous = extension_claims(now);
+        anonymous.as_object_mut().unwrap().remove("sub");
+        for token in [extension_claims(now), anonymous] {
+            let token = app().sign_session_token(&token);
+            assert!(app().verify_session_token_at(&token, at(now)).is_err());
+            assert!(
+                app()
+                    .verify_extension_session_token_at(&token, at(now))
+                    .is_ok()
+            );
+        }
     }
 
     #[test]
@@ -946,6 +1244,9 @@ mod tests {
         let token = app().sign_session_token(&claims(now));
         let session = app().verify_session_token(&token).unwrap();
         assert!(!format!("{session:?}").contains(&token));
+        let extension = app().sign_session_token(&extension_claims(now));
+        let session = app().verify_extension_session_token(&extension).unwrap();
+        assert!(!format!("{session:?}").contains(&extension));
     }
 
     #[test]
