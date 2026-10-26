@@ -386,6 +386,12 @@ impl ShopifyBuilder {
         self
     }
 
+    /// [`ShopifyBuilder::token_store`], for a store already shared.
+    pub fn shared_token_store(mut self, store: Arc<dyn TokenStore>) -> Self {
+        self.token_store = Some(store);
+        self
+    }
+
     /// How long before it expires a token is renewed: five minutes by default.
     pub fn refresh_leeway(mut self, leeway: Duration) -> Self {
         self.refresh_leeway = leeway;

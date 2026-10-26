@@ -125,3 +125,72 @@ async fn an_online_token_names_its_staff_member() {
     assert_eq!(user.first_name.as_deref(), Some("Ada"));
     assert_eq!(user.account_owner, Some(true));
 }
+
+#[test]
+fn a_checkout_extension_session_token_verifies() {
+    let app = ShopifyApp::new("client-id", "client-secret");
+    let now = now();
+    // As a checkout UI extension sends it: `dest` without `https://`, no `iss`, a customer.
+    let bearer = app.sign_session_token(&json!({
+        "dest": "store-name.myshopify.com",
+        "aud": "client-id",
+        "exp": now + 60,
+        "nbf": now,
+        "iat": now,
+        "jti": "6c992878-dbaf-48d1-bb9d-6d9b59814fd1",
+        "sub": "gid://shopify/Customer/1",
+    }));
+    let session = app.verify_session_token(&bearer).unwrap();
+    assert_eq!(session.shop().as_str(), "store-name.myshopify.com");
+    assert_eq!(session.subject(), Some("gid://shopify/Customer/1"));
+
+    // A bare handle, or another host, is still not a shop.
+    for dest in ["store-name", "store-name.example.com", "https://store-name"] {
+        let bearer =
+            app.sign_session_token(&json!({ "dest": dest, "aud": "client-id", "exp": now + 60 }));
+        assert!(app.verify_session_token(&bearer).is_err(), "{dest}");
+    }
+}
+
+#[derive(Default, Clone)]
+struct Saved(std::sync::Arc<std::sync::Mutex<Vec<(String, shopify_api::TokenData)>>>);
+
+impl shopify_api::TokenStore for Saved {
+    fn save<'a>(
+        &'a self,
+        shop: &'a shopify_api::ShopDomain,
+        token: &'a shopify_api::TokenData,
+    ) -> shopify_api::transport::BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>>
+    {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap()
+                .push((shop.to_string(), token.clone()));
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn the_clients_of_an_app_save_their_renewed_tokens() {
+    let mock = MockTransport::new();
+    mock.push_json(
+        json!({ "access_token": "shpat_2", "expires_in": 3600, "refresh_token": "shprt_2" }),
+    );
+    mock.push_data(json!({ "shop": { "name": "My shop" } }));
+    let saved = Saved::default();
+    let app = app(&mock).with_token_store(saved.clone());
+
+    let mut token = shopify_api::TokenData::new("shpat_1");
+    token.expires_at = Some(chrono::Utc::now());
+    token.refresh_token = Some("shprt_1".to_string());
+    let shop = shopify_api::ShopDomain::new("my-shop").unwrap();
+    let shopify = app.client(&shop, token).unwrap();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+
+    let saved = saved.0.lock().unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].0, "my-shop.myshopify.com");
+    assert_eq!(saved[0].1.refresh_token.as_deref(), Some("shprt_2"));
+}

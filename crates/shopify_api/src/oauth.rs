@@ -53,7 +53,9 @@ use sha2::Sha256;
 
 use crate::auth::{Encoding, request_token};
 use crate::transport::{Transport, default_transport};
-use crate::{Auth, Error, Result, ShopDomain, Shopify, ShopifyBuilder, TokenData, USER_AGENT};
+use crate::{
+    Auth, Error, Result, ShopDomain, Shopify, ShopifyBuilder, TokenData, TokenStore, USER_AGENT,
+};
 
 /// How far the `timestamp` of a signed query may be from now, as Shopify's libraries allow.
 const QUERY_TOLERANCE_SECONDS: i64 = 90;
@@ -87,6 +89,7 @@ pub struct ShopifyApp {
     client_id: String,
     client_secret: String,
     transport: Option<Arc<dyn Transport>>,
+    token_store: Option<Arc<dyn TokenStore>>,
     user_agent: String,
 }
 
@@ -95,6 +98,7 @@ impl std::fmt::Debug for ShopifyApp {
         formatter
             .debug_struct("ShopifyApp")
             .field("client_id", &self.client_id)
+            .field("token_store", &self.token_store.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -178,6 +182,7 @@ impl SignedQuery {
 
 /// The token an embedded app asks for with a session token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RequestedToken {
     /// A token of the shop that does not expire.
     Offline,
@@ -193,7 +198,7 @@ pub enum RequestedToken {
 #[derive(Clone, PartialEq)]
 pub struct SessionToken {
     shop: ShopDomain,
-    user_id: Option<String>,
+    subject: Option<String>,
     session_id: Option<String>,
     expires_at: DateTime<Utc>,
     claims: Value,
@@ -205,7 +210,7 @@ impl std::fmt::Debug for SessionToken {
         formatter
             .debug_struct("SessionToken")
             .field("shop", &self.shop)
-            .field("user_id", &self.user_id)
+            .field("subject", &self.subject)
             .field("session_id", &self.session_id)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
@@ -218,9 +223,11 @@ impl SessionToken {
         &self.shop
     }
 
-    /// The staff member, `sub`.
-    pub fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    /// `sub`: the ID of the staff member for a token of Shopify admin
+    /// (`42`), the GID of the customer for a token of a checkout or customer
+    /// account UI extension (`gid://shopify/Customer/1`), when one is logged in.
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
     }
 
     /// The session, `sid`.
@@ -250,6 +257,7 @@ impl ShopifyApp {
             client_secret: client_secret.into(),
             // Without one, the requests that need it fail with `NoTransport`.
             transport: default_transport().ok(),
+            token_store: None,
             user_agent: USER_AGENT.to_string(),
         }
     }
@@ -258,6 +266,14 @@ impl ShopifyApp {
     /// through `transport`.
     pub fn with_transport(mut self, transport: impl Transport) -> Self {
         self.transport = Some(Arc::new(transport));
+        self
+    }
+
+    /// Saves the tokens that the clients it builds obtain or renew: the
+    /// refresh token of an expiring token changes at each renewal. The store
+    /// is told the shop of each token.
+    pub fn with_token_store(mut self, store: impl TokenStore) -> Self {
+        self.token_store = Some(Arc::new(store));
         self
     }
 
@@ -286,17 +302,22 @@ impl ShopifyApp {
 
     // ─── Clients ─────────────────────────────────────────────────────
 
-    /// A builder of a client of `shop` that uses the app's transport.
+    /// A builder of a client of `shop` that uses the app's transport and
+    /// token store.
     pub fn builder(&self, shop: &ShopDomain) -> ShopifyBuilder {
-        let builder = Shopify::builder(shop).user_agent(&self.user_agent);
-        match &self.transport {
-            Some(transport) => builder.shared_transport(transport.clone()),
-            None => builder,
+        let mut builder = Shopify::builder(shop).user_agent(&self.user_agent);
+        if let Some(transport) = &self.transport {
+            builder = builder.shared_transport(transport.clone());
         }
+        if let Some(store) = &self.token_store {
+            builder = builder.shared_token_store(store.clone());
+        }
+        builder
     }
 
     /// A client of `shop` with a token the app obtained: renewed with its
-    /// refresh token when it has one, used as it is otherwise.
+    /// refresh token when it has one, used as it is otherwise. The renewed
+    /// tokens go to the app's [token store](Self::with_token_store).
     pub fn client(&self, shop: &ShopDomain, token: TokenData) -> Result<Shopify> {
         let auth = if token.refresh_token.is_some() {
             Auth::expiring_token(&self.client_id, &self.client_secret, token)
@@ -453,6 +474,10 @@ impl ShopifyApp {
     /// Verifies a session token from the app's frontend (the bearer of its
     /// requests): signed by the app's secret with HS256, issued for the app,
     /// within its dates, from a shop.
+    ///
+    /// The tokens of Shopify admin and of UI extensions both verify: the
+    /// `dest` of an extension's token is the shop's domain without `https://`,
+    /// and it may have no `iss`.
     pub fn verify_session_token(&self, token: &str) -> Result<SessionToken> {
         self.verify_session_token_at(token, Utc::now())
     }
@@ -509,8 +534,11 @@ impl ShopifyApp {
             .get("dest")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("the session token has no `dest`"))?;
-        let shop = destination
-            .strip_prefix("https://")
+        // `https://shop.myshopify.com` from Shopify admin, `shop.myshopify.com` from an extension.
+        let host = destination.strip_prefix("https://").unwrap_or(destination);
+        let shop = Some(host)
+            // A whole domain: a bare handle is not what Shopify writes.
+            .filter(|host| host.to_ascii_lowercase().ends_with(".myshopify.com"))
             .and_then(|host| ShopDomain::new(host).ok())
             .ok_or_else(|| invalid("the `dest` of the session token is not a shop"))?;
         let issuer = claims.get("iss").and_then(Value::as_str);
@@ -521,7 +549,7 @@ impl ShopifyApp {
         }
         let text = |name: &str| claims.get(name).and_then(Value::as_str).map(str::to_string);
         Ok(SessionToken {
-            user_id: text("sub"),
+            subject: text("sub"),
             session_id: text("sid"),
             expires_at: Utc
                 .timestamp_opt(expires, 0)
@@ -820,7 +848,7 @@ mod tests {
             .verify_session_token_at(&format!("Bearer {token}"), at(now))
             .unwrap();
         assert_eq!(session.shop().as_str(), "my-shop.myshopify.com");
-        assert_eq!(session.user_id(), Some("42"));
+        assert_eq!(session.subject(), Some("42"));
         assert_eq!(session.expires_at(), at(now + 60));
         assert_eq!(session.as_str(), token);
 
