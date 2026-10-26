@@ -256,10 +256,11 @@ Topics are accepted as `orders/create` or `ORDERS_CREATE`.
 | `shopify.download_admin_schema()` | The same |
 | `SHOPIFY_DEV_ADMIN_SCHEMA_PROXY` | `schema::PUBLIC_ADMIN_SCHEMA_ENDPOINT` |
 | `ADMIN_SCHEMA_INTROSPECTION_QUERY` | `schema::INTROSPECTION_QUERY` |
-| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it when cargo is asked to build the package, never for a dependency, or a packaged crate. `shopify-api schema download` refreshes it, `--introspection` for the raw result |
+| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it when cargo is asked to build the package, never for a dependency, or a packaged crate. `shopify-api schema download` refreshes it, `--introspection` for the raw result. `schema = "file"` next to `api-version` names another file than `graphql/admin.schema.json` |
 | `shopify-api schema download --api-version 2026-07` | No flag: the command reads the version of the nearest `Cargo.toml`. For another version, or outside a package: `schema::download_public_admin_schema(ApiVersion::new("2026-07")?)` |
 
-`graphql!` reads the compact form it downloads, in `graphql/admin.schema.json`.
+`graphql!` reads the compact form it downloads, in `graphql/admin.schema.json`,
+or in the file `schema = "…"` names in `[package.metadata.shopify_api]`.
 
 ## Removed
 

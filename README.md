@@ -225,9 +225,8 @@ keep it, whatever Shopify releases since: a build gives the same result
 whatever the date. Commit the file, so that builds without network access
 have it. A library that uses `graphql!` must ship it: as a dependency, a
 crate never downloads its schema, and `cargo package` fails without it.
-`SHOPIFY_GRAPHQL_SCHEMA` names another schema file for your own packages (the
-workspace and path dependencies), never for a crate from a registry, git or
-a vendor directory. The details are in the
+`schema = "…"` in `[package.metadata.shopify_api]` names another schema file
+for that package, relative to its `Cargo.toml`. The details are in the
 [`graphql!` docs](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html#schema-and-api-version).
 
 To choose the version, pin it in your `Cargo.toml` (`graphql!` downloads its
