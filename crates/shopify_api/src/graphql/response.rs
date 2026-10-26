@@ -86,7 +86,7 @@ pub struct UserError {
 
 /// The cost of a query and the state of the shop's rate limit, from
 /// `extensions.cost`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Cost {
@@ -96,7 +96,7 @@ pub struct Cost {
     pub throttle_status: ThrottleStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ThrottleStatus {

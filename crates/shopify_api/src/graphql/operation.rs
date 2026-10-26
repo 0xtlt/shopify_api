@@ -12,6 +12,7 @@ use crate::{ApiVersion, Error, Result};
 
 /// A query or a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum OperationKind {
     Query,
     Mutation,

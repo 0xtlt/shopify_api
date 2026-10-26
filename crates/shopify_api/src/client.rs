@@ -480,7 +480,10 @@ mod tests {
                 restore_rate: 100.0,
             },
         };
-        assert_eq!(retry.throttled(0, Some(cost)), Duration::from_millis(2100));
+        assert_eq!(
+            retry.throttled(0, Some(cost.clone())),
+            Duration::from_millis(2100)
+        );
         let far = crate::graphql::Cost {
             requested_query_cost: 20000.0,
             ..cost
