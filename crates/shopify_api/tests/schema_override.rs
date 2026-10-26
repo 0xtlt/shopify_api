@@ -224,6 +224,7 @@ fn a_schema_outside_the_package_is_a_compile_error() {
     for path in [
         "\"../override.json\"",
         "\"schemas/../../override.json\"",
+        "\"./D:/override.json\"",
         &absolute,
     ] {
         workspace.library_metadata(&format!("schema = {path}\n"));

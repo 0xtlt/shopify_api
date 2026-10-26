@@ -171,7 +171,7 @@ fn schema_in(value: Option<&toml::Value>) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     };
     match value.as_str() {
-        Some(path) if !path.is_empty() => inside_package(Path::new(path)).map(Some),
+        Some(path) if !path.is_empty() => inside_package(path).map(Some),
         _ => Err(format!(
             "`{SCHEMA_KEY}` in [package.metadata.{METADATA_TABLE}] must be the path of a schema file, \
              relative to Cargo.toml, such as \"graphql/admin.schema.json\""
@@ -184,37 +184,55 @@ fn schema_in(value: Option<&toml::Value>) -> Result<Option<PathBuf>, String> {
 /// so a packaged crate would look for any other file at another place, and
 /// fail, or find another schema there.
 ///
-/// The check is lexical: `.` and `a/..` are removed, and the path must not
-/// be absolute, have a root or a drive, nor climb above the package. A
-/// symbolic link inside the package that points outside it is accepted, on
-/// purpose: `cargo package` ships the content of a linked file. The path is
-/// returned normalized, so that the file opened is the one checked, even
-/// when `a` in `a/..` is a link to a directory.
-pub fn inside_package(path: &Path) -> Result<PathBuf, String> {
+/// `path` is portable, since a published crate may be built on any system:
+/// it is read with `/` separators, and no segment may hold a `:` or a `\`,
+/// a drive or a separator on Windows and part of a name elsewhere.
+///
+/// The check is lexical: `.`, empty segments and `a/..` are removed, and the
+/// path must not be absolute, nor climb above the package. A symbolic link
+/// inside the package that points outside it is accepted, on purpose:
+/// `cargo package` ships the content of a linked file. The path is returned
+/// normalized, so that the file opened is the one checked, even when `a` in
+/// `a/..` is a link to a directory; on every system, it holds only the
+/// names checked, as plain components: no drive, root, `.` nor `..`.
+pub fn inside_package(path: &str) -> Result<PathBuf, String> {
     use std::path::Component;
-    let outside = || {
+    let refused = || {
         format!(
-            "`{SCHEMA_KEY} = \"{}\"` in [package.metadata.{METADATA_TABLE}] must name a file inside the package, \
-             relative to its Cargo.toml, such as \"graphql/admin.schema.json\": \
-             `cargo package` ships only the package's files",
-            path.display()
+            "`{SCHEMA_KEY} = {}` in [package.metadata.{METADATA_TABLE}] must name a file inside the package, \
+             as a relative path with `/` separators and no `:` or `\\`, such as \"graphql/admin.schema.json\": \
+             `cargo package` ships only the package's files, and a published crate may be built on any system",
+            toml::Value::from(path)
         )
     };
-    let mut normal = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => return Err(outside()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normal.pop() {
-                    return Err(outside());
+    if path.starts_with('/') {
+        return Err(refused());
+    }
+    let mut names = Vec::new();
+    for segment in path.split('/') {
+        if segment.contains([':', '\\']) {
+            return Err(refused());
+        }
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if names.pop().is_none() {
+                    return Err(refused());
                 }
             }
-            Component::Normal(name) => normal.push(name),
+            name => names.push(name),
         }
     }
-    if normal.as_os_str().is_empty() {
-        return Err(outside());
+    if names.is_empty() {
+        return Err(refused());
+    }
+    let normal: PathBuf = names.iter().collect();
+    // What this system makes of the names: each one a plain component.
+    let plain = normal
+        .components()
+        .eq(names.iter().map(|name| Component::Normal(OsStr::new(name))));
+    if !plain {
+        return Err(refused());
     }
     Ok(normal)
 }
@@ -907,12 +925,9 @@ mod tests {
 
     #[test]
     fn the_schema_snippet_reads_back_as_the_path() {
-        let mut names = vec!["schemas/a\"b.json", "schemas/tab\t'q'.json", "admin.json"];
-        // A backslash is a separator on Windows, and part of a name elsewhere.
-        if cfg!(unix) {
-            names.push("schemas/a\\b.json");
-        }
-        for name in names {
+        // A backslash is not a `schema` value: `shopify-api` prints a note
+        // instead of a snippet for such a name.
+        for name in ["schemas/a\"b.json", "schemas/tab\t'q'.json", "admin.json"] {
             let snippet = schema_snippet("2026-07", Path::new(name));
             let config = config_in(&format!("[package]\nname = \"app\"\n\n{snippet}\n"));
             assert_eq!(
@@ -952,7 +967,26 @@ mod tests {
                 error.contains("must name a file inside the package"),
                 "{error}"
             );
+            assert!(
+                error.contains("relative path with `/` separators and no `:` or `\\`"),
+                "{error}"
+            );
             assert!(error.contains("`cargo package` ships"), "{error}");
+        }
+        // Not portable, so refused on every system: a drive on Windows, even
+        // in the middle of the path, and a separator there.
+        for outside in [
+            "./D:/schema.json",
+            "schemas/D:/schema.json",
+            "a/../D:/schema.json",
+            "./D:../schema.json",
+            "C:x.json",
+            "a\\b.json",
+            "schemas\\admin.json",
+            "a:b/x.json",
+        ] {
+            let error = schema(outside).unwrap_err();
+            assert!(error.contains("no `:` or `\\`"), "{outside}: {error}");
         }
         #[cfg(windows)]
         for outside in [
@@ -967,6 +1001,8 @@ mod tests {
             ("a/../x.json", "x.json"),
             ("./graphql/x.json", "graphql/x.json"),
             ("schemas/../schemas/admin.json", "schemas/admin.json"),
+            ("schemas//admin.json", "schemas/admin.json"),
+            ("schemas/admin.json/", "schemas/admin.json"),
         ] {
             assert_eq!(schema(inside), Ok(Some(PathBuf::from(normal))), "{inside}");
         }

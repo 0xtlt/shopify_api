@@ -207,22 +207,40 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
              and sends them to that version. Commit the file: offline builds need it."
         );
     } else if !args.introspection {
-        let absolute = std::path::absolute(&out).unwrap_or_else(|_| out.clone());
-        let named = absolute.strip_prefix(&root).unwrap_or(&absolute);
-        match inside_package(named) {
-            Ok(named) => eprintln!(
+        match schema_key(&root, &out) {
+            Some(named) => eprintln!(
                 "For `graphql!` to use it, name it in {}:\n\n{}",
                 root.join("Cargo.toml").display(),
                 schema_snippet(&version.to_string(), &named)
             ),
-            Err(_) => eprintln!(
-                "`graphql!` cannot use it: it is outside the package of {}, \
+            None => eprintln!(
+                "`graphql!` cannot use it: `schema` in {} names a file inside the package, \
+                 as a relative path with `/` separators and no `:` or `\\`, \
                  and `cargo package` ships only the package's files.",
                 root.join("Cargo.toml").display()
             ),
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The `schema` value that names `out`, a file just written, for the
+/// package in `root`, if any: a path [`inside_package`] accepts.
+fn schema_key(root: &Path, out: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let absolute = std::path::absolute(out).ok()?;
+    let named = absolute.strip_prefix(root).ok()?;
+    let value = named
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => name.to_str(),
+            Component::CurDir => Some("."),
+            Component::ParentDir => Some(".."),
+            Component::Prefix(_) | Component::RootDir => None,
+        })
+        .collect::<Option<Vec<_>>>()?
+        .join("/");
+    inside_package(&value).ok()
 }
 
 /// The introspection result for `version`, from Shopify's public endpoint or
@@ -378,4 +396,62 @@ fn check(args: CheckArgs) -> Result<ExitCode, String> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An empty directory, canonical, removed when the test ends.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("shopify-api-cli-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir.canonicalize().unwrap())
+        }
+
+        fn write(&self, path: &str) -> PathBuf {
+            let file = self.0.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "{}").unwrap();
+            file
+        }
+    }
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_key_names_the_file_written() {
+        let package = Dir::new("key");
+        let out = package.write("schemas/admin.json");
+        assert_eq!(
+            schema_key(&package.0, &out),
+            Some(PathBuf::from("schemas/admin.json"))
+        );
+        package.write("x.json");
+        assert_eq!(
+            schema_key(&package.0, &package.0.join("schemas/../x.json")),
+            Some(PathBuf::from("x.json"))
+        );
+        let outside = Dir::new("key-outside");
+        assert_eq!(schema_key(&package.0, &outside.write("x.json")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_a_portable_key_has_none() {
+        let package = Dir::new("key-portable");
+        for name in ["schemas/a\\b.json", "schemas/D:x.json"] {
+            let out = package.write(name);
+            assert_eq!(schema_key(&package.0, &out), None, "{name}");
+        }
+    }
 }
