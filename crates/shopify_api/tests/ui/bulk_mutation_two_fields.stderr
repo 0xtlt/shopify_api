@@ -1,0 +1,6 @@
+error: A bulk mutation selects one top-level field: Shopify runs one per operation (line 1, column 94)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_mutation_two_fields.rs:2:40
+  |
+2 | ...lk("mutation { a: tagsAdd(id: \"gid://shopify/Product/1\", tags: [\"x\"]) { userErrors { message } } b: tagsAdd(id: \"gid://shopify/Product/2\", tags: [\"x\"]) { userErrors { message } } }"));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

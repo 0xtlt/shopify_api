@@ -1,0 +1,6 @@
+error: `TITEL` is not a value of the enum `ProductSortKeys` (did you mean `TITLE`?): `$sort` takes `CREATED_AT`, `ID`, `INVENTORY_TOTAL`, `PRODUCT_TYPE`, `PUBLISHED_AT`, `RELEVANCE`, `TITLE`, `UPDATED_AT` or `VENDOR`
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_enum_value.rs:4:16
+  |
+4 |         sort = TITEL,
+  |                ^^^^^

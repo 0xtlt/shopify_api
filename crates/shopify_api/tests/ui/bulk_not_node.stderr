@@ -1,0 +1,6 @@
+error: Shopify bulk queries read connections of `Node` objects: the nodes of `deletionEvents`, `DeletionEvent`, do not all implement `Node` (line 1, column 3)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_not_node.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ deletionEvents { edges { node { occurredAt } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

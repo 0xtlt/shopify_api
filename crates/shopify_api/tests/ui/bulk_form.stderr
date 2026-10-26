@@ -1,0 +1,5 @@
+error: `bulk(…)` takes the operation as a string literal or `file("path.graphql")`
+ --> tests/ui/bulk_form.rs:2:23
+  |
+2 |     mod nested = bulk(bulk("{ products { edges { node { id } } } }"));
+  |                       ^^^^

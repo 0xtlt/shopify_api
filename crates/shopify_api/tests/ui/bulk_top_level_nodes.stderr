@@ -1,0 +1,6 @@
+error: `nodes` cannot be the top-level field of a bulk query: select a connection, such as `products` (line 1, column 3)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_top_level_nodes.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ nodes(ids: [\"gid://shopify/Product/1\"]) { id } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

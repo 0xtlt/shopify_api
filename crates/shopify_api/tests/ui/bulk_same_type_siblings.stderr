@@ -1,0 +1,6 @@
+error: `custom` and `other`, connections of each node of `products`, may both return `Metafield`: their lines in the results could not be told apart. Query one of them in another bulk query (line 1, column 99)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_same_type_siblings.rs:2:40
+  |
+2 | ...lk("{ products { edges { node { id custom: metafields(namespace: \"custom\") { edges { node { key } } } other: metafields(namespace: \"other\") { edges { node { key } } } } } } }"));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

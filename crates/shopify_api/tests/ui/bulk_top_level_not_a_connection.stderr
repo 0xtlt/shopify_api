@@ -1,0 +1,6 @@
+error: The top-level field of a bulk query is a connection: `shop` is `Shop!`. Run it as an ordinary query, or select a connection such as `products` (line 1, column 3)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_top_level_not_a_connection.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ shop { name } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^

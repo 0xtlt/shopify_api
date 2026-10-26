@@ -1,0 +1,5 @@
+error: The operation has no variable `$filter`: it declares $q
+ --> tests/ui/bulk_variable_unknown.rs:4:9
+  |
+4 |         filter = "x",
+  |         ^^^^^^
