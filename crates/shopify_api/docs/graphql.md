@@ -466,7 +466,7 @@ GraphQL literal, and the variable definitions are left out.
   `sorted::Variables { sort: None }` sends `products { … }`, or
   `products(sortKey: TITLE)` if `$sort` defaults to `TITLE`.
 - A `null` given as a value is written `null` and replaces the default:
-  `sort = null`, or `sort = option` with `None` in an inline `graphql!`,
+  `sort = null`, or `sort = raw(option)` with `None` in an inline `graphql!`,
   sends `products(sortKey: null)`. So does a `None` in a list, and `null` or
   a `Maybe::Null` in an input object.
 - A variable that may hold a `JSON` value is refused at compile time.
