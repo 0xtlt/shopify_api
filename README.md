@@ -60,7 +60,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 Rust 1.88 or newer, and a Tokio runtime: the default transport and the token
 renewals run on Tokio. The first build downloads the Admin schema of the latest
 stable version into `graphql/admin.schema.json`, next to your `Cargo.toml`:
-commit it.
+commit it. Later builds keep that version until you change it.
 
 ## Operations
 
@@ -219,14 +219,15 @@ the rules of literals, is
 ## API versions
 
 Every operation is checked against a schema, and **sent to the version of that
-schema**. No schema ships with the crate: `graphql!` downloads the one of your
-version into `graphql/admin.schema.json`, and downloads again when the version
-changes. Commit the file, so that builds without network access have it.
+schema**. No schema ships with the crate: the first build downloads the one of
+the latest stable version into `graphql/admin.schema.json`, and later builds
+keep it, whatever Shopify releases since: a build gives the same result
+whatever the date. Commit the file, so that builds without network access
+have it. A library that uses `graphql!` must ship it: as a dependency, a
+crate never downloads its schema.
 
-Out of the box, the version is **the latest stable one**: when Shopify
-releases a new version (each quarter), the next build that recompiles your
-crate moves to it, and a field Shopify removed becomes a compile error. To
-stay on one version, declare it in your `Cargo.toml`:
+To choose the version, pin it in your `Cargo.toml` (`graphql!` downloads its
+schema when the file holds another one):
 
 ```toml
 [package.metadata.shopify_api]

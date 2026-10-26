@@ -72,9 +72,9 @@ for a backoff after a `5xx` or a network failure. To keep 0.10's behaviour:
 
 Without a pinned version, an operation of `graphql!` goes to the version its
 schema was checked against (the `api-version` of your `Cargo.toml`, else the
-latest), and an untyped call to 2026-10. 0.10 sent
-everything to 2026-04 by default: pin it with `.api_version(ApiVersion::V2026_04)`
-to keep that.
+one of the schema file, else the latest on the first build), and an untyped
+call to 2026-10. 0.10 sent everything to 2026-04 by default: pin it with
+`.api_version(ApiVersion::V2026_04)` to keep that.
 
 ## Errors
 
@@ -253,7 +253,7 @@ Topics are accepted as `orders/create` or `ORDERS_CREATE`.
 | `shopify.download_admin_schema()` | The same |
 | `SHOPIFY_DEV_ADMIN_SCHEMA_PROXY` | `schema::PUBLIC_ADMIN_SCHEMA_ENDPOINT` |
 | `ADMIN_SCHEMA_INTROSPECTION_QUERY` | `schema::INTROSPECTION_QUERY` |
-| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it. `shopify-api schema download` refreshes it, `--introspection` for the raw result |
+| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it when the package is built, never as a dependency. `shopify-api schema download` refreshes it, `--introspection` for the raw result |
 | `shopify-api schema download --api-version 2026-07` | No flag: the command reads the version of the nearest `Cargo.toml`. For another version, or outside a package: `schema::download_public_admin_schema(ApiVersion::new("2026-07")?)` |
 
 `graphql!` reads the compact form it downloads, in `graphql/admin.schema.json`.
