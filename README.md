@@ -57,7 +57,8 @@ shopify_api = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Rust 1.88 or newer. The first build downloads the Admin schema of the latest
+Rust 1.88 or newer, and a Tokio runtime: the default transport and the token
+renewals run on Tokio. The first build downloads the Admin schema of the latest
 stable version into `graphql/admin.schema.json`, next to your `Cargo.toml`:
 commit it.
 
@@ -375,10 +376,18 @@ Feature `webhooks`:
 ```rust,ignore
 use shopify_api::webhooks::{Webhook, WebhookSubscriptionSpec};
 
-// In your HTTP handler, on the raw body.
-let webhook = Webhook::verify(headers, body, client_secret)?;
-if webhook.topic() == "orders/create" {
-    let order: MyOrder = webhook.payload()?;
+// In your HTTP handler, on the raw body. `headers`: an `&http::HeaderMap`
+// (axum, actix, warp), or any (name, value) pairs.
+let webhook = Webhook::verify(&headers, body, client_secret)?;
+match webhook.topic() {
+    "orders/create" => {
+        let order: MyOrder = webhook.payload()?;
+    }
+    "app/uninstalled" | "shop/redact" | "customers/redact" => {
+        // The signature covers the body, not the headers: check the shop.
+        webhook.verify_payload_shop()?;
+    }
+    _ => {}
 }
 
 // Make the shop's subscriptions exactly these.
@@ -395,7 +404,8 @@ Feature `oauth`:
 ```rust,ignore
 use shopify_api::oauth::{RequestedToken, ShopifyApp};
 
-let app = ShopifyApp::new(client_id, client_secret);
+// The clients it builds save the tokens they renew.
+let app = ShopifyApp::new(client_id, client_secret).with_token_store(MyDatabase);
 
 // Embedded app: the session token of each request, exchanged for a token.
 let session = app.verify_session_token(bearer)?;
@@ -433,9 +443,9 @@ assert_eq!(mock.graphql_requests()[0].operation_name.as_deref(), Some("Shop"));
 | `native-tls` | The same over the platform's TLS. |
 | `webhooks` | Webhook verification, parsing and subscriptions. |
 | `oauth` | Install links, callbacks, token exchange, session tokens, app proxies. |
-| `testing` | `MockTransport`. |
+| `testing` | `MockTransport`, and the signing helpers of tests. |
 | `cli` | The `shopify-api` command. |
-| `full` | All of the above. |
+| `full` | Every feature but `native-tls`: `webhooks`, `oauth`, `testing`, `cli`, over rustls. |
 
 Without `rustls` or `native-tls`, give the client your own `Transport`.
 
