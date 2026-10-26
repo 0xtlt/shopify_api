@@ -309,6 +309,42 @@ let products = shopify
 
 ## Bulk operations
 
+`graphql!(bulk(…))` checks a bulk query against the schema and Shopify's
+bulk rules (one top-level connection, five connections at most, two levels
+deep, `edges { node }`, an `id` on each parent…), and reads its results as
+generated types: each nested connection is a `Vec` of its nodes, put back
+under its parent as the file downloads, one product in memory at a time.
+
+```rust,ignore
+use shopify_api::bulk::BulkWaitOptions;
+
+graphql! {
+    mod catalog = bulk("query($filter: String) {
+        products(query: $filter) { edges { node {
+            id title
+            variants { edges { node { sku } } }
+        } } }
+    }");
+}
+
+let mut products = shopify
+    .bulk_query(catalog::Variables { filter: Some("status:active".into()) }, BulkWaitOptions::default())
+    .await?;
+while let Some(product) = products.next_item().await {
+    let product = product?;
+    println!("{}: {} variants", product.title, product.variants.len());
+}
+```
+
+Shopify takes no variables for a bulk query: they are written into its text
+as GraphQL literals. A bulk mutation, `bulk("mutation …")`, runs over an
+iterator of its `Variables` with `bulk_mutation`, which checks every line
+before uploading them and reads a typed result per line. See the
+[documentation of `graphql!`](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html#bulk-operations)
+for the rules, and what is not checked.
+
+The untyped methods run any text:
+
 ```rust,ignore
 use shopify_api::bulk::BulkWaitOptions;
 

@@ -351,6 +351,161 @@ graphql! {
 }
 ```
 
+# Bulk operations
+
+`bulk("…")`, or `bulk(file("…"))`, declares a bulk operation: a query Shopify
+runs over a whole catalog in the background, or a mutation it runs once per
+line of variables. It is checked like any operation, then against Shopify's
+rules for bulk operations, and its results are read as generated types.
+
+```rust,no_run
+use shopify_api::bulk::BulkWaitOptions;
+use shopify_api::{Shopify, graphql};
+
+graphql! {
+    pub mod catalog = bulk("query($filter: String) {
+        products(query: $filter) { edges { node {
+            id title
+            variants { edges { node { sku } } }
+        } } }
+    }");
+}
+
+async fn export(shopify: &Shopify) -> shopify_api::Result<()> {
+    let mut products = shopify
+        .bulk_query(
+            catalog::Variables { filter: Some("status:active".into()) },
+            BulkWaitOptions::default(),
+        )
+        .await?;
+    while let Some(product) = products.next_item().await {
+        let product: catalog::Item = product?;
+        println!("{}: {} variants", product.title, product.variants.len());
+    }
+    Ok(())
+}
+```
+
+## The rules of a bulk query
+
+These follow Shopify's guide for API 2026-10
+([bulk queries](https://shopify.dev/docs/api/usage/bulk-operations/queries)).
+Where the guide is silent, what it does not show is refused: a query
+`graphql!` accepts is one the guide describes.
+
+- One top-level field, which is a connection, not `node` or `nodes`.
+- Five connections at most, the top-level one included, nested two levels
+  deep at most below it.
+- Each connection selected as `edges { node { … } }` and nothing else: no
+  `nodes`, `cursor` or `pageInfo`, no alias or directive on them, and no
+  `first`, `last`, `after` or `before`, which Shopify ignores in a bulk query.
+- The nodes of a connection implement `Node`.
+- A nested connection is written right in the `node { … }` of its parent
+  connection: not in a fragment, nor under another field.
+- A node with nested connections selects `id`, without an alias or a
+  directive. Shopify refuses the query without it, and the lines of the
+  children are placed under their parent by that `id`: `graphql!` asks you to
+  add it rather than adding it itself.
+- Two connections of one node that may return the same type, such as two
+  aliased `metafields(…)`, are refused: their lines could not be told apart.
+- No alias starting with `__`.
+
+## The items of a bulk query
+
+The result type is `Item`, an object of the top-level connection, with the
+fields it selects. A nested connection is a `Vec` of its nodes,
+`product.variants: Vec<ItemVariants>`, not `{ edges: [{ node }] }`: Shopify
+writes each node on a line of its own, and the reader puts it back under
+its parent. Other nested objects stay as in any operation. A connection of
+an interface or a union gives one struct, the fields of each fragment
+optional, as in any operation.
+
+[`Shopify::bulk_query`] starts the query with `groupObjects`, waits for it,
+and returns [`BulkItems`](crate::bulk::BulkItems): `next_item().await`, one
+item at a time, `collect().await` into a `Vec`, or a `Stream`. One item is
+held at a time, with its nested objects: memory follows the largest item,
+not the file. A line that does not read as its type, or a nested line that
+has no place, ends the stream with an error. [`Shopify::start_bulk_query`]
+and [`Shopify::download_bulk_items`] split the steps, for an operation you
+wait for yourself.
+
+The text sent is not the text written. Where a node has several nested
+connections, their nodes gain `__typename`, which tells their lines apart;
+the types do not show it. [`BulkQuery::text`](crate::bulk::BulkQuery::text)
+gives the text sent.
+
+## Variables of a bulk query
+
+Shopify takes no variables for a bulk query. Declare them all the same and
+give them as for any operation, literals and [`input!`](crate::input!)
+included: when the query runs, each value is written into its text as a
+GraphQL literal, and the variable definitions are left out.
+
+- A string as JSON escapes it, which GraphQL reads alike; a `$` in a string
+  stays a `$`. Numbers, booleans and `null` as they are.
+- An enum value bare (`sortKey: TITLE`), in an input object and in a list
+  too. One that is not a GraphQL name, which `raw(…)` or a `String` field of
+  `Variables` may hold, fails with [`Error::InvalidValue`](crate::Error::InvalidValue)
+  (`NotAGraphqlName`) before anything is sent, as do the values any
+  operation refuses.
+- An input object as `{field: value}`, a list as `[a, b]`.
+- A variable without a value takes its default value, or is left out with
+  its argument or field, as GraphQL leaves out an argument whose variable
+  has no value; in a list, it is `null`.
+- A variable that may hold a `JSON` value is refused at compile time.
+
+## Bulk mutations
+
+`bulk("mutation …")` is one mutation field, not `bulkOperationRunQuery` or
+`bulkOperationRunMutation`, with one connection at most in what it selects
+(Shopify's [rules](https://shopify.dev/docs/api/usage/bulk-operations/imports)).
+Its `Variables`, or an inline `graphql!(bulk("mutation …"), …)`, are one line
+of variables: [`Shopify::bulk_mutation`] takes an iterator of them.
+
+```rust,no_run
+use shopify_api::bulk::BulkWaitOptions;
+use shopify_api::{Shopify, graphql};
+
+graphql! {
+    pub mod tag = bulk("mutation($id: ID!, $tags: [String!]!) {
+        tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+    }");
+}
+
+async fn tag_all(shopify: &Shopify, ids: &[String]) -> shopify_api::Result<()> {
+    let lines = ids.iter().map(|id| tag::Variables { id: id.clone(), tags: vec!["sale".into()] });
+    let mut results = shopify.bulk_mutation(lines, BulkWaitOptions::default()).await?;
+    while let Some(result) = results.next_row().await {
+        let result = result?;
+        // `index`: the line of variables it ran with, from 0.
+        if let Some(payload) = result.data.and_then(|data| data.tags_add) {
+            for error in payload.user_errors {
+                println!("line {:?}: {}", result.index, error.message);
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Every line is checked and written before anything is sent: one value refused
+fails the call. Shopify runs the lines in no set order; each result is a
+[`BulkMutationResult`](crate::bulk::BulkMutationResult), the `data` of the
+mutation, its `errors`, and the `index` of its line.
+
+## What is not checked
+
+- What Shopify refuses at run time and its guide does not list: a
+  connection its bulk queries cannot read, a field that times out, missing
+  access scopes. Those come back as the user errors of
+  `bulkOperationRunQuery`, or as a failed operation.
+- Shopify may accept more than `graphql!` does (`nodes`, `first`, a
+  connection in a fragment): the untyped methods of [`bulk`](crate::bulk)
+  send any text.
+- The order of the lines: the reader relies on the order `groupObjects`
+  writes, each child after its parent and before the next top-level object.
+  A file of another order is an error, not a misplaced child.
+
 # Schema and API version
 
 No schema ships with `shopify_api`. Each crate that uses `graphql!` keeps the
@@ -449,6 +604,7 @@ scripts an answer that leaves out a non-null field.
 # Limits
 
 - Subscriptions are refused, and one inline `graphql!` takes one operation.
+- A bulk operation follows the rules above: see [what is not checked](#what-is-not-checked).
 - An error in the operation points at the whole operation; the line and
   column in its message locate the mistake inside it. An error in a value
   points at the value.

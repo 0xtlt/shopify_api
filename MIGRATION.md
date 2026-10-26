@@ -170,6 +170,11 @@ shopify.execute(graphql!(
 | `ShopifyUserError` | `UserError` |
 | `parse_jsonl(&str)` | `bulk::parse_jsonl(&[u8])`: `parse_jsonl(text.as_bytes())` |
 
+New in 1.0: a query or a mutation declared with `graphql!(bulk("…"))` is
+checked when the crate compiles, and `bulk_query` and `bulk_mutation` read
+its results as generated types, in place of a hand-written struct and
+`bulk_query_rows` or `bulk_query_grouped`.
+
 `object_count`, `root_object_count` and `file_size` are numbers, and
 `created_at` and `completed_at` are `chrono::DateTime<Utc>`. A failed operation
 is an `Error::Bulk` whose `operation` holds it, with its `error_code` and

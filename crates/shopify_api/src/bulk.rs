@@ -1,19 +1,47 @@
 //! Bulk operations: a query over a whole catalog, or a mutation over
 //! thousands of inputs, run by Shopify in the background, outside the rate limit.
 //!
+//! Declare one with [`graphql!`](crate::graphql!)`(bulk(…))`: it is checked
+//! against the schema and Shopify's bulk rules when the crate compiles, and
+//! its results are read as generated types, each nested connection a `Vec`
+//! of its nodes (see [the bulk operations of `graphql!`](crate::graphql!#bulk-operations)).
+//!
 //! ```no_run
-//! use serde::Deserialize;
 //! use shopify_api::bulk::BulkWaitOptions;
 //!
-//! #[derive(Deserialize)]
-//! struct Product {
-//!     id: String,
-//!     title: String,
+//! shopify_api::graphql! {
+//!     mod all_products = bulk("{
+//!         products { edges { node { id title variants { edges { node { sku } } } } } }
+//!     }");
 //! }
 //!
 //! # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
-//! // Start, wait for the end, download and read every line.
-//! let products: Vec<Product> = shopify
+//! // Start, wait for the end, download, and read each product with its variants.
+//! let products: Vec<all_products::Item> = shopify
+//!     .bulk_query(all_products::operation(), BulkWaitOptions::default())
+//!     .await?
+//!     .collect()
+//!     .await?;
+//! for product in &products {
+//!     println!("{} has {} variants", product.title, product.variants.len());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [`Shopify::bulk_query`] reads the file as it downloads, one top-level
+//! object at a time ([`BulkItems`]); [`Shopify::bulk_mutation`] runs a
+//! mutation over an iterator of its `Variables` and reads the result of each
+//! run ([`BulkMutationResult`]).
+//!
+//! The untyped methods run any text, checked by nothing, and read each line
+//! as the type you give, a `serde_json::Value` or a struct of yours:
+//!
+//! ```no_run
+//! use shopify_api::bulk::BulkWaitOptions;
+//!
+//! # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+//! let rows: Vec<serde_json::Value> = shopify
 //!     .bulk_query_rows("{ products { edges { node { id title } } } }", BulkWaitOptions::default())
 //!     .await?;
 //! # Ok(())
@@ -25,24 +53,9 @@
 //! downloads ([`BulkRows`]), and [`Shopify::bulk_query_grouped`] each
 //! top-level object with its nested objects ([`BulkGroups`]). Neither holds
 //! the file: [`BulkRows`] holds the line being read and the rest of the
-//! chunk it ends in, in a buffer sized for the longest recent line; [`BulkGroups`] holds that, and the group being read,
+//! chunk it ends in, in a buffer sized for the longest recent line; [`BulkGroups`] and [`BulkItems`] hold that, and the group being read,
 //! its top-level object with every child read so far and their IDs. A
 //! product with 2,000 variants is held with its 2,000 variants.
-//!
-//! The query of a bulk operation is a plain string. To have it checked when
-//! the crate compiles, declare it with [`graphql!`](crate::graphql!) and pass
-//! its `QUERY`:
-//!
-//! ```no_run
-//! shopify_api::graphql! {
-//!     mod all_products = "{ products { edges { node { id title } } } }";
-//! }
-//!
-//! # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
-//! let operation = shopify.run_bulk_query(all_products::QUERY).await?;
-//! # Ok(())
-//! # }
-//! ```
 
 use std::time::Duration;
 
