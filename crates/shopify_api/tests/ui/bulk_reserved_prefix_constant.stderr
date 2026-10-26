@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+ --> tests/ui/bulk_reserved_prefix_constant.rs:6:13
+  |
+3 | const __shopify_api_parent: usize = 0;
+  | --------------------------------- constant defined here
+...
+6 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id variants { edges { node { sku } } } } } } }"));
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |             |
+  |             expected `Option<(usize, usize)>`, found `usize`
+  |             expected due to this
+  |             `__shopify_api_parent` is interpreted as a constant, not a new binding
+  |
+  = note: expected enum `Option<(usize, usize)>`
+             found type `usize`
+  = note: this error originates in the macro `shopify_api::graphql` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: introduce a new binding instead
+  |
+6 -     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id variants { edges { node { sku } } } } } } }"));
+6 +     let _ = other___shopify_api_parent;
+  |
+
+error[E0308]: mismatched types
+ --> tests/ui/bulk_reserved_prefix_constant.rs:6:13
+  |
+6 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id variants { edges { node { sku } } } } } } }"));
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `Option<_>`
+  |
+  = note: expected type `usize`
+             found enum `Option<_>`
+  = note: this error originates in the macro `shopify_api::graphql` (in Nightly builds, run with -Z macro-backtrace for more info)

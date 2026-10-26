@@ -1,0 +1,6 @@
+error: `_shopifyApiTypename` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 29)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_typename_key.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { _shopifyApiTypename: title } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

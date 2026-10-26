@@ -633,6 +633,10 @@ scripts an answer that leaves out a non-null field.
 - Enum values are checked where they are written; the `String` fields of
   `Variables` and `raw(…)` are not.
 - The generated code refers to `::shopify_api`: the dependency cannot be renamed.
+- Names that start with `__shopify_api_` or `__SHOPIFY_API_` are reserved
+  to the generated code. Its bindings are hygienic, but a constant of such a
+  name in scope makes a pattern of the generated code refer to it: the code
+  then fails to compile (E0308 or E0530). It never changes meaning.
 - Under `#![no_implicit_prelude]`, a literal or an `input!` that holds a Rust
   expression does not compile: its messages are `#[diagnostic::on_unimplemented]`,
   whose `diagnostic` namespace that attribute hides. Literals of constants,

@@ -1,0 +1,6 @@
+error: This string would not reach Shopify as written: the GraphQL parser this crate uses reads it otherwise, and a bulk query is sent as the text it read. Write `\u0008` rather than `\b` (line 1, column 19)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_string_escape.rs:3:40
+  |
+3 |     let _ = shopify_api::graphql!(bulk(r#"{ products(query: "a\bb") { edges { node { id } } } }"#));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

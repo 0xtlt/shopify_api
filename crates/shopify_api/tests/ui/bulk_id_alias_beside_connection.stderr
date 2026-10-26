@@ -1,0 +1,6 @@
+error: `id: handle` is refused on the nodes of `products`, which have the nested connection `variants`: each nested line is placed under its parent by the `id` of that parent. Give `handle` another alias (line 1, column 29)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_id_alias_beside_connection.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id: handle variants { edges { node { sku } } } } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
