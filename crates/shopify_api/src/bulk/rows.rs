@@ -251,8 +251,9 @@ impl<T: DeserializeOwned> BulkRows<T> {
         std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
 
-    /// Every row, up to the first error.
-    pub(crate) async fn collect(mut self) -> Result<Vec<T>> {
+    /// Every row, in a `Vec`, up to the first error: a line that does not
+    /// decode ends it here, where [`next_row`](Self::next_row) would go on.
+    pub async fn collect(mut self) -> Result<Vec<T>> {
         let mut rows = Vec::new();
         while let Some(row) = self.next_row().await {
             rows.push(row?);

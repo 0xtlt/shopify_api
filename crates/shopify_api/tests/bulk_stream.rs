@@ -149,6 +149,16 @@ async fn a_transport_that_only_sends_streams_through_the_default() {
 
     let collected: Vec<Product> = shopify.download_bulk_results(RESULTS_URL).await.unwrap();
     assert_eq!(collected, parse_jsonl::<Product>(&body).unwrap());
+
+    // `BulkRows::collect`, as `BulkItems::collect`.
+    let rows: Vec<Product> = shopify
+        .download_bulk_results_stream(RESULTS_URL)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(rows, collected);
 }
 
 struct FailsAfter(Vec<Vec<u8>>);
