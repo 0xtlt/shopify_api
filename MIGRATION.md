@@ -233,7 +233,9 @@ first byte, with no whitespace or byte order mark before it: the client
 secret also signs texts an installer of the app can read and make look like
 XML, or like JSON after some whitespace. `sync_webhook_subscriptions` updates an XML subscription of a
 desired topic and address to JSON;
-`webhooks::verify_hmac(secret, body, header)` checks the signature alone.
+`webhooks::verify_hmac(secret, body, header)` checks the signature without
+reading the headers, and refuses a body whose first byte is not `{`, the same
+rule as `Webhook::verify`.
 
 | 0.10 | 1.0 |
 | --- | --- |
