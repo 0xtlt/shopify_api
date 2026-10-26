@@ -193,6 +193,19 @@ fn strings_the_parser_misreads_are_refused() {
         refusal("{ things(q: \"\"\"\n\u{a0}a\n\u{a0}b\"\"\") { edges { node { id } } } }"),
         format!("{block} (line 1, column 13)")
     );
+    // Lines indented with U+00A0 (two bytes) and U+2003 (three bytes) make
+    // `graphql-parser` panic: refused before it reads them, bulk or not.
+    let indent = "This block string indents its lines with different Unicode whitespace, which the GraphQL parser this crate uses cannot read. Indent it with spaces or tabs, or write it as a quoted string";
+    for source in [
+        "{ things(q: \"\"\"\n\u{a0}a\n\u{2003}b\"\"\") { edges { node { id } } } }",
+        "{ thing(id: \"\"\"\n\u{2003}a\n\u{a0}b\"\"\") { id } }",
+    ] {
+        assert_eq!(
+            analyze(schema(), source).unwrap_err().to_string(),
+            format!("{indent} (line 1, column 13)"),
+            "{source}"
+        );
+    }
     // In a comment, a `\b` is nothing.
     bulk("# \"\\b\"\n{ things(q: \"\\u0008\") { edges { node { id } } } }");
     // `\u{…}` and surrogate pairs do not parse.

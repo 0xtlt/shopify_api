@@ -176,7 +176,7 @@ fn implements_node(schema: &Schema, name: &str) -> bool {
 
 fn parse(source: &str) -> Result<Document<'_>, Error> {
     // `analyze` read it first: a failure here is not expected.
-    graphql_parser::parse_query(source).or_else(|_| error("Invalid GraphQL"))
+    crate::analyze::parse(source)
 }
 
 /// The operation and the fragments of a document `analyze` accepted.

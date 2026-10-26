@@ -615,6 +615,9 @@ scripts an answer that leaves out a non-null field.
 # Limits
 
 - Subscriptions are refused, and one inline `graphql!` takes one operation.
+- A block string whose lines are indented with different Unicode whitespace,
+  such as U+00A0 on one and U+2003 on another, is refused: the GraphQL parser
+  of `graphql!` cannot read it. Indent with spaces or tabs.
 - A bulk operation follows the rules above: see [what is not checked](#what-is-not-checked).
 - An error in the operation points at the whole operation; the line and
   column in its message locate the mistake inside it. An error in a value

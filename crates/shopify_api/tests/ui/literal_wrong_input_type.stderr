@@ -9,8 +9,8 @@ error[E0277]: an item of `$metafields` expects a `MetafieldsSetInput`, built wit
 6 | |     );
   | |_____- required by a bound introduced by this call
   |
-  = help: the trait `__ShopifyApiExpect2_c1d687d2` is not implemented for `InputObject<2493993284262097346>`
-help: the following other types implement trait `__ShopifyApiExpect2_c1d687d2`
+  = help: the trait `__ShopifyApiExpect2_c1d68278` is not implemented for `InputObject<2493993284262097346>`
+help: the following other types implement trait `__ShopifyApiExpect2_c1d68278`
  --> tests/ui/literal_wrong_input_type.rs:3:13
   |
 3 |       let _ = shopify_api::graphql!(
@@ -22,7 +22,7 @@ help: the following other types implement trait `__ShopifyApiExpect2_c1d687d2`
   | |     |
   | |_____`&InputObject<960560859991546817>`
   |       `InputObject<960560859991546817>`
-note: required for `Vec<InputObject<2493993284262097346>>` to implement `__ShopifyApiExpect1_c1d687d2`
+note: required for `Vec<InputObject<2493993284262097346>>` to implement `__ShopifyApiExpect1_c1d68278`
  --> tests/ui/literal_wrong_input_type.rs:3:13
   |
 3 |       let _ = shopify_api::graphql!(

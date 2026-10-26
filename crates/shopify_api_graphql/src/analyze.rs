@@ -188,21 +188,29 @@ pub struct Operation {
     pub deprecations: Vec<Deprecation>,
 }
 
+/// Parses `source`, after refusing the block strings the parser panics on.
+pub(crate) fn parse(source: &str) -> Result<Document<'_>> {
+    if let Some(position) = crate::source::unreadable_block_strings(source) {
+        return error_at(
+            position,
+            "This block string indents its lines with different Unicode whitespace, which the GraphQL parser this crate uses cannot read. Indent it with spaces or tabs, or write it as a quoted string",
+        );
+    }
+    graphql_parser::parse_query(source).or_else(|parse_error| {
+        let text = parse_error.to_string();
+        let detail = text.strip_prefix("query parse error: ").unwrap_or(&text);
+        error(format!(
+            "Invalid GraphQL: {}",
+            detail.trim().replace('\n', " ")
+        ))
+    })
+}
+
 /// Parses `source`, checks it against `schema` and returns its shape.
 ///
 /// `source` contains exactly one query or mutation, and the fragments it uses.
 pub fn analyze(schema: &Schema, source: &str) -> Result<Operation> {
-    let document: Document = match graphql_parser::parse_query(source) {
-        Ok(document) => document,
-        Err(parse_error) => {
-            let text = parse_error.to_string();
-            let detail = text.strip_prefix("query parse error: ").unwrap_or(&text);
-            return error(format!(
-                "Invalid GraphQL: {}",
-                detail.trim().replace('\n', " ")
-            ));
-        }
-    };
+    let document = parse(source)?;
 
     // Checked on the text: the parser keeps only the last of the two.
     if let Some((field, position)) = input_objects::duplicate_field(source) {

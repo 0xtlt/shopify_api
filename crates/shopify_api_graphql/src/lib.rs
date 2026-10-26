@@ -33,6 +33,7 @@ pub mod project;
 mod restrict;
 #[doc(hidden)]
 pub mod schema;
+mod source;
 
 #[doc(hidden)]
 pub use analyze::{
