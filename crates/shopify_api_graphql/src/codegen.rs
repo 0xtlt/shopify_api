@@ -301,7 +301,7 @@ pub fn variables_types(
     constructor: &TokenStream,
 ) -> TokenStream {
     let data = Ident::new(DATA_TYPE, Span::call_site());
-    let target = quote!(#krate::Operation<#data>);
+    let target = quote!(#krate::__private::Operation<#data>);
     variables_types_for(
         schema,
         operation,
@@ -333,7 +333,7 @@ pub fn variables_types_for(
         quote! {
             #[doc = #doc]
             #[allow(dead_code, reason = "the caller may not name every input object")]
-            pub type #ident = #krate::InputObject<#id>;
+            pub type #ident = #krate::__private::InputObject<#id>;
         }
     });
 

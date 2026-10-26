@@ -80,8 +80,8 @@ pub use typed::{BulkItem, BulkItems, BulkMutation, BulkMutationResult, BulkQuery
 #[doc(hidden)]
 pub mod __private {
     pub use super::typed::{
-        BulkArgument, BulkConnection, BulkItem, BulkPart, BulkTemplate, BulkType, BulkValue,
-        BulkVariable, push, unplaced,
+        BulkArgument, BulkConnection, BulkItem, BulkMutation, BulkPart, BulkQuery, BulkTemplate,
+        BulkType, BulkValue, BulkVariable, push, unplaced,
     };
 }
 

@@ -463,8 +463,8 @@ fn deprecation_warnings(schema: &Schema, operation: &Operation, text: &Text) -> 
 
 fn kind(operation: &Operation, krate: &TokenStream) -> TokenStream {
     match operation.kind {
-        OperationKind::Query => quote!(#krate::OperationKind::Query),
-        OperationKind::Mutation => quote!(#krate::OperationKind::Mutation),
+        OperationKind::Query => quote!(#krate::__private::OperationKind::Query),
+        OperationKind::Mutation => quote!(#krate::__private::OperationKind::Mutation),
     }
 }
 
@@ -496,9 +496,9 @@ impl Flavor {
         let data = format_ident!("{}", DATA_TYPE);
         let item = format_ident!("{}", ITEM_TYPE);
         match self {
-            Self::Plain => quote!(#krate::Operation<#data>),
-            Self::BulkQuery(_) => quote!(#krate::bulk::BulkQuery<#item>),
-            Self::BulkMutation => quote!(#krate::bulk::BulkMutation<#data>),
+            Self::Plain => quote!(#krate::__private::Operation<#data>),
+            Self::BulkQuery(_) => quote!(#krate::__private::bulk::BulkQuery<#item>),
+            Self::BulkMutation => quote!(#krate::__private::bulk::BulkMutation<#data>),
         }
     }
 
@@ -537,14 +537,14 @@ impl Flavor {
         match self {
             Self::Plain => {
                 let kind = kind(operation, krate);
-                quote!(#krate::Operation::<#data>::__checked(#query, #kind, #name, #api_version))
+                quote!(#krate::__private::Operation::<#data>::__checked(#query, #kind, #name, #api_version))
             }
             Self::BulkQuery(_) => {
                 let template = template_ident();
-                quote!(#krate::bulk::BulkQuery::<#item>::__checked(&#template, #query, #name, #api_version))
+                quote!(#krate::__private::bulk::BulkQuery::<#item>::__checked(&#template, #query, #name, #api_version))
             }
             Self::BulkMutation => {
-                quote!(#krate::bulk::BulkMutation::<#data>::__checked(#query, #name, #api_version))
+                quote!(#krate::__private::bulk::BulkMutation::<#data>::__checked(#query, #name, #api_version))
             }
         }
     }
@@ -558,13 +558,21 @@ impl Flavor {
     }
 }
 
+/// The path of the runtime crate in the generated code, its only one: every
+/// item is reached through `#krate::__private`, so that a crate re-exporting
+/// `shopify_api` (`extern crate it as shopify_api`, or a future `crate = …`)
+/// needs nothing but that module.
+fn krate() -> TokenStream {
+    quote!(::shopify_api)
+}
+
 /// `graphql!("…", name = value)`: the operation as a value.
 fn expand_expression(
     schema: &LoadedSchema,
     source: &Source,
     variables: &[(Ident, Value)],
 ) -> syn::Result<TokenStream> {
-    let krate = quote!(::shopify_api);
+    let krate = krate();
     let text = Text::read(source)?;
     let (operation, flavor) = Flavor::of(schema, source, &text)?;
 
@@ -668,7 +676,7 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
         name,
         source,
     } = module;
-    let krate = quote!(::shopify_api);
+    let krate = krate();
     let text = Text::read(source)?;
     let (operation, flavor) = Flavor::of(schema, source, &text)?;
     let target = flavor.target(&krate);
@@ -720,7 +728,7 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
             /// The name of the operation, when it has one.
             pub const NAME: ::core::option::Option<&str> = #operation_name;
             /// A query or a mutation.
-            pub const KIND: #krate::OperationKind = #kind;
+            pub const KIND: #krate::__private::OperationKind = #kind;
             /// The Admin API version the operation was checked against.
             pub const API_VERSION: &str = #api_version;
 
@@ -753,7 +761,7 @@ fn expand_input(
     let Value::Object(object) = &input.object else {
         unreachable!("`input!` reads an object");
     };
-    let mut literals = Literals::new(schema.schema(), quote!(::shopify_api));
+    let mut literals = Literals::new(schema.schema(), krate());
     let value = literals
         .input_object(&input.name.to_string(), input.name.span(), object)
         .map_err(|error| schema.literal_error(error))?;

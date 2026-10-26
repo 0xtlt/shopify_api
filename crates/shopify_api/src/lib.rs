@@ -109,6 +109,7 @@ pub use shopify_api_macros::input;
 pub mod __private {
     pub use crate::bulk::__private as bulk;
     pub use crate::graphql::literal;
+    pub use crate::{InputObject, Maybe, Operation, OperationKind, Result};
     pub use serde;
     pub use serde_json;
 }

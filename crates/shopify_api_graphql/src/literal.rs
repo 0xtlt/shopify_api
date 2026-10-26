@@ -293,7 +293,7 @@ impl<'a> Literals<'a> {
         let krate = &self.krate;
         let id = input_object_id(name);
         Ok(quote_spanned! {span=>
-            #krate::InputObject::<#id>::__new(#name, #json)
+            #krate::__private::InputObject::<#id>::__new(#name, #json)
         })
     }
 
@@ -541,7 +541,11 @@ impl<'a> Literals<'a> {
                 };
                 let arg =
                     quote_spanned!(value.span=> #krate::__private::literal::#convert(#tokens));
-                return Ok(build.argument(None, quote!(#krate::Maybe<::std::string::String>), arg));
+                return Ok(build.argument(
+                    None,
+                    quote!(#krate::__private::Maybe<::std::string::String>),
+                    arg,
+                ));
             }
             Value::Rust(expr) => expr.clone(),
             Value::Ident(ident) => ident_expr(ident),
@@ -601,7 +605,7 @@ impl<'a> Literals<'a> {
             #[diagnostic::on_unimplemented(message = #message, label = #label)]
             trait #bound: literal::OptionalValue<#kind> {}
             impl<V: #value_bound> #bound for ::core::option::Option<V> {}
-            impl<V: #maybe_bound> #bound for #krate::Maybe<V> {}
+            impl<V: #maybe_bound> #bound for #krate::__private::Maybe<V> {}
         });
         let generic = format_ident!("V{n}");
         let value = build.argument(
@@ -743,8 +747,8 @@ impl<'a> Literals<'a> {
                     Some(TypeDef::Input { .. }) => {
                         let id = input_object_id(name);
                         impls.push(quote! {
-                            impl #bound for #krate::InputObject<#id> {}
-                            impl<'a> #bound for &'a #krate::InputObject<#id> {}
+                            impl #bound for #krate::__private::InputObject<#id> {}
+                            impl<'a> #bound for &'a #krate::__private::InputObject<#id> {}
                         });
                     }
                     // One impl for the types of the scalar: the refusal is this

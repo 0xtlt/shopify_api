@@ -1123,7 +1123,7 @@ pub fn query_items(
                 #slot: usize,
                 #line: &[u8],
                 #number: usize,
-            ) -> #krate::Result<usize> {
+            ) -> #krate::__private::Result<usize> {
                 match (#parent, #slot) {
                     #(#arms)*
                     _ => ::core::result::Result::Err(#private::unplaced()),
