@@ -341,37 +341,52 @@ graphql! {
 
 # Schema and API version
 
-No schema ships with the crate. On the first build, `graphql!` downloads the
-schema of the crate's version from Shopify's public endpoint into
-`graphql/admin.schema.json`, and checks every operation of the crate against
-it. Later builds read the file, and download again when the version changes.
-Commit the file: builds without network access (CI sandboxes, docs.rs) need
-it, and so does a published crate.
+No schema ships with `shopify_api`. Each crate that uses `graphql!` keeps the
+schema of its Admin API version in `graphql/admin.schema.json`, next to its
+`Cargo.toml`, and every operation of the crate is checked against it. Commit
+the file: builds without network access (CI sandboxes, docs.rs) need it, and
+so does a published crate.
 
-The version is the one your `Cargo.toml` declares:
+The version is the one your `Cargo.toml` pins:
 
 ```toml
 [package.metadata.shopify_api]
 api-version = "2026-07"
 ```
 
-Without it, it is the latest stable version: Shopify releases one on the first
-day of each quarter (`2026-10` on October 1st), and the next build that
-recompiles the crate moves to it. A field the new version removed is then a
-compile error. When the new version cannot be downloaded (no network, or
-Shopify has not published it yet that day), the build keeps the file it has,
-else takes the version before.
+Without a pin, the version is the one of the schema file: it does not change
+when Shopify releases a new one, and a build gives the same result whatever
+the date. With no file either, the first build takes the latest stable
+version (the one before, on the first day of a quarter when Shopify has not
+published it yet). `shopify-api schema download` moves an unpinned crate to
+the latest version; pinning one is clearer.
+
+When it builds a crate cargo was asked to build (a package of the workspace
+you build, test or run), `graphql!` downloads the schema from Shopify's
+public endpoint when the file is missing, when it holds another version than
+the pinned one, or when it is in a format an older `shopify_api` wrote. It
+tries once per build: without network access, every operation fails at once
+with the reason, and `graphql!` never checks against another version than the
+one the operations go to.
+
+A crate built as a dependency (from crates.io, git, or a path dependency
+cargo was not asked to build) never downloads nor writes its schema: it
+uses the file it ships. When the file is missing, or does not hold the
+version its `Cargo.toml` pins, or is in an older format, the build fails and
+names the directory where to run `shopify-api schema download`.
 
 The `shopify-api` command (`cargo install shopify_api --features cli`)
-downloads the file again on demand: `shopify-api schema download`, or
+downloads the file on demand: `shopify-api schema download`, or
 `shopify-api schema download --shop my-shop` for the schema a shop's token
 sees.
 
-| Source, in order | |
-| --- | --- |
-| `SHOPIFY_GRAPHQL_SCHEMA` | Path of a schema file, relative to `Cargo.toml` or absolute. It applies to the packages cargo builds, not to their dependencies, which keep their own schema. |
-| `api-version` in `[package.metadata.shopify_api]` | Kept in `graphql/admin.schema.json`, downloaded when the file is missing or holds another version. |
-| The latest stable version | Kept there too, the same way. |
+| The schema of a crate | Package cargo was asked to build | Dependency |
+| --- | --- | --- |
+| `SHOPIFY_GRAPHQL_SCHEMA` is set | That file, relative to `Cargo.toml` or absolute, as it is. | Ignored. |
+| File present, no pin | The file, never downloaded again. | The file. |
+| File present, of the pinned version | The file. | The file. |
+| File present, of another version or an older format | Downloaded again. | Compile error. |
+| No file | Downloaded: the pinned version, else the latest. | Compile error. |
 
 An operation goes to the version of the schema it was checked against: a
 crate whose schema is 2026-07 calls the 2026-07 endpoint, with nothing to

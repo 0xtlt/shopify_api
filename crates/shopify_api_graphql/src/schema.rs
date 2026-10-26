@@ -54,7 +54,7 @@ fragment TypeRef on __Type {
 ";
 
 /// The version of the stored form written by [`Schema::to_json`].
-const FORMAT: u32 = 1;
+pub(crate) const FORMAT: u32 = 1;
 
 /// The reason GraphQL gives when a deprecation has none.
 const NO_REASON: &str = "No longer supported";

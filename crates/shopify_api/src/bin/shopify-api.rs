@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use shopify_api_graphql::project::{
-    configured_api_version, previous_api_version, up_to_date_schema, write_atomically,
+    configured_api_version, previous_api_version, project_schema, write_atomically,
 };
 use shopify_api_graphql::{
     PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, SchemaSource, analyze, latest_api_version,
@@ -46,9 +46,11 @@ enum SchemaCommand {
     /// `graphql!` reads it.
     ///
     /// The version is `api-version` in `[package.metadata.shopify_api]` of the
-    /// nearest package, else the latest stable one. `graphql!` downloads it by
-    /// itself when the file is missing or holds another version: this command
-    /// refreshes it, or downloads it through a shop with --shop.
+    /// nearest package, else the latest stable one: this moves a crate that
+    /// pins none to the latest version. `graphql!` downloads the file by itself
+    /// only when it is missing, in an older format, or of another version than
+    /// the pinned one; this command refreshes it, or downloads it through a
+    /// shop with --shop.
     Download(DownloadArgs),
 }
 
@@ -287,27 +289,11 @@ fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
         Some(path) => path.to_path_buf(),
         None => {
             let named = std::env::var_os(SCHEMA_ENV);
-            match schema_source(
-                package_root().as_deref(),
-                named.as_deref(),
-                SystemTime::now(),
-            )? {
+            match schema_source(package_root().as_deref(), named.as_deref())? {
                 SchemaSource::File(path) => path,
-                SchemaSource::Version {
-                    path,
-                    version,
-                    latest,
-                } => {
-                    let schema = up_to_date_schema(&path, &version, latest, |file| {
-                        if !file.is_file() || read(file).is_ok_and(|s| s.api_version != version) {
-                            eprintln!(
-                                "Downloading the Admin schema {version} into {}…",
-                                file.display()
-                            );
-                        }
-                        read(file)
-                    })
-                    .map_err(|error| error.to_string())?;
+                SchemaSource::Project { dir, path, pinned } => {
+                    let schema =
+                        project_schema(&dir, pinned.as_deref(), true, SystemTime::now(), read)?;
                     return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
                 }
             }
