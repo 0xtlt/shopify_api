@@ -23,6 +23,7 @@ pub const PROJECT_SCHEMA_PATH: &str = "graphql/admin.schema.json";
 
 /// The environment variable naming another schema file for `graphql!`,
 /// relative to the `Cargo.toml` of the crate being compiled, or absolute.
+/// It applies to local packages only: see [`schema_rules`].
 pub const SCHEMA_ENV: &str = "SHOPIFY_GRAPHQL_SCHEMA";
 
 /// The `[package.metadata]` table `shopify_api` reads.
@@ -160,6 +161,66 @@ pub fn schema_source(
     })
 }
 
+/// Whether the package in `dir` is local: the user's own source, in a
+/// workspace or a path dependency outside it, rather than a packaged,
+/// vendored or checked-out copy of a dependency.
+///
+/// A package is not local when its directory holds a `Cargo.toml.orig`,
+/// which cargo writes into every packaged crate (registry sources, and the
+/// copy `cargo package` verifies), or a `.cargo-checksum.json` (vendored), or
+/// when it is under `cargo_home`, where cargo keeps registry sources and git
+/// checkouts.
+///
+/// It depends on the directory and its files only, which stay the same for a
+/// compiled crate: cargo reuses that crate whatever command built it.
+pub fn is_local_package(dir: &Path, cargo_home: Option<&Path>) -> bool {
+    if dir.join("Cargo.toml.orig").exists() || dir.join(".cargo-checksum.json").exists() {
+        return false;
+    }
+    let Some(home) = cargo_home else {
+        return true;
+    };
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    !canonical(dir).starts_with(canonical(home))
+}
+
+/// The directory where cargo keeps registry sources and git checkouts:
+/// `$CARGO_HOME`, else `.cargo` in the home directory.
+pub fn cargo_home() -> Option<PathBuf> {
+    let non_empty = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(home) = non_empty("CARGO_HOME") {
+        return Some(PathBuf::from(home));
+    }
+    non_empty("HOME")
+        .or_else(|| non_empty("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".cargo"))
+}
+
+/// What `graphql!` may do for the package being compiled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchemaRules {
+    /// Whether [`SCHEMA_ENV`] applies: to a local package only, so that a
+    /// dependency is always checked against the schema it ships.
+    pub override_applies: bool,
+    /// Whether the schema file may be downloaded, see [`schema_plan`].
+    pub may_download: bool,
+}
+
+/// The rules for a package that is `local` ([`is_local_package`]) and,
+/// with `primary`, one cargo was asked to build.
+///
+/// What is compiled depends on `local` only, an input that is the same for
+/// a compiled crate. `primary` is not: cargo reuses a crate built as primary
+/// when it is later built as a dependency, and the other way round. It only
+/// decides whether a missing or outdated file is downloaded or refused, and
+/// a refusal is a compile error, never another schema.
+pub fn schema_rules(local: bool, primary: bool) -> SchemaRules {
+    SchemaRules {
+        override_applies: local,
+        may_download: local && primary,
+    }
+}
+
 /// What a crate's schema file holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaFile {
@@ -200,40 +261,44 @@ pub enum SchemaPlan {
 /// gives the same result whatever the date. Without either, the crate takes
 /// the latest version at `now`.
 ///
-/// Only the `primary` package, one cargo was asked to build, downloads. A
-/// dependency uses the file it ships, and refuses to build when it has none
-/// or when it is not the version its `Cargo.toml` pins: its author tested its
-/// operations against that file, and the registry copy is not to be written.
+/// Only a package that `may_download` ([`schema_rules`]) downloads: a local
+/// one cargo was asked to build. Any other uses the file it ships, and
+/// refuses to build when it has none or when it is not the version its
+/// `Cargo.toml` pins: its author tested its operations against that file,
+/// and a registry, vendored or packaged copy is not to be written.
 pub fn schema_plan(
     dir: &Path,
     file: &SchemaFile,
     pinned: Option<&str>,
-    primary: bool,
+    may_download: bool,
     now: SystemTime,
 ) -> SchemaPlan {
     let path = dir.join(PROJECT_SCHEMA_PATH);
     let fix = || {
         format!(
             "Run `shopify-api schema download` in `{}` (`cargo install shopify_api --features cli`), \
-             and commit the file. As a dependency, a crate never downloads its schema: it uses the one it ships.",
+             and commit the file. A crate downloads its schema only as a local package cargo was asked to build: \
+             as a dependency, or packaged, it uses the one it ships.",
             dir.display()
         )
     };
     match (file, pinned) {
         (SchemaFile::Usable { .. }, None) => SchemaPlan::Read,
         (SchemaFile::Usable { version }, Some(pinned)) if version == pinned => SchemaPlan::Read,
-        (SchemaFile::Usable { version }, Some(pinned)) if !primary => SchemaPlan::Refuse(format!(
-            "`{}` holds the Admin API {version}, but `{}` declares {pinned}. {}",
-            path.display(),
-            dir.join("Cargo.toml").display(),
-            fix()
-        )),
-        (SchemaFile::Missing, _) if !primary => SchemaPlan::Refuse(format!(
+        (SchemaFile::Usable { version }, Some(pinned)) if !may_download => {
+            SchemaPlan::Refuse(format!(
+                "`{}` holds the Admin API {version}, but `{}` declares {pinned}. {}",
+                path.display(),
+                dir.join("Cargo.toml").display(),
+                fix()
+            ))
+        }
+        (SchemaFile::Missing, _) if !may_download => SchemaPlan::Refuse(format!(
             "`{}` is missing: `graphql!` needs the schema of the crate's API version there. {}",
             path.display(),
             fix()
         )),
-        (SchemaFile::Unusable { reason, .. }, _) if !primary => {
+        (SchemaFile::Unusable { reason, .. }, _) if !may_download => {
             SchemaPlan::Refuse(format!("{reason}. {}", fix()))
         }
         (_, Some(pinned)) => SchemaPlan::Download {
@@ -401,8 +466,7 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 /// The schema of the crate in `dir`, read with `read`, after downloading it
-/// when [`schema_plan`] says so. `primary` is whether cargo was asked to
-/// build this crate, rather than build it as a dependency. `on_download`
+/// when [`schema_plan`] says so, with `may_download` from [`schema_rules`]. `on_download`
 /// is called with the file and the version before each download, to show
 /// progress.
 ///
@@ -413,12 +477,12 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
 pub fn project_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
     pinned: Option<&str>,
-    primary: bool,
+    may_download: bool,
     now: SystemTime,
     read: impl Fn(&Path) -> Result<S, String>,
     on_download: impl Fn(&Path, &str),
 ) -> Result<S, String> {
-    obtain_schema(dir, pinned, primary, now, read, |path, version| {
+    obtain_schema(dir, pinned, may_download, now, read, |path, version| {
         on_download(path, version);
         download_schema_file(path, version).map(drop)
     })
@@ -429,7 +493,7 @@ pub fn project_schema<S: AsRef<crate::Schema>>(
 fn obtain_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
     pinned: Option<&str>,
-    primary: bool,
+    may_download: bool,
     now: SystemTime,
     read: impl Fn(&Path) -> Result<S, String>,
     download: impl Fn(&Path, &str) -> Result<(), DownloadError>,
@@ -449,7 +513,7 @@ fn obtain_schema<S: AsRef<crate::Schema>>(
     } else {
         (SchemaFile::Missing, None)
     };
-    match schema_plan(dir, &file, pinned, primary, now) {
+    match schema_plan(dir, &file, pinned, may_download, now) {
         SchemaPlan::Read => current.map_or_else(|| read(&path), Ok),
         SchemaPlan::Refuse(message) => Err(message),
         SchemaPlan::Download { version, latest } => {
@@ -785,6 +849,69 @@ mod tests {
             schema_plan(dir, &old_format(None), None, true, now),
             download("2026-10", true)
         );
+    }
+
+    #[test]
+    fn a_package_is_local_unless_packaged_vendored_or_under_cargo_home() {
+        let home = Project::new("cargo-home");
+        let checkout = home.write("git/checkouts/lib-1a2b/0c9d/Cargo.toml", "");
+        let checkout = checkout.parent().unwrap();
+        assert!(!is_local_package(checkout, Some(&home.0)));
+        // Without a `CARGO_HOME`, only the files tell.
+        assert!(is_local_package(checkout, None));
+
+        let workspace = Project::new("local");
+        workspace.manifest(None);
+        assert!(is_local_package(&workspace.0, Some(&home.0)));
+        assert!(is_local_package(&workspace.0, None));
+        // A directory whose name starts as `CARGO_HOME`'s is not under it.
+        let sibling = PathBuf::from(format!("{}-sibling", home.0.display()));
+        assert!(is_local_package(&sibling, Some(&home.0)));
+
+        for marker in ["Cargo.toml.orig", ".cargo-checksum.json"] {
+            let packaged = Project::new(&format!("packaged{marker}"));
+            packaged.manifest(None);
+            packaged.write(marker, "");
+            assert!(!is_local_package(&packaged.0, Some(&home.0)), "{marker}");
+            assert!(!is_local_package(&packaged.0, None), "{marker}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cargo_home_through_a_symbolic_link_is_still_cargo_home() {
+        let real = Project::new("real-cargo-home");
+        let registry = real.write("registry/src/index/lib-1.0.0/Cargo.toml", "");
+        let linked = std::env::temp_dir().join(format!(
+            "shopify-api-graphql-linked-home-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&linked);
+        std::os::unix::fs::symlink(&real.0, &linked).unwrap();
+        assert!(!is_local_package(registry.parent().unwrap(), Some(&linked)));
+        let _ = std::fs::remove_file(&linked);
+    }
+
+    #[test]
+    fn the_override_applies_to_local_packages_and_only_a_primary_one_downloads() {
+        for primary in [true, false] {
+            assert_eq!(
+                schema_rules(true, primary),
+                SchemaRules {
+                    override_applies: true,
+                    may_download: primary,
+                }
+            );
+            // Packaged, vendored or checked out: never, even when primary,
+            // as in the verification of `cargo package`.
+            assert_eq!(
+                schema_rules(false, primary),
+                SchemaRules {
+                    override_applies: false,
+                    may_download: false,
+                }
+            );
+        }
     }
 
     #[test]
