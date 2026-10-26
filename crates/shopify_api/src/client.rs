@@ -289,13 +289,15 @@ impl Default for RetryPolicy {
     }
 }
 
-/// A fraction in `[0, 1)`, from the clock: retries need no better randomness.
+/// A fraction in `[0, 1)`, from the random keys of std's `RandomState`: retries
+/// need no better randomness. Not from the clock: macOS gives microseconds,
+/// whose nanoseconds are always zero.
 fn jitter_fraction() -> f64 {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.subsec_nanos())
-        .unwrap_or_default();
-    f64::from(nanos % 1000) / 1000.0
+    use std::hash::BuildHasher;
+    // Each `RandomState` has keys of its own: hashing nothing is random enough.
+    let bits = std::collections::hash_map::RandomState::new().hash_one(());
+    // The top 53 bits, the precision of an `f64`.
+    (bits >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// Builds a [`Shopify`] client.
@@ -449,6 +451,21 @@ mod tests {
         within(2, 400, 500);
         within(4, 1000, 1000);
         within(30, 1000, 1000);
+    }
+
+    #[test]
+    fn the_jitter_varies() {
+        let fractions: Vec<f64> = (0..64).map(|_| jitter_fraction()).collect();
+        assert!(
+            fractions
+                .iter()
+                .all(|fraction| (0.0..1.0).contains(fraction))
+        );
+        let mut distinct = fractions.clone();
+        distinct.sort_by(f64::total_cmp);
+        distinct.dedup();
+        // 64 draws of 53 bits: a repeat is as likely as a cosmic ray.
+        assert_eq!(distinct.len(), fractions.len(), "{fractions:?}");
     }
 
     #[test]
