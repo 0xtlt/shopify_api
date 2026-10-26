@@ -166,13 +166,15 @@ impl TokenData {
     }
 
     /// The access token expires within `leeway`, or has expired.
-    pub fn expires_within(&self, leeway: chrono::Duration) -> bool {
-        self.expires_at
-            .is_some_and(|expires_at| match Utc::now().checked_add_signed(leeway) {
-                Some(limit) => expires_at <= limit,
-                // A leeway beyond the calendar: everything expires within it.
-                None => true,
-            })
+    pub fn expires_within(&self, leeway: Duration) -> bool {
+        let limit = chrono::Duration::from_std(leeway)
+            .ok()
+            .and_then(|leeway| Utc::now().checked_add_signed(leeway));
+        self.expires_at.is_some_and(|expires_at| match limit {
+            Some(limit) => expires_at <= limit,
+            // A leeway beyond the calendar: everything expires within it.
+            None => true,
+        })
     }
 
     /// The refresh token is still valid, as far as is known.
@@ -237,6 +239,11 @@ pub struct AssociatedUser {
 /// Where a client saves the tokens it obtains or renews, so that a restart
 /// reuses them. An expiring offline token comes with a new refresh token
 /// each time: without a store, a restart is left with one that no longer works.
+///
+/// Until a renewed token is saved, the client sends nothing with it: the
+/// request that renewed it, and every request after, first try the save
+/// again, and fail with [`Error::TokenStore`] while it fails. A token
+/// Shopify rotated is so never used before it is stored.
 ///
 /// Saves run one at a time, in the order of the renewals, in a task of their
 /// own: a request that is cancelled does not cancel its save. A store must
@@ -409,17 +416,19 @@ pub(crate) struct Endpoint {
 /// refresh token Shopify rotated is never lost halfway.
 pub(crate) struct Tokens {
     kind: Arc<Kind>,
+    /// Held through a renewal and its save: saves run in the order of the
+    /// renewals, and nothing reads a token that is not saved yet.
     state: Arc<Mutex<State>>,
-    /// Saves run in the order of the renewals, outside the lock of the state.
-    saves: Arc<Mutex<()>>,
     store: Option<Arc<dyn TokenStore>>,
-    leeway: chrono::Duration,
+    leeway: Duration,
 }
 
 struct State {
     token: Option<TokenData>,
     /// When the last renewal failed, and why.
     failure: Option<(Instant, String)>,
+    /// The token was renewed, and the store has not saved it yet.
+    unsaved: bool,
 }
 
 impl State {
@@ -427,7 +436,7 @@ impl State {
     fn valid(&self) -> Option<String> {
         self.token
             .as_ref()
-            .filter(|token| !token.expires_within(chrono::Duration::zero()))
+            .filter(|token| !token.expires_within(Duration::ZERO))
             .map(|token| token.access_token.clone())
     }
 
@@ -440,17 +449,34 @@ impl State {
 }
 
 impl Tokens {
-    pub fn new(auth: Auth, store: Option<Arc<dyn TokenStore>>, leeway: chrono::Duration) -> Self {
+    pub fn new(auth: Auth, store: Option<Arc<dyn TokenStore>>, leeway: Duration) -> Self {
         Self {
             kind: Arc::new(auth.kind),
             state: Arc::new(Mutex::new(State {
                 token: auth.token,
                 failure: None,
+                unsaved: false,
             })),
-            saves: Arc::new(Mutex::new(())),
             store,
             leeway,
         }
+    }
+
+    /// The state, once the token it holds is saved: a save that failed is
+    /// tried again first, in a task of its own.
+    async fn saved_state(&self, endpoint: &Arc<Endpoint>) -> Result<OwnedMutexGuard<State>> {
+        let mut state = self.state.clone().lock_owned().await;
+        if !state.unsaved {
+            return Ok(state);
+        }
+        let store = self.store.clone();
+        let endpoint = endpoint.clone();
+        tokio::spawn(async move {
+            save(store.as_deref(), &endpoint.shop, &mut state).await?;
+            Ok(state)
+        })
+        .await
+        .map_err(stopped)?
     }
 
     /// The token to send, obtained or renewed first when it is missing or
@@ -460,7 +486,7 @@ impl Tokens {
     /// yet is still sent, and the renewal is not tried again for
     /// [`RENEWAL_BACKOFF`].
     pub async fn get(&self, endpoint: &Arc<Endpoint>) -> Result<String> {
-        let state = self.state.clone().lock_owned().await;
+        let state = self.saved_state(endpoint).await?;
         let still_valid = state.valid();
         if let Some(token) = state.token.as_ref() {
             let renewable = !matches!(*self.kind, Kind::Static);
@@ -502,7 +528,7 @@ impl Tokens {
         if matches!(*self.kind, Kind::Static) {
             return Ok(None);
         }
-        let state = self.state.clone().lock_owned().await;
+        let state = self.saved_state(endpoint).await?;
         if let Some(token) = state.token.as_ref()
             && token.access_token != rejected
         {
@@ -519,8 +545,8 @@ impl Tokens {
         self.state.lock().await.token.clone()
     }
 
-    /// Obtains a new token in a task of its own, which keeps the lock of the
-    /// state until the token is in it, and saves it in the order of the renewals.
+    /// Obtains a new token and saves it, in a task of its own that keeps the
+    /// lock of the state throughout.
     async fn renew_locked(
         &self,
         mut state: OwnedMutexGuard<State>,
@@ -537,7 +563,6 @@ impl Tokens {
         let kind = self.kind.clone();
         let endpoint = endpoint.clone();
         let store = self.store.clone();
-        let saves = self.saves.clone();
         let renewal = tokio::spawn(async move {
             let token = match obtain(&kind, &state, &endpoint).await {
                 Ok(token) => token,
@@ -547,29 +572,35 @@ impl Tokens {
                 }
             };
             let access_token = token.access_token.clone();
-            state.token = Some(token.clone());
+            state.token = Some(token);
             state.failure = None;
-            let turn = saves.lock_owned().await;
-            drop(state);
-            let saved = match &store {
-                Some(store) => store
-                    .save(&endpoint.shop, &token)
-                    .await
-                    .map_err(Error::TokenStore),
-                None => Ok(()),
-            };
-            drop(turn);
-            saved.map(|()| access_token)
+            state.unsaved = true;
+            save(store.as_deref(), &endpoint.shop, &mut state).await?;
+            Ok(access_token)
         });
-        renewal.await.map_err(|stopped| {
-            // A panic's message is not this crate's to show.
-            Error::auth(if stopped.is_panic() {
-                "the renewal of the token panicked"
-            } else {
-                "the renewal of the token was cancelled"
-            })
-        })?
+        renewal.await.map_err(stopped)?
     }
+}
+
+/// Saves the token of `state` when it is not saved yet.
+async fn save(store: Option<&dyn TokenStore>, shop: &ShopDomain, state: &mut State) -> Result<()> {
+    if let (Some(store), Some(token)) = (store, state.token.as_ref())
+        && state.unsaved
+    {
+        store.save(shop, token).await.map_err(Error::TokenStore)?;
+    }
+    state.unsaved = false;
+    Ok(())
+}
+
+/// The error of a renewal or a save whose task did not end.
+fn stopped(error: tokio::task::JoinError) -> Error {
+    // A panic's message is not this crate's to show.
+    Error::auth(if error.is_panic() {
+        "the renewal of the token panicked"
+    } else {
+        "the renewal of the token was cancelled"
+    })
 }
 
 /// An OAuth error code (RFC 6749, 5.2, and Shopify's) as an error shows it.
@@ -618,10 +649,8 @@ async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<Token
             client_id,
             client_secret,
         } => {
-            let refresh_token = state
-                .token
-                .as_ref()
-                .filter(|token| token.can_refresh())
+            let current = state.token.as_ref().filter(|token| token.can_refresh());
+            let refresh_token = current
                 .and_then(|token| token.refresh_token.clone())
                 .ok_or_else(|| {
                     Error::auth(format!(
@@ -636,14 +665,21 @@ async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<Token
                 ("client_secret", client_secret.as_str()),
                 ("refresh_token", refresh_token.as_str()),
             ];
-            request_token(
+            let mut token = request_token(
                 transport,
                 &endpoint.shop,
                 &endpoint.user_agent,
                 Encoding::Json,
                 &fields,
             )
-            .await
+            .await?;
+            // An answer without a refresh token leaves the current one valid.
+            if token.refresh_token.is_none() {
+                token.refresh_token = Some(refresh_token);
+                token.refresh_token_expires_at =
+                    current.and_then(|token| token.refresh_token_expires_at);
+            }
+            Ok(token)
         }
     }
 }
@@ -655,10 +691,11 @@ mod tests {
     #[test]
     fn expiry_uses_the_leeway() {
         let mut token = TokenData::new("token");
-        assert!(!token.expires_within(chrono::Duration::days(365)));
+        assert!(!token.expires_within(Duration::from_secs(365 * 86_400)));
         token.expires_at = Some(Utc::now() + chrono::Duration::minutes(1));
-        assert!(token.expires_within(chrono::Duration::minutes(5)));
-        assert!(!token.expires_within(chrono::Duration::seconds(1)));
+        assert!(token.expires_within(Duration::from_secs(5 * 60)));
+        assert!(!token.expires_within(Duration::from_secs(1)));
+        assert!(token.expires_within(Duration::MAX));
     }
 
     #[test]

@@ -465,5 +465,94 @@ async fn a_token_that_never_expires_in_practice_is_read() {
         token.expires_at,
         Some(chrono::DateTime::<chrono::Utc>::MAX_UTC)
     );
-    assert!(!token.expires_within(chrono::Duration::days(365)));
+    assert!(!token.expires_within(std::time::Duration::from_secs(365 * 86_400)));
+}
+
+/// Fails the first `failures` saves, then saves.
+#[derive(Clone)]
+struct Flaky {
+    failures: Arc<Mutex<u32>>,
+    saved: Saved,
+}
+
+impl TokenStore for Flaky {
+    fn save<'a>(
+        &'a self,
+        shop: &'a ShopDomain,
+        token: &'a TokenData,
+    ) -> BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        let mut failures = self.failures.lock().unwrap();
+        if *failures > 0 {
+            *failures -= 1;
+            return Box::pin(async { Err("the database is down".into()) });
+        }
+        self.saved.save(shop, token)
+    }
+}
+
+#[tokio::test]
+async fn nothing_is_sent_until_a_renewed_token_is_saved() {
+    let mock = MockTransport::new();
+    shopify_like(&mock, 3600, vec![]);
+    let store = Flaky {
+        failures: Arc::new(Mutex::new(2)),
+        saved: Saved::default(),
+    };
+    let mut stored = TokenData::new("shpat_old");
+    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.refresh_token = Some("shprt_old".to_string());
+    let shopify = builder(&mock)
+        .auth(Auth::expiring_token("id", "secret", stored))
+        .token_store(store.clone())
+        .build()
+        .unwrap();
+
+    // The renewal works, its save fails: nothing is sent, now or on the next call.
+    for _ in 0..2 {
+        let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+        assert!(matches!(error, Error::TokenStore(_)), "{error:?}");
+        assert!(mock.graphql_requests().is_empty());
+    }
+    // The save goes through: the token it saved is the one sent.
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    assert_eq!(token_requests(&mock).len(), 1, "renewed once");
+    let saved = store.saved.0.lock().unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].1.refresh_token.as_deref(), Some("shprt_1"));
+    assert_eq!(
+        mock.graphql_requests()[0].access_token.as_deref(),
+        Some("shpat_1")
+    );
+}
+
+#[tokio::test]
+async fn a_refresh_without_a_new_refresh_token_keeps_the_current_one() {
+    let mock = MockTransport::new();
+    mock.respond_with(|request: &HttpRequest| {
+        if request.url == TOKEN_URL {
+            return Ok(HttpResponse::json(
+                200,
+                &json!({ "access_token": "shpat_new", "expires_in": 3600 }),
+            ));
+        }
+        Ok(HttpResponse::json(
+            200,
+            &json!({ "data": { "shop": { "name": "x" } } }),
+        ))
+    });
+    let refresh_expires = chrono::Utc::now() + chrono::Duration::days(30);
+    let mut stored = TokenData::new("shpat_old");
+    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.refresh_token = Some("shprt_old".to_string());
+    stored.refresh_token_expires_at = Some(refresh_expires);
+    let shopify = builder(&mock)
+        .auth(Auth::expiring_token("id", "secret", stored))
+        .build()
+        .unwrap();
+
+    shopify.graphql("{ shop { name } }", ()).await.unwrap();
+    let token = shopify.token().await.unwrap();
+    assert_eq!(token.access_token, "shpat_new");
+    assert_eq!(token.refresh_token.as_deref(), Some("shprt_old"));
+    assert_eq!(token.refresh_token_expires_at, Some(refresh_expires));
 }

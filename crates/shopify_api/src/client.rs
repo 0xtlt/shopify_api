@@ -380,7 +380,8 @@ impl ShopifyBuilder {
         self
     }
 
-    /// Saves the tokens the client obtains or renews.
+    /// Saves the tokens the client obtains or renews. Until a renewed token
+    /// is saved, the client sends nothing: see [`TokenStore`].
     pub fn token_store(mut self, store: impl TokenStore) -> Self {
         self.token_store = Some(Arc::new(store));
         self
@@ -412,8 +413,6 @@ impl ShopifyBuilder {
             Some(transport) => transport,
             None => default_transport()?,
         };
-        let leeway =
-            chrono::Duration::from_std(self.refresh_leeway).unwrap_or(chrono::Duration::MAX);
         Ok(Shopify {
             shared: Arc::new(Shared {
                 endpoint: Arc::new(Endpoint {
@@ -421,7 +420,7 @@ impl ShopifyBuilder {
                     shop,
                     user_agent: self.user_agent,
                 }),
-                tokens: Tokens::new(auth, self.token_store, leeway),
+                tokens: Tokens::new(auth, self.token_store, self.refresh_leeway),
             }),
             pinned: self.api_version,
             retry: self.retry,
