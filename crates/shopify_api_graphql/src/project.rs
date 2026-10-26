@@ -187,7 +187,7 @@ pub const PORTABLE_PATH: &str = "a relative path with `/` separators and portabl
 /// A name that means the same file on every system. Windows reads `:` and
 /// `\` as a drive and a separator, drops a final `.` or space (`x.json.`
 /// opens `x.json`), refuses `<>"|?*` and control characters, and opens a
-/// device for `CON`, `NUL`, `COM1`… whatever the extension.
+/// device for `CON`, `NUL`, `COM1`, `CONIN$`… whatever the extension.
 fn portable_name(name: &str) -> bool {
     if name.ends_with(['.', ' '])
         || name
@@ -204,7 +204,9 @@ fn portable_name(name: &str) -> bool {
                 || (number.len() == 1 && number.bytes().all(|byte| byte.is_ascii_digit()))
         })
     };
-    !(["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()) || numbered("COM") || numbered("LPT"))
+    !(["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&stem.as_str())
+        || numbered("COM")
+        || numbered("LPT"))
 }
 
 /// `path`, relative to a package's `Cargo.toml`, normalized, when it names a
@@ -1044,6 +1046,10 @@ mod tests {
             "lpt9",
             "COM\u{b9}.json",
             "CON/../x.json",
+            "conin$.json",
+            "CONOUT$",
+            "ConOut$ .json",
+            "CONIN$/../x.json",
         ] {
             let error = schema(alias).unwrap_err();
             assert!(error.contains(PORTABLE_PATH), "{alias:?}: {error}");
