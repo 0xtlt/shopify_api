@@ -151,6 +151,9 @@ pub struct SelectedField {
     /// always apply, or under `@include` / `@skip`.
     pub conditional: bool,
     pub base: FieldBase,
+    /// A connection of a bulk query, read as the list of its nodes: absent
+    /// from the line of its parent, filled from the lines that follow.
+    pub connection: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -663,6 +666,7 @@ impl<'a> Analyzer<'a> {
                 ty: field.ty,
                 conditional: field.conditional,
                 base,
+                connection: false,
             });
         }
 

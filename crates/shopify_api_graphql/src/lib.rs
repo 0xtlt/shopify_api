@@ -23,6 +23,8 @@
 #[doc(hidden)]
 pub mod analyze;
 #[doc(hidden)]
+pub mod bulk;
+#[doc(hidden)]
 pub mod codegen;
 #[doc(hidden)]
 pub mod literal;

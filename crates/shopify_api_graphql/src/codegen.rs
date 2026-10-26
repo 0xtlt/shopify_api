@@ -153,6 +153,10 @@ impl DataTypes<'_> {
         let on = selection.types.join("` or `");
         let doc = if name == DATA_TYPE {
             format!(" The `data` of the operation, selected on `{on}`.")
+        } else if name == crate::bulk::ITEM_TYPE {
+            format!(
+                " A top-level object of the bulk query, with the objects of its nested connections, selected on `{on}`."
+            )
         } else {
             format!(" Selection on `{on}`.")
         };
@@ -190,7 +194,7 @@ impl DataTypes<'_> {
             wrap(&field.ty, &base)
         };
 
-        let default = optional.then(|| quote!(#[serde(default)]));
+        let default = (optional || field.connection).then(|| quote!(#[serde(default)]));
         let doc = format!(" `{}: {}`", field.key, field.ty);
         quote! {
             #[doc = #doc]
@@ -214,6 +218,30 @@ pub fn data_types(operation: &Operation, krate: &TokenStream) -> TokenStream {
     types.object(&operation.data, DATA_TYPE.to_string());
     let items = types.items;
     quote!(#(#items)*)
+}
+
+/// The structs of the items of a bulk query: `name`, and one struct per
+/// nested selection, named after its path (`ItemVariants`).
+pub fn item_types(selection: &Selection, name: &str, krate: &TokenStream) -> TokenStream {
+    let mut types = DataTypes {
+        krate,
+        names: BTreeSet::new(),
+        items: Vec::new(),
+    };
+    types.object(selection, name.to_string());
+    let items = types.items;
+    quote!(#(#items)*)
+}
+
+/// The Rust fields of the struct of `selection`, by response key, as
+/// [`item_types`] and [`data_types`] name them.
+pub(crate) fn field_idents(selection: &Selection) -> Vec<(String, Ident)> {
+    let mut taken = BTreeSet::new();
+    selection
+        .fields
+        .iter()
+        .map(|field| (field.key.clone(), field_ident(&field.key, &mut taken).0))
+        .collect()
 }
 
 // ─── Variables ───────────────────────────────────────────────────────
@@ -271,6 +299,28 @@ pub fn variables_types(
     operation: &Operation,
     krate: &TokenStream,
     constructor: &TokenStream,
+) -> TokenStream {
+    let data = Ident::new(DATA_TYPE, Span::call_site());
+    let target = quote!(#krate::Operation<#data>);
+    variables_types_for(
+        schema,
+        operation,
+        krate,
+        constructor,
+        &target,
+        "`Shopify::execute`",
+    )
+}
+
+/// [`variables_types`] for an operation of type `target`, which `runner`
+/// runs: a bulk query or a bulk mutation.
+pub fn variables_types_for(
+    schema: &Schema,
+    operation: &Operation,
+    krate: &TokenStream,
+    constructor: &TokenStream,
+    target: &TokenStream,
+    runner: &str,
 ) -> TokenStream {
     let mut inputs = BTreeSet::new();
     for variable in &operation.variables {
@@ -351,27 +401,29 @@ pub fn variables_types(
         derives.push(quote!(::core::default::Default));
     }
     let serde = serde_path(krate);
-    let data = Ident::new(DATA_TYPE, Span::call_site());
     let variables = Ident::new(VARIABLES_TYPE, Span::call_site());
+    let struct_doc = format!(
+        " The variables of the operation; those left to `None` are not sent. {runner} runs it."
+    );
+    let operation_doc = format!(" The operation with its variables, for {runner}.");
     quote! {
         #(#aliases)*
 
-        /// The variables of the operation; those left to `None` are not
-        /// sent. `Shopify::execute` runs it.
+        #[doc = #struct_doc]
         #[derive(#(#derives),*)]
         #[serde(crate = #serde)]
         pub struct #variables {
             #(#fields)*
         }
 
-        /// The operation with its variables, for `Shopify::execute`.
-        pub fn operation(variables: #variables) -> #krate::Operation<#data> {
+        #[doc = #operation_doc]
+        pub fn operation(variables: #variables) -> #target {
             let operation = #constructor;
             #(#setters)*
             operation
         }
 
-        impl ::core::convert::From<#variables> for #krate::Operation<#data> {
+        impl ::core::convert::From<#variables> for #target {
             fn from(variables: #variables) -> Self {
                 operation(variables)
             }
