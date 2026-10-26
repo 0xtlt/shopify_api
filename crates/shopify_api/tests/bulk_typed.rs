@@ -195,6 +195,8 @@ async fn the_variables_of_a_bulk_query_are_written_into_its_text() {
         text,
         r#"{ products(query: "title:\"Café \\ $filter\"\nvendor:x", sortKey: TITLE, reverse: true) { edges { node { id } } } }"#
     );
+    // No nested connection: no `groupObjects`, which slows Shopify down.
+    assert_eq!(mock.graphql_requests()[0].variables["groupObjects"], false);
 
     // An enum value bare; a variable without a value or a default left out.
     let query = by_title::operation(by_title::Variables {
@@ -355,6 +357,46 @@ async fn the_items_of_an_operation_started_by_hand_are_read_from_its_url() {
         .unwrap();
     assert_eq!(products[0].variants[0].metafields.len(), 2);
     assert_eq!(mock.graphql_requests()[0].variables["groupObjects"], true);
+}
+
+#[tokio::test]
+async fn a_typed_bulk_query_groups_objects_only_with_nested_connections() {
+    let mock = MockTransport::new();
+    for _ in 0..3 {
+        mock.push_data(json!({ "bulkOperationRunQuery": {
+            "bulkOperation": operation("QUERY", "CREATED", None),
+            "userErrors": [],
+        } }));
+    }
+    let shopify = client(&mock);
+
+    // Flat, given as the `Variables` of its module, or as its operation.
+    shopify
+        .start_bulk_query(by_title::Variables {
+            filter: None,
+            sort: None,
+        })
+        .await
+        .unwrap();
+    shopify
+        .start_bulk_query(by_title::operation(by_title::Variables {
+            filter: None,
+            sort: None,
+        }))
+        .await
+        .unwrap();
+    // Nested connections, two levels deep.
+    shopify
+        .start_bulk_query(catalog::operation())
+        .await
+        .unwrap();
+
+    let grouped: Vec<Value> = mock
+        .graphql_requests()
+        .iter()
+        .map(|request| request.variables["groupObjects"].clone())
+        .collect();
+    assert_eq!(grouped, [json!(false), json!(false), json!(true)]);
 }
 
 #[tokio::test]

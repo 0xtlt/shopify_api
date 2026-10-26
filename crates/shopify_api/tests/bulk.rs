@@ -99,6 +99,48 @@ async fn a_bulk_query_runs_to_its_end_and_its_rows_are_read() {
 }
 
 #[tokio::test]
+async fn a_text_bulk_query_groups_objects_only_when_asked() {
+    use shopify_api::bulk::GroupObjects;
+
+    let mock = MockTransport::new();
+    for _ in 0..5 {
+        mock.push_data(json!({ "bulkOperationRunQuery": {
+            "bulkOperation": operation("CREATED", None),
+            "userErrors": [],
+        } }));
+    }
+    let shopify = client(&mock);
+    let query = "{ products { edges { node { id variants { edges { node { sku } } } } } } }";
+
+    let started = shopify.start_bulk_query(query).await.unwrap();
+    assert_eq!(started.status, BulkOperationStatus::Created);
+    shopify.start_bulk_query(query.to_string()).await.unwrap();
+    shopify.start_bulk_query(&query.to_string()).await.unwrap();
+    shopify.start_bulk_query(GroupObjects(query)).await.unwrap();
+    shopify
+        .start_bulk_query(GroupObjects(query.to_string()))
+        .await
+        .unwrap();
+
+    let sent: Vec<Value> = mock
+        .graphql_requests()
+        .iter()
+        .map(|request| request.variables.clone())
+        .collect();
+    let expected = |grouped: bool| json!({ "query": query, "groupObjects": grouped });
+    assert_eq!(
+        sent,
+        [
+            expected(false),
+            expected(false),
+            expected(false),
+            expected(true),
+            expected(true)
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_refused_bulk_query_returns_the_user_errors() {
     let mock = MockTransport::new();
     mock.push_data(json!({ "bulkOperationRunQuery": {
@@ -108,7 +150,7 @@ async fn a_refused_bulk_query_returns_the_user_errors() {
     let shopify = client(&mock);
 
     let error = shopify
-        .run_bulk_query("{ products(first: 1) { nodes { id } } }")
+        .start_bulk_query("{ products(first: 1) { nodes { id } } }")
         .await
         .unwrap_err();
     assert_eq!(
@@ -190,7 +232,10 @@ async fn a_bulk_mutation_uploads_its_variables_then_runs() {
         json!({ "product": { "id": "gid://shopify/Product/2", "title": "B" } }),
     ];
     let mutation = "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }";
-    let started = shopify.run_bulk_mutation(mutation, &rows).await.unwrap();
+    let started = shopify
+        .start_bulk_mutation_text(mutation, &rows)
+        .await
+        .unwrap();
     assert_eq!(started.kind, shopify_api::bulk::BulkOperationType::Mutation);
     assert_eq!(started.status, BulkOperationStatus::Created);
 

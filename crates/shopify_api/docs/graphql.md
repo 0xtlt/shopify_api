@@ -427,7 +427,9 @@ its parent. Other nested objects stay as in any operation. A connection of
 an interface or a union gives one struct, the fields of each fragment
 optional, as in any operation.
 
-[`Shopify::bulk_query`] starts the query with `groupObjects`, waits for it,
+[`Shopify::bulk_query`] starts the query, with `groupObjects` when it has
+nested connections (Shopify is slower with it, and more likely to time out,
+so a flat export goes without), waits for it,
 and returns [`BulkItems`](crate::bulk::BulkItems): `next_item().await`, one
 item at a time, `collect().await` into a `Vec`, or a `Stream`. One item is
 held at a time, with its nested objects: memory follows the largest item,

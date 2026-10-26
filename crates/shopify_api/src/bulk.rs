@@ -65,13 +65,15 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 use crate::transport::{HttpRequest, Method};
-use crate::{Error, Page, Result, Shopify, UserError};
+use crate::{Error, Operation, Page, Result, Shopify, UserError};
 use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
 
 mod rows;
 mod typed;
 
 pub use rows::{BulkGroups, BulkRows, DEFAULT_MAX_LINE_LENGTH};
+#[doc(hidden)]
+pub use typed::TypedQuery;
 pub use typed::{BulkItem, BulkItems, BulkMutation, BulkMutationResult, BulkQuery};
 
 /// What the code `graphql!(bulk(…))` generates refers to. Not a public API.
@@ -482,30 +484,148 @@ impl Default for BulkOperationsFilter {
     }
 }
 
-impl Shopify {
-    /// Starts a bulk query. Shopify refuses a query that is not a bulk
-    /// query (one connection at the root, no `first`) with user errors,
-    /// returned as [`Error::UserErrors`].
-    pub async fn run_bulk_query(&self, query: &str) -> Result<BulkOperation> {
-        self.run_bulk_query_grouped(query, false).await
+/// What [`Shopify::start_bulk_query`] starts: the text of a bulk query
+/// (`&str`, `String`), checked by nothing; the same text in [`GroupObjects`];
+/// or a query declared with `graphql!(bulk(…))`, or the `Variables` of its module.
+///
+/// It is sealed: only this crate and `graphql!` implement it. `M` tells
+/// the kinds apart and is inferred.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a bulk query to start",
+    label = "a `&str`, a `String`, `GroupObjects(…)`, or a `graphql!(bulk(…))` query or its `Variables`"
+)]
+pub trait StartBulkQuery<M>: sealed::Sealed<M> {}
+
+pub(crate) mod sealed {
+    /// The arguments of `bulkOperationRunQuery`.
+    #[doc(hidden)]
+    #[derive(Debug)]
+    pub struct Start {
+        pub(crate) query: String,
+        pub(crate) group_objects: bool,
+        /// `None` for a text checked by nothing, sent as the crate's own
+        /// operation; else the version a typed query was checked against.
+        pub(crate) checked_against: Option<Option<&'static str>>,
     }
 
-    /// [`Shopify::run_bulk_query`], with nested objects written right after
-    /// their parent (`groupObjects`), which is slower.
-    pub async fn run_bulk_query_grouped(
+    #[doc(hidden)]
+    pub trait Sealed<M> {
+        fn __start(self) -> crate::Result<Start>;
+    }
+
+    /// The kind of a text, checked by nothing.
+    #[doc(hidden)]
+    #[derive(Debug)]
+    pub enum Text {}
+}
+
+/// The text of a bulk query to run with `groupObjects`: each object of a
+/// nested connection is written right after its parent, which
+/// [`Shopify::download_bulk_results_grouped`] needs. Shopify is slower with
+/// it, and more likely to time out.
+///
+/// ```no_run
+/// use shopify_api::bulk::GroupObjects;
+///
+/// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+/// let operation = shopify
+///     .start_bulk_query(GroupObjects(
+///         "{ products { edges { node { id variants { edges { node { sku } } } } } } }",
+///     ))
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupObjects<Q>(pub Q);
+
+fn start_text(query: String, group_objects: bool) -> sealed::Start {
+    sealed::Start {
+        query,
+        group_objects,
+        checked_against: None,
+    }
+}
+
+impl sealed::Sealed<sealed::Text> for &str {
+    fn __start(self) -> Result<sealed::Start> {
+        Ok(start_text(self.to_string(), false))
+    }
+}
+impl StartBulkQuery<sealed::Text> for &str {}
+
+impl sealed::Sealed<sealed::Text> for String {
+    fn __start(self) -> Result<sealed::Start> {
+        Ok(start_text(self, false))
+    }
+}
+impl StartBulkQuery<sealed::Text> for String {}
+
+impl sealed::Sealed<sealed::Text> for &String {
+    fn __start(self) -> Result<sealed::Start> {
+        Ok(start_text(self.clone(), false))
+    }
+}
+impl StartBulkQuery<sealed::Text> for &String {}
+
+impl<Q: Into<String>> sealed::Sealed<sealed::Text> for GroupObjects<Q> {
+    fn __start(self) -> Result<sealed::Start> {
+        Ok(start_text(self.0.into(), true))
+    }
+}
+impl<Q: Into<String>> StartBulkQuery<sealed::Text> for GroupObjects<Q> {}
+
+impl Shopify {
+    /// Starts a bulk query, and returns the operation: wait for it with
+    /// [`Shopify::wait_for_bulk_operation`], then download its results.
+    ///
+    /// - A text (`&str`, `String`) is checked by nothing, and runs without
+    ///   `groupObjects`; [`GroupObjects`]`(text)` runs it with. Read its
+    ///   results with [`Shopify::download_bulk_results_stream`], or
+    ///   [`Shopify::download_bulk_results_grouped`] for a grouped one.
+    ///   Shopify refuses a text that is not a bulk query (one connection at
+    ///   the root, no `first`) with user errors, returned as [`Error::UserErrors`].
+    /// - A query declared with `graphql!(bulk(…))`, or the `Variables` of its
+    ///   module, sends [`BulkQuery::text`] to the Admin API version it was
+    ///   checked against, as [`Shopify::execute`] would, with `groupObjects`
+    ///   only when it has nested connections. Read its results with
+    ///   [`Shopify::download_bulk_items`].
+    ///
+    /// [`Shopify::bulk_query`], [`Shopify::bulk_query_rows`] and the other
+    /// `bulk_query*` methods start, wait and read in one call.
+    ///
+    /// ```no_run
+    /// use shopify_api::bulk::BulkWaitOptions;
+    ///
+    /// shopify_api::graphql! {
+    ///     mod all_products = bulk("{ products { edges { node { id title } } } }");
+    /// }
+    ///
+    /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// let typed = shopify.start_bulk_query(all_products::operation()).await?;
+    /// let untyped = shopify.start_bulk_query("{ products { edges { node { id } } } }").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn start_bulk_query<M>(
         &self,
-        query: &str,
-        group_objects: bool,
+        query: impl StartBulkQuery<M>,
     ) -> Result<BulkOperation> {
-        let data = self
-            .execute_own(run_query::Variables {
-                query: query.to_string(),
-                group_objects,
-            })
-            .await?;
+        let start = query.__start()?;
+        let variables = run_query::Variables {
+            query: start.query,
+            group_objects: start.group_objects,
+        };
+        let data = match start.checked_against {
+            None => self.execute_own(variables).await?,
+            Some(version) => {
+                self.execute(Operation::from(variables).checked_as(version))
+                    .await?
+            }
+        };
         let payload = data
             .bulk_operation_run_query
-            .ok_or_else(|| bulk_error("bulkOperationRunQuery returned nothing".to_string()))?;
+            .ok_or_else(|| bulk_error("bulkOperationRunQuery returned nothing"))?;
         started(
             "bulkOperationRunQuery",
             payload.bulk_operation,
@@ -513,58 +633,36 @@ impl Shopify {
         )
     }
 
-    /// Starts a bulk mutation over `variables`: one run of `mutation` per
-    /// item, which holds the variables of that run. The items are uploaded
-    /// as a JSONL file first.
+    /// Starts a bulk mutation over `variables`, checked by nothing: one run
+    /// of `mutation` per item, which holds the variables of that run. The
+    /// items are uploaded as a JSONL file first, each serialized as it is
+    /// taken: they need not all be in memory, only the file, which Shopify
+    /// caps at 100 MB. A slice or a `Vec` is given by reference.
     ///
     /// The upload target is reserved first: an item that does not
     /// serialize fails after it, and the target goes unused.
     ///
+    /// The typed counterpart is [`Shopify::start_bulk_mutation`], whose
+    /// lines hold their mutation.
+    ///
     /// ```no_run
     /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// let mutation = "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }";
     /// let rows = vec![
     ///     serde_json::json!({ "product": { "id": "gid://shopify/Product/1", "title": "New title" } }),
     ///     serde_json::json!({ "product": { "id": "gid://shopify/Product/2", "title": "Other title" } }),
     /// ];
-    /// let operation = shopify
-    ///     .run_bulk_mutation(
-    ///         "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
-    ///         &rows,
-    ///     )
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn run_bulk_mutation<T: Serialize>(
-        &self,
-        mutation: &str,
-        variables: &[T],
-    ) -> Result<BulkOperation> {
-        self.run_bulk_mutation_iter(mutation, variables).await
-    }
-
-    /// [`Shopify::run_bulk_mutation`] over the items of an iterator, each
-    /// serialized as it is taken: the items need not all be in memory, only
-    /// the JSONL file, which Shopify caps at 100 MB.
+    /// let operation = shopify.start_bulk_mutation_text(mutation, &rows).await?;
     ///
-    /// The upload target is reserved first: an item that does not
-    /// serialize fails after it, and the target goes unused.
-    ///
-    /// ```no_run
-    /// # async fn run(shopify: shopify_api::Shopify) -> shopify_api::Result<()> {
+    /// // Or from an iterator, without the items in memory.
     /// let rows = (1..=50_000).map(|id| {
     ///     serde_json::json!({ "product": { "id": format!("gid://shopify/Product/{id}"), "status": "ARCHIVED" } })
     /// });
-    /// let operation = shopify
-    ///     .run_bulk_mutation_iter(
-    ///         "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
-    ///         rows,
-    ///     )
-    ///     .await?;
+    /// let operation = shopify.start_bulk_mutation_text(mutation, rows).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn run_bulk_mutation_iter<I>(
+    pub async fn start_bulk_mutation_text<I>(
         &self,
         mutation: &str,
         variables: I,
@@ -574,13 +672,13 @@ impl Shopify {
         I::Item: Serialize,
     {
         let path = self.stage_bulk_variables_iter(variables).await?;
-        self.run_bulk_mutation_staged(mutation, &path, None).await
+        self.start_bulk_mutation_staged(mutation, &path, None).await
     }
 
-    /// Starts a bulk mutation over a JSONL file already uploaded with
-    /// [`Shopify::stage_bulk_variables`]. `client_identifier` is yours, kept
-    /// with the operation.
-    pub async fn run_bulk_mutation_staged(
+    /// Starts a bulk mutation, checked by nothing, over a JSONL file already
+    /// uploaded with [`Shopify::stage_bulk_variables`]. `client_identifier`
+    /// is yours, kept with the operation.
+    pub async fn start_bulk_mutation_staged(
         &self,
         mutation: &str,
         staged_upload_path: &str,
@@ -843,7 +941,7 @@ impl Shopify {
         query: &str,
         options: BulkWaitOptions,
     ) -> Result<BulkRows<T>> {
-        let operation = self.run_bulk_query(query).await?;
+        let operation = self.start_bulk_query(query).await?;
         match self.completed_url(&operation.id, options).await? {
             Some(url) => self.download_bulk_results_stream(&url).await,
             None => Ok(BulkRows::new(None, "")),
@@ -895,7 +993,7 @@ impl Shopify {
         query: &str,
         options: BulkWaitOptions,
     ) -> Result<BulkGroups<P, C>> {
-        let operation = self.run_bulk_query_grouped(query, true).await?;
+        let operation = self.start_bulk_query(GroupObjects(query)).await?;
         match self.completed_url(&operation.id, options).await? {
             Some(url) => Ok(self.download_bulk_results_grouped(&url).await?.grouped()),
             None => Ok(BulkGroups::new(None, "").grouped()),

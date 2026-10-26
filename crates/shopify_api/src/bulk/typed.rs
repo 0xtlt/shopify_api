@@ -8,7 +8,8 @@ use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
 use super::{
-    BulkOperation, BulkRows, BulkWaitOptions, bulk_error, run_mutation, run_query, started,
+    BulkOperation, BulkRows, BulkWaitOptions, StartBulkQuery, bulk_error, run_mutation, sealed,
+    started,
 };
 use crate::error::is_graphql_name;
 use crate::graphql::check::Invalid;
@@ -117,6 +118,27 @@ pub fn push<T: DeserializeOwned>(list: &mut Vec<T>, line: &[u8], number: usize) 
 pub fn unplaced() -> Error {
     bulk_error("a nested line of the results has no place in the item")
 }
+
+/// The kind of a query declared with `graphql!(bulk(…))`, of item `I`, for
+/// [`Shopify::start_bulk_query`]. Not a public API.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct TypedQuery<I>(std::marker::PhantomData<I>);
+
+impl<I: BulkItem, Q: Into<BulkQuery<I>>> sealed::Sealed<TypedQuery<I>> for Q {
+    fn __start(self) -> Result<sealed::Start> {
+        let query = self.into();
+        Ok(sealed::Start {
+            query: query.text()?,
+            // Grouping makes Shopify slower and more likely to time out: only
+            // when there are children to place.
+            group_objects: !I::CONNECTIONS.is_empty(),
+            checked_against: Some(query.checked_against()),
+        })
+    }
+}
+
+impl<I: BulkItem, Q: Into<BulkQuery<I>>> StartBulkQuery<TypedQuery<I>> for Q {}
 
 /// A bulk query checked by `graphql!(bulk("…"))`, and its variables. Its
 /// results are read as `I`, one top-level object at a time.
@@ -616,8 +638,9 @@ impl Shopify {
     /// of its nested connections in their lists, as they download (see
     /// [`BulkItems`]). Fails when the operation does not complete.
     ///
-    /// It runs with `groupObjects`, which [`BulkItems`] needs: Shopify is
-    /// slower with it, and more likely to time out.
+    /// It runs with `groupObjects` when the query has nested connections,
+    /// which [`BulkItems`] needs to place them: Shopify is slower with it,
+    /// and more likely to time out, so a flat export runs without.
     ///
     /// ```no_run
     /// use shopify_api::bulk::BulkWaitOptions;
@@ -655,35 +678,6 @@ impl Shopify {
             Some(url) => Ok(self.download_bulk_items(&url).await?.grouped()),
             None => Ok(BulkItems::new(None, "").grouped()),
         }
-    }
-
-    /// Starts a bulk query declared with `graphql!(bulk(…))`, with
-    /// `groupObjects`, and returns the operation: wait for it with
-    /// [`Shopify::wait_for_bulk_operation`], then read its results with
-    /// [`Shopify::download_bulk_items`].
-    ///
-    /// It sends [`BulkQuery::text`] to the Admin API version the query was
-    /// checked against, as [`Shopify::execute`] would.
-    pub async fn start_bulk_query<I>(
-        &self,
-        query: impl Into<BulkQuery<I>>,
-    ) -> Result<BulkOperation> {
-        let query = query.into();
-        let text = query.text()?;
-        let operation = Operation::from(run_query::Variables {
-            query: text,
-            group_objects: true,
-        })
-        .checked_as(query.checked_against());
-        let data = self.execute(operation).await?;
-        let payload = data
-            .bulk_operation_run_query
-            .ok_or_else(|| bulk_error("bulkOperationRunQuery returned nothing"))?;
-        started(
-            "bulkOperationRunQuery",
-            payload.bulk_operation,
-            &payload.user_errors,
-        )
     }
 
     /// Downloads the results of a bulk query started with

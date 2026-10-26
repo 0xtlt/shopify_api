@@ -153,9 +153,9 @@ shopify.execute(graphql!(
 
 | 0.10 | 1.0 |
 | --- | --- |
-| `run_bulk_query(query)` → `BulkOperationPayload` | `run_bulk_query(query)` → `BulkOperation`; user errors are `Error::UserErrors` |
-| `run_bulk_query_with_grouping(query, group)` | `run_bulk_query_grouped(query, group)` |
-| `run_bulk_mutation(mutation, staged_upload_path)` | `run_bulk_mutation_staged(mutation, path, None)`, or `run_bulk_mutation(mutation, &rows)`, which uploads the rows |
+| `run_bulk_query(query)` → `BulkOperationPayload` | `start_bulk_query(query)` → `BulkOperation`; user errors are `Error::UserErrors` |
+| `run_bulk_query_with_grouping(query, true)` | `start_bulk_query(GroupObjects(query))` (`bulk::GroupObjects`); with `false`, `start_bulk_query(query)` |
+| `run_bulk_mutation(mutation, staged_upload_path)` | `start_bulk_mutation_staged(mutation, path, None)`, or `start_bulk_mutation_text(mutation, &rows)`, which uploads the rows |
 | `stage_upload_jsonl(&rows)` | `stage_bulk_variables(&rows)` |
 | `get_bulk_operation(id)` | `bulk_operation(id)` |
 | `list_bulk_operations(BulkOperationsFilter { .. })` | `bulk_operations(BulkOperationsFilter::new().first(10))`, a `Page<BulkOperation>` |
@@ -169,6 +169,10 @@ shopify.execute(graphql!(
 | `StagedUploadResource`, `StagedUploadParameter`, `StagedMediaUploadTarget`, `StagedUploadsCreateInput` | Internal: `stage_bulk_variables` does the upload |
 | `ShopifyUserError` | `UserError` |
 | `parse_jsonl(&str)` | `bulk::parse_jsonl(&[u8])`: `parse_jsonl(text.as_bytes())` |
+
+In 1.0, `start_bulk_*` only starts an operation and returns it, and
+`bulk_query*` and `bulk_mutation` start, wait and read: 0.10's `run_bulk_*`
+only started. `start_bulk_query` takes a text or a typed query.
 
 New in 1.0: a query or a mutation declared with `graphql!(bulk("…"))` is
 checked when the crate compiles, and `bulk_query` and `bulk_mutation` read

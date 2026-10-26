@@ -353,15 +353,20 @@ let rows: Vec<MyProduct> = shopify
     .bulk_query_rows("{ products { edges { node { id title } } } }", BulkWaitOptions::default())
     .await?;
 
-// One mutation per item, uploaded as JSONL first.
-let operation = shopify.run_bulk_mutation(
+// Start only: one mutation per item, uploaded as JSONL first.
+let operation = shopify.start_bulk_mutation_text(
     "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { message } } }",
     &inputs,
 ).await?;
 ```
 
-`run_bulk_query`, `wait_for_bulk_operation`, `bulk_operations`,
-`cancel_bulk_operation` and `download_bulk_results` give each step on its own.
+One verb per meaning: `start_bulk_*` only starts an operation and returns
+it; `bulk_query*` and `bulk_mutation` start, wait and read. `start_bulk_query`
+takes a text (`GroupObjects(text)` for `groupObjects`) or a
+`graphql!(bulk(…))` query; `start_bulk_mutation` takes typed lines, and
+`start_bulk_mutation_text` a text and its variables. With
+`wait_for_bulk_operation`, `bulk_operations`, `cancel_bulk_operation` and
+`download_bulk_results`, each step is on its own.
 
 ### Large exports: stream the rows
 
@@ -404,7 +409,7 @@ while let Some(group) = products.next_group().await {
 
 `download_bulk_results_stream` and `download_bulk_results_grouped` read the
 results of an operation you ran yourself. For a bulk mutation over more
-items than you want in memory, `run_bulk_mutation_iter` takes an iterator:
+items than you want in memory, `start_bulk_mutation_text` takes an iterator:
 each item is serialized as it is taken.
 
 Use the `Vec` methods when the results fit in memory, the streams otherwise.

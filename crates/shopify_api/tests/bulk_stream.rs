@@ -320,7 +320,7 @@ async fn bulk_variables_upload_from_an_iterator_as_from_a_slice() {
         }
     });
     let started = shopify
-        .run_bulk_mutation_iter(mutation, rows)
+        .start_bulk_mutation_text(mutation, rows)
         .await
         .unwrap();
     assert_eq!(started.kind, shopify_api::bulk::BulkOperationType::Mutation);
@@ -331,7 +331,10 @@ async fn bulk_variables_upload_from_an_iterator_as_from_a_slice() {
             product: json!({ "id": format!("gid://shopify/Product/{id}"), "title": "é\n\"" }),
         })
         .collect();
-    shopify.run_bulk_mutation(mutation, &slice).await.unwrap();
+    shopify
+        .start_bulk_mutation_text(mutation, &slice)
+        .await
+        .unwrap();
 
     let uploads = uploads.lock().unwrap();
     assert_eq!(uploads.len(), 2);

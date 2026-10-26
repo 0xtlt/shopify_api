@@ -61,7 +61,7 @@ async fn downloads_the_schema_through_the_shop() {
 async fn runs_a_bulk_query_to_its_end() {
     let shopify = live();
     let operation = shopify
-        .run_bulk_query("{ products { edges { node { id title } } } }")
+        .start_bulk_query("{ products { edges { node { id title } } } }")
         .await
         .unwrap();
     let listed = shopify
