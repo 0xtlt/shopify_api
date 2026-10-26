@@ -405,6 +405,8 @@ impl ShopifyApp {
     }
 
     /// The `hmac` Shopify signs a query of Shopify admin with: for tests.
+    #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn sign_query(&self, query: &str) -> Result<String> {
         let params = parse_query(query)?;
         let mut mac = mac(&self.client_secret);
@@ -437,6 +439,8 @@ impl ShopifyApp {
     }
 
     /// The `signature` Shopify signs an app proxy request with: for tests.
+    #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn sign_app_proxy(&self, query: &str) -> Result<String> {
         let params = parse_query(query)?;
         let mut mac = mac(&self.client_secret);
@@ -531,6 +535,8 @@ impl ShopifyApp {
 
     /// A session token signed with the app's secret, as Shopify makes them:
     /// for tests. `claims` should hold `iss`, `dest`, `aud`, `exp` and `nbf`.
+    #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn sign_session_token(&self, claims: &Value) -> String {
         let header = BASE64_URL.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
         let payload = BASE64_URL.encode(serde_json::to_vec(claims).unwrap_or_default());

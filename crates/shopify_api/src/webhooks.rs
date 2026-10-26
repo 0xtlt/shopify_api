@@ -12,22 +12,56 @@
 //!         let order: serde_json::Value = webhook.payload()?;
 //!         println!("order {} on {}", order["name"], webhook.shop());
 //!     }
+//!     "app/uninstalled" | "shop/redact" | "customers/redact" => {
+//!         // Destructive: the shop of the headers is not signed, the payload is.
+//!         webhook.verify_payload_shop()?;
+//!         // … delete what the app holds for `webhook.shop()`.
+//!     }
 //!     other => println!("{other} ignored"),
 //! }
 //! # Ok(())
 //! # }
 //! ```
 //!
+//! With axum, or any framework on the `http` crate, the `HeaderMap` and the
+//! raw body go in as they are:
+//!
+//! ```ignore
+//! use axum::body::Bytes;
+//! use axum::http::{HeaderMap, StatusCode};
+//! use shopify_api::webhooks::Webhook;
+//!
+//! async fn webhooks(headers: HeaderMap, body: Bytes) -> StatusCode {
+//!     let secret = std::env::var("SHOPIFY_API_SECRET").unwrap_or_default();
+//!     let Ok(webhook) = Webhook::verify(&headers, body, &secret) else {
+//!         return StatusCode::UNAUTHORIZED;
+//!     };
+//!     // Answer within 5 seconds: queue the work, then return.
+//!     tracing::info!("{} from {}", webhook.topic(), webhook.shop());
+//!     StatusCode::OK
+//! }
+//! ```
+//!
 //! Shopify may deliver a webhook more than once: [`Webhook::event_id`]
 //! identifies the event across deliveries.
 //!
+//! # What the signature covers
+//!
 //! The signature covers the body only. The headers (the topic, the shop, the
 //! IDs) are what Shopify sent along, unsigned: a captured body could be
-//! replayed with other headers. Check what matters against the body, or
-//! against your own records of the shop.
+//! replayed with other headers. Before deleting anything on `app/uninstalled`,
+//! `shop/redact` or `customers/redact`, check that the payload names the shop
+//! of the headers, with [`Webhook::verify_payload_shop`].
+//!
+//! The client secret also signs the launch queries of Shopify admin, the app
+//! proxy requests and the session tokens, which an installer of the app can
+//! read. So that none of them passes for a webhook, only a body that starts
+//! with `{` (JSON) or `<` (XML) verifies: a form-encoded query, a JWT or a
+//! JSON array never does.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -38,9 +72,12 @@ use shopify_api_macros::{__graphql_internal as graphql, __input_internal as inpu
 
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
 /// `body` with `secret`, the client secret of the app. Compares in constant time.
+///
+/// `false` for a body that is not a JSON object or an XML document, as
+/// [`Webhook::verify`] refuses it: see [what the signature covers](self#what-the-signature-covers).
 pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     // Anyone can sign with an empty key: it verifies nothing.
-    if secret.is_empty() {
+    if secret.is_empty() || !is_webhook_body(body) {
         return false;
     }
     let Ok(expected) = STANDARD.decode(hmac_header.trim()) else {
@@ -53,7 +90,20 @@ pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
+/// Whether `body` starts as a webhook does, with `{` or `<`. The other texts
+/// the client secret signs start otherwise: a query with a parameter name, a
+/// session token with `eyJ`, and an app proxy request with a name that sorts
+/// before `path_prefix`, never `{`, though `[` may.
+fn is_webhook_body(body: &[u8]) -> bool {
+    matches!(
+        body.iter().find(|byte| !byte.is_ascii_whitespace()),
+        Some(b'{' | b'<')
+    )
+}
+
 /// The signature Shopify would send for `body`, base64: for tests.
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub fn sign(secret: &str, body: &[u8]) -> String {
     let mut mac =
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC takes a key of any length");
@@ -62,7 +112,10 @@ pub fn sign(secret: &str, body: &[u8]) -> String {
 }
 
 /// A webhook whose signature was verified.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` shows the length of the body, not the body: it holds the data of
+/// customers.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Webhook {
     topic: String,
@@ -76,12 +129,34 @@ pub struct Webhook {
     body: Vec<u8>,
 }
 
+impl std::fmt::Debug for Webhook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Webhook")
+            .field("topic", &self.topic)
+            .field("shop", &self.shop)
+            .field("webhook_id", &self.webhook_id)
+            .field("event_id", &self.event_id)
+            .field("api_version", &self.api_version)
+            .field("triggered_at", &self.triggered_at)
+            .field("sub_topic", &self.sub_topic)
+            .field("name", &self.name)
+            .field("body", &format_args!("[{} bytes]", self.body.len()))
+            .finish()
+    }
+}
+
 impl Webhook {
     /// Verifies a webhook from its headers and raw body, and reads its headers.
     ///
-    /// `headers` are name and value pairs, the names in any case. Fails when
-    /// the signature is missing or does not match, or a header Shopify always
+    /// `headers` are name and value pairs: an `http::HeaderMap` by
+    /// reference, or pairs of strings. Names are read in any case, with or
+    /// without their `X-` (`X-Shopify-Topic` or `shopify-topic`). Fails when
+    /// the signature is missing or does not match, when the body is neither
+    /// a JSON object nor an XML document, or when a header Shopify always
     /// sends is missing.
+    ///
+    /// The headers are not signed: see [what the signature covers](self#what-the-signature-covers).
     pub fn verify<K, V>(
         headers: impl IntoIterator<Item = (K, V)>,
         body: impl Into<Vec<u8>>,
@@ -89,7 +164,7 @@ impl Webhook {
     ) -> Result<Self>
     where
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: AsRef<[u8]>,
     {
         Self::verify_with_secrets(headers, body, &[secret])
     }
@@ -103,34 +178,43 @@ impl Webhook {
     ) -> Result<Self>
     where
         K: AsRef<str>,
-        V: AsRef<str>,
+        V: AsRef<[u8]>,
     {
+        // Lowercase, without `x-`; a value that is not UTF-8 is not Shopify's.
         let headers: Vec<(String, String)> = headers
             .into_iter()
-            .map(|(name, value)| {
-                (
-                    name.as_ref().to_ascii_lowercase(),
-                    value.as_ref().to_string(),
-                )
+            .filter_map(|(name, value)| {
+                let name = name.as_ref().to_ascii_lowercase();
+                let name = match name.strip_prefix("x-") {
+                    Some(rest) if rest.starts_with("shopify-") => rest.to_string(),
+                    _ => name,
+                };
+                let value = std::str::from_utf8(value.as_ref()).ok()?.trim().to_string();
+                Some((name, value))
             })
             .collect();
         let header = |name: &str| {
             headers
                 .iter()
                 .find(|(given, _)| given == name)
-                .map(|(_, value)| value.trim().to_string())
+                .map(|(_, value)| value.clone())
         };
         let required = |name: &'static str| {
             header(name)
-                .ok_or_else(|| Error::Verification(format!("the webhook has no `{name}` header")))
+                .ok_or_else(|| Error::Verification(format!("the webhook has no `x-{name}` header")))
         };
 
         let body = body.into();
-        let signature = required("x-shopify-hmac-sha256")?;
+        let signature = required("shopify-hmac-sha256")?;
         if secrets.iter().all(|secret| secret.is_empty()) {
             return Err(Error::Verification(
                 "no secret to verify the webhook with: the client secret of the app is empty"
                     .to_string(),
+            ));
+        }
+        if !is_webhook_body(&body) {
+            return Err(Error::Verification(
+                "the body of the webhook is neither a JSON object nor an XML document".to_string(),
             ));
         }
         if !secrets
@@ -141,20 +225,42 @@ impl Webhook {
                 "the signature of the webhook does not match".to_string(),
             ));
         }
-        let shop = ShopDomain::new(&required("x-shopify-shop-domain")?).map_err(|error| {
+        let shop = ShopDomain::new(&required("shopify-shop-domain")?).map_err(|error| {
             Error::Verification(format!("the webhook names an invalid shop: {error}"))
         })?;
         Ok(Self {
-            topic: required("x-shopify-topic")?,
+            topic: required("shopify-topic")?,
             shop,
-            webhook_id: header("x-shopify-webhook-id"),
-            event_id: header("x-shopify-event-id"),
-            api_version: header("x-shopify-api-version"),
-            triggered_at: header("x-shopify-triggered-at"),
-            sub_topic: header("x-shopify-sub-topic"),
-            name: header("x-shopify-name"),
+            webhook_id: header("shopify-webhook-id"),
+            event_id: header("shopify-event-id"),
+            api_version: header("shopify-api-version"),
+            triggered_at: header("shopify-triggered-at"),
+            sub_topic: header("shopify-sub-topic"),
+            name: header("shopify-name"),
             body,
         })
+    }
+
+    /// Fails unless the JSON payload names [`Webhook::shop`], the shop of the
+    /// unsigned `X-Shopify-Shop-Domain`, in its `shop_domain` (the compliance
+    /// topics) or its `myshopify_domain` (`app/uninstalled`). Call it before
+    /// acting on a destructive topic: `app/uninstalled`, `shop/redact`,
+    /// `customers/redact`.
+    pub fn verify_payload_shop(&self) -> Result<()> {
+        let payload: serde_json::Value = serde_json::from_slice(&self.body).map_err(|_| {
+            Error::Verification("the payload of the webhook is not JSON".to_string())
+        })?;
+        let named = ["shop_domain", "myshopify_domain"]
+            .iter()
+            .filter_map(|field| payload.get(field)?.as_str())
+            .any(|shop| ShopDomain::new(shop).is_ok_and(|shop| shop == self.shop));
+        if named {
+            Ok(())
+        } else {
+            Err(Error::Verification(
+                "the payload of the webhook does not name the shop of its headers".to_string(),
+            ))
+        }
     }
 
     /// `orders/create`.
@@ -262,8 +368,8 @@ pub struct WebhookSubscription {
     pub name: Option<String>,
     /// The API version of the payloads.
     pub api_version: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -277,8 +383,8 @@ struct Wire {
     include_fields: Vec<String>,
     metafield_namespaces: Vec<String>,
     name: Option<String>,
-    created_at: String,
-    updated_at: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     api_version: WireVersion,
 }
 
@@ -685,8 +791,8 @@ mod tests {
             metafield_namespaces: Vec::new(),
             name: None,
             api_version: "2026-10".to_string(),
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: DateTime::default(),
+            updated_at: DateTime::default(),
         };
         assert!(spec.matches(&subscription));
         subscription.uri = "https://example.com/other".to_string();
