@@ -11,7 +11,12 @@ use std::time::SystemTime;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
-use shopify_api_graphql::codegen::{DATA_TYPE, data_types, deprecation_warning, variables_types};
+use shopify_api_graphql::bulk::{
+    BulkQuery, ITEM_TYPE, analyze_bulk_query, check_bulk_mutation, query_items, template_ident,
+};
+use shopify_api_graphql::codegen::{
+    DATA_TYPE, data_types, deprecation_warning, variables_types, variables_types_for,
+};
 use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
 use shopify_api_graphql::project::{cargo_home, may_download, metadata_snippet, project_schema};
 use shopify_api_graphql::{
@@ -33,32 +38,58 @@ enum Source {
     Literal(LitStr),
     /// `file("graphql/orders.graphql")`, relative to the crate's `Cargo.toml`.
     File(LitStr),
+    /// `bulk("…")` or `bulk(file("…"))`: a bulk query or a bulk mutation.
+    Bulk(Box<Source>),
+}
+
+const SOURCE_FORM: &str =
+    "expected the GraphQL operation as a string literal, `file(\"path.graphql\")` or `bulk(…)`";
+
+impl Source {
+    fn parse_text(input: ParseStream, bulk: bool) -> syn::Result<Self> {
+        let expected = if bulk {
+            "`bulk(…)` takes the operation as a string literal or `file(\"path.graphql\")`"
+        } else {
+            SOURCE_FORM
+        };
+        if input.peek(Ident) && input.peek2(syn::token::Paren) {
+            let keyword: Ident = input.parse()?;
+            let content;
+            syn::parenthesized!(content in input);
+            if keyword == "file" {
+                let path: LitStr = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("`file(…)` takes one path"));
+                }
+                return Ok(Self::File(path));
+            }
+            if keyword == "bulk" && !bulk {
+                let source = Self::parse_text(&content, true)?;
+                if !content.is_empty() {
+                    return Err(content.error("`bulk(…)` takes one operation"));
+                }
+                return Ok(Self::Bulk(Box::new(source)));
+            }
+            return Err(syn::Error::new(keyword.span(), expected));
+        }
+        input
+            .parse()
+            .map(Self::Literal)
+            .map_err(|error| syn::Error::new(error.span(), expected))
+    }
+
+    /// The text, and whether it is a bulk operation.
+    fn text(&self) -> (&Self, bool) {
+        match self {
+            Self::Bulk(source) => (source, true),
+            other => (other, false),
+        }
+    }
 }
 
 impl Parse for Source {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        if input.peek(Ident) && input.peek2(syn::token::Paren) {
-            let keyword: Ident = input.parse()?;
-            if keyword != "file" {
-                return Err(syn::Error::new(
-                    keyword.span(),
-                    "expected the GraphQL operation as a string literal, or `file(\"path.graphql\")`",
-                ));
-            }
-            let content;
-            syn::parenthesized!(content in input);
-            let path: LitStr = content.parse()?;
-            if !content.is_empty() {
-                return Err(content.error("`file(…)` takes one path"));
-            }
-            return Ok(Self::File(path));
-        }
-        input.parse().map(Self::Literal).map_err(|error| {
-            syn::Error::new(
-                error.span(),
-                "expected the GraphQL operation as a string literal, or `file(\"path.graphql\")`",
-            )
-        })
+        Self::parse_text(input, false)
     }
 }
 
@@ -181,6 +212,7 @@ struct Text {
 impl Text {
     fn read(source: &Source) -> syn::Result<Self> {
         match source {
+            Source::Bulk(source) => Self::read(source),
             Source::Literal(query) => Ok(Self {
                 query: query.clone(),
                 file: None,
@@ -341,23 +373,44 @@ impl LoadedSchema {
 
     /// Checks an operation, pointing a refusal at its text.
     fn check(&self, text: &Text) -> syn::Result<Operation> {
-        analyze(self.schema(), &text.query.value()).map_err(|error| {
-            let file = match &text.file {
-                Some(file) => {
-                    let relative = manifest_dir()
-                        .and_then(|dir| file.strip_prefix(dir).ok().map(Path::to_path_buf));
-                    format!(" in {}", relative.as_deref().unwrap_or(file).display())
-                }
-                None => String::new(),
-            };
-            syn::Error::new(
-                text.span(),
-                format!(
-                    "{error}{file}\n(checked against the Shopify Admin API {})",
-                    self.schema().api_version
-                ),
-            )
-        })
+        analyze(self.schema(), &text.query.value()).map_err(|error| self.text_error(text, error))
+    }
+
+    /// A refusal of an operation, at its text.
+    fn text_error(&self, text: &Text, error: impl std::fmt::Display) -> syn::Error {
+        let file = match &text.file {
+            Some(file) => {
+                let relative = manifest_dir()
+                    .and_then(|dir| file.strip_prefix(dir).ok().map(Path::to_path_buf));
+                format!(" in {}", relative.as_deref().unwrap_or(file).display())
+            }
+            None => String::new(),
+        };
+        syn::Error::new(
+            text.span(),
+            format!(
+                "{error}{file}\n(checked against the Shopify Admin API {})",
+                self.schema().api_version
+            ),
+        )
+    }
+
+    /// Checks a bulk operation: what `check` checks, then Shopify's bulk rules.
+    fn check_bulk(&self, text: &Text) -> syn::Result<(Operation, Option<BulkQuery>)> {
+        let operation = self.check(text)?;
+        let source = text.query.value();
+        let bulk = match operation.kind {
+            OperationKind::Query => Some(
+                analyze_bulk_query(self.schema(), &source, &operation)
+                    .map_err(|error| self.text_error(text, error))?,
+            ),
+            OperationKind::Mutation => {
+                check_bulk_mutation(self.schema(), &source, &operation)
+                    .map_err(|error| self.text_error(text, error))?;
+                None
+            }
+        };
+        Ok((operation, bulk))
     }
 }
 
@@ -406,21 +459,94 @@ fn kind(operation: &Operation, krate: &TokenStream) -> TokenStream {
     }
 }
 
-/// `Operation::<Data>::new(…)` for the checked operation.
-fn constructor(
-    schema: &Schema,
-    operation: &Operation,
-    query: &TokenStream,
-    krate: &TokenStream,
-) -> TokenStream {
-    let data = format_ident!("{}", DATA_TYPE);
-    let kind = kind(operation, krate);
-    let api_version = &schema.api_version;
-    let name = match &operation.name {
-        Some(name) => quote!(::core::option::Option::Some(#name)),
-        None => quote!(::core::option::Option::None),
-    };
-    quote!(#krate::Operation::<#data>::__checked(#query, #kind, #name, #api_version))
+/// What `graphql!` builds from a checked operation.
+enum Flavor {
+    /// An `Operation<Data>`.
+    Plain,
+    /// A `BulkQuery<Item>`.
+    BulkQuery(Box<BulkQuery>),
+    /// A `BulkMutation<Data>`: the variables of one line.
+    BulkMutation,
+}
+
+impl Flavor {
+    fn of(schema: &LoadedSchema, source: &Source, text: &Text) -> syn::Result<(Operation, Self)> {
+        if !source.text().1 {
+            return Ok((schema.check(text)?, Self::Plain));
+        }
+        let (operation, bulk) = schema.check_bulk(text)?;
+        let flavor = match bulk {
+            Some(bulk) => Self::BulkQuery(Box::new(bulk)),
+            None => Self::BulkMutation,
+        };
+        Ok((operation, flavor))
+    }
+
+    /// The type built.
+    fn target(&self, krate: &TokenStream) -> TokenStream {
+        let data = format_ident!("{}", DATA_TYPE);
+        let item = format_ident!("{}", ITEM_TYPE);
+        match self {
+            Self::Plain => quote!(#krate::Operation<#data>),
+            Self::BulkQuery(_) => quote!(#krate::bulk::BulkQuery<#item>),
+            Self::BulkMutation => quote!(#krate::bulk::BulkMutation<#data>),
+        }
+    }
+
+    /// What runs it, for the documentation.
+    fn runner(&self) -> &'static str {
+        match self {
+            Self::Plain => "`Shopify::execute`",
+            Self::BulkQuery(_) => "`Shopify::bulk_query`",
+            Self::BulkMutation => "`Shopify::bulk_mutation`, one per line,",
+        }
+    }
+
+    /// The result types, and what a bulk query needs to run.
+    fn types(&self, schema: &Schema, operation: &Operation, krate: &TokenStream) -> TokenStream {
+        match self {
+            Self::BulkQuery(bulk) => query_items(schema, operation, bulk, krate),
+            Self::Plain | Self::BulkMutation => data_types(operation, krate),
+        }
+    }
+
+    /// The checked operation, without its variables.
+    fn constructor(
+        &self,
+        schema: &Schema,
+        operation: &Operation,
+        query: &TokenStream,
+        krate: &TokenStream,
+    ) -> TokenStream {
+        let data = format_ident!("{}", DATA_TYPE);
+        let item = format_ident!("{}", ITEM_TYPE);
+        let api_version = &schema.api_version;
+        let name = match &operation.name {
+            Some(name) => quote!(::core::option::Option::Some(#name)),
+            None => quote!(::core::option::Option::None),
+        };
+        match self {
+            Self::Plain => {
+                let kind = kind(operation, krate);
+                quote!(#krate::Operation::<#data>::__checked(#query, #kind, #name, #api_version))
+            }
+            Self::BulkQuery(_) => {
+                let template = template_ident();
+                quote!(#krate::bulk::BulkQuery::<#item>::__checked(&#template, #query, #name, #api_version))
+            }
+            Self::BulkMutation => {
+                quote!(#krate::bulk::BulkMutation::<#data>::__checked(#query, #name, #api_version))
+            }
+        }
+    }
+
+    /// The method that sets a variable converted by `IntoVariable`.
+    fn converting_setter(&self) -> Ident {
+        match self {
+            Self::Plain => format_ident!("variable"),
+            Self::BulkQuery(_) | Self::BulkMutation => format_ident!("__converted_variable"),
+        }
+    }
 }
 
 /// `graphql!("…", name = value)`: the operation as a value.
@@ -431,7 +557,7 @@ fn expand_expression(
 ) -> syn::Result<TokenStream> {
     let krate = quote!(::shopify_api);
     let text = Text::read(source)?;
-    let operation = schema.check(&text)?;
+    let (operation, flavor) = Flavor::of(schema, source, &text)?;
 
     // Each value with the variable it is for.
     let mut given: Vec<(&Variable, &Value)> = Vec::new();
@@ -486,6 +612,7 @@ fn expand_expression(
     // declares the types of the operation: they cannot name them.
     let mut literals = Literals::new(schema.schema(), krate.clone());
     let mut setters = Vec::new();
+    let converting = flavor.converting_setter();
     for (declared, value) in &given {
         let key = &declared.name;
         match literals
@@ -494,7 +621,9 @@ fn expand_expression(
         {
             VariableValue::Converted { ty, value } => {
                 let tokens = literal::argument(&value);
-                setters.push(quote_spanned!(value.span=> .variable::<#ty, _>(#key, #tokens)));
+                let mut method = converting.clone();
+                method.set_span(value.span);
+                setters.push(quote_spanned!(value.span=> .#method::<#ty, _>(#key, #tokens)));
             }
             VariableValue::Literal(code) => {
                 setters.push(quote!(.__literal_variable(#key, #code)));
@@ -506,9 +635,9 @@ fn expand_expression(
     let tracking = schema.tracking();
     let file = text.tracking();
     let warnings = deprecation_warnings(schema.schema(), &operation, &text);
-    let types = data_types(&operation, &krate);
+    let types = flavor.types(schema.schema(), &operation, &krate);
     let query = &text.query;
-    let constructor = constructor(schema.schema(), &operation, &quote!(#query), &krate);
+    let constructor = flavor.constructor(schema.schema(), &operation, &quote!(#query), &krate);
     Ok(quote! {
         ({
             #tracking
@@ -532,24 +661,37 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
     } = module;
     let krate = quote!(::shopify_api);
     let text = Text::read(source)?;
-    let operation = schema.check(&text)?;
-    let data = format_ident!("{}", DATA_TYPE);
-    let constructor = constructor(schema.schema(), &operation, &quote!(QUERY), &krate);
+    let (operation, flavor) = Flavor::of(schema, source, &text)?;
+    let target = flavor.target(&krate);
+    let constructor = flavor.constructor(schema.schema(), &operation, &quote!(QUERY), &krate);
     let variables = if operation.variables.is_empty() {
+        let doc = format!(
+            " The operation, for {}.",
+            flavor.runner().trim_end_matches(',')
+        );
         quote! {
-            /// The operation, for `Shopify::execute`.
-            pub fn operation() -> #krate::Operation<#data> {
+            #[doc = #doc]
+            pub fn operation() -> #target {
                 #constructor
             }
         }
-    } else {
+    } else if matches!(flavor, Flavor::Plain) {
         variables_types(schema.schema(), &operation, &krate, &constructor)
+    } else {
+        variables_types_for(
+            schema.schema(),
+            &operation,
+            &krate,
+            &constructor,
+            &target,
+            flavor.runner(),
+        )
     };
 
     let tracking = schema.tracking();
     let file = text.tracking();
     let warnings = deprecation_warnings(schema.schema(), &operation, &text);
-    let types = data_types(&operation, &krate);
+    let types = flavor.types(schema.schema(), &operation, &krate);
     let query = &text.query;
     let api_version = &schema.schema().api_version;
     let operation_name = match &operation.name {
@@ -779,16 +921,43 @@ mod tests {
             assert!(matches!(modules[2].visibility, Visibility::Inherited));
         }
 
+        // `bulk(…)` around either source, in both forms.
+        let Input::Expression {
+            source: Source::Bulk(inner),
+            variables,
+        } = syn::parse_str::<Input>(r#"bulk("{ shop { name } }"), first = 1"#).unwrap()
+        else {
+            panic!("a bulk expression");
+        };
+        assert!(matches!(*inner, Source::Literal(_)));
+        assert_eq!(variables.len(), 1);
+        let Input::Modules(modules) = syn::parse_str::<Input>(
+            r#"pub mod a = bulk(file("a.graphql")); mod b = bulk("{ shop { id } }");"#,
+        )
+        .unwrap() else {
+            panic!("modules");
+        };
+        assert!(
+            matches!(&modules[0].source, Source::Bulk(inner) if matches!(**inner, Source::File(_)))
+        );
+        assert!(
+            matches!(&modules[1].source, Source::Bulk(inner) if matches!(**inner, Source::Literal(_)))
+        );
+
         for (source, message) in [
-            (
-                "first = 1",
-                "expected the GraphQL operation as a string literal, or `file(\"path.graphql\")`",
-            ),
-            (
-                r#"path("x.graphql")"#,
-                "expected the GraphQL operation as a string literal, or `file(\"path.graphql\")`",
-            ),
+            ("first = 1", SOURCE_FORM),
+            (r#"path("x.graphql")"#, SOURCE_FORM),
             (r#"file("a", "b")"#, "`file(…)` takes one path"),
+            (
+                r#"bulk(bulk("{ shop { id } }"))"#,
+                "`bulk(…)` takes the operation as a string literal or `file(\"path.graphql\")`",
+            ),
+            (
+                "bulk(1)",
+                "`bulk(…)` takes the operation as a string literal or `file(\"path.graphql\")`",
+            ),
+            (r#"bulk("a", "b")"#, "`bulk(…)` takes one operation"),
+            (r#"bulk(file("a", "b"))"#, "`file(…)` takes one path"),
             (
                 r#""{ shop { name } }", 1"#,
                 "expected a variable: `name = value`",
