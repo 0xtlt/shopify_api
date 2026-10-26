@@ -178,7 +178,7 @@ fn warn_mismatch(pinned: ApiVersion, checked: &'static str) {
 /// [`max_retry_after`](Self::max_retry_after) (five minutes by default) is not
 /// waited for: the request ends in [`Error::Throttled`](crate::Error::Throttled),
 /// with the wait Shopify asked for in its `retry_after`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RetryPolicy {
     max_retries: u32,
     base_delay: Duration,

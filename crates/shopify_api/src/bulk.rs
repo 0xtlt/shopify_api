@@ -399,7 +399,7 @@ fn user_errors(errors: &impl Serialize) -> Result<Vec<UserError>> {
 }
 
 /// How [`Shopify::wait_for_bulk_operation`] polls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BulkWaitOptions {
     first_poll: Duration,
     poll_interval: Duration,
