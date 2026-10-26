@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-rc.1 (2026-10-26)
+
+The release candidate of 1.0.0: everything under 1.0.0 below. Cargo only
+takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
+
 ## 1.0.0 (Unreleased)
 
 A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
