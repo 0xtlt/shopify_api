@@ -105,6 +105,11 @@ for node in data.nodes.iter().flatten() {
 The types derive `Debug`, `Clone`, `PartialEq`, `Serialize` and
 `Deserialize`; they serialize under the names of the GraphQL fields.
 
+The generated types, these and the `Variables` of a module, may derive more
+traits in a 1.x release (`Default`, `Eq`, `Hash`…). Do not implement standard
+or serde traits for them yourself: such an impl would conflict with the
+derive then. Convert to your own types for traits of your own choosing.
+
 The types of an inline operation have no name you can write: let inference
 carry them, convert them to your own types, or use a [module](#named-operations).
 
