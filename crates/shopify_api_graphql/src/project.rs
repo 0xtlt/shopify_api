@@ -402,7 +402,9 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
 
 /// The schema of the crate in `dir`, read with `read`, after downloading it
 /// when [`schema_plan`] says so. `primary` is whether cargo was asked to
-/// build this crate, rather than build it as a dependency.
+/// build this crate, rather than build it as a dependency. `on_download`
+/// is called with the file and the version before each download, to show
+/// progress.
 ///
 /// A download is tried once per file and version in a process: when it
 /// fails, the next operations of the build fail at once with the same error.
@@ -414,8 +416,10 @@ pub fn project_schema<S: AsRef<crate::Schema>>(
     primary: bool,
     now: SystemTime,
     read: impl Fn(&Path) -> Result<S, String>,
+    on_download: impl Fn(&Path, &str),
 ) -> Result<S, String> {
     obtain_schema(dir, pinned, primary, now, read, |path, version| {
+        on_download(path, version);
         download_schema_file(path, version).map(drop)
     })
 }

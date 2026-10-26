@@ -292,8 +292,19 @@ fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
             match schema_source(package_root().as_deref(), named.as_deref())? {
                 SchemaSource::File(path) => path,
                 SchemaSource::Project { dir, path, pinned } => {
-                    let schema =
-                        project_schema(&dir, pinned.as_deref(), true, SystemTime::now(), read)?;
+                    let schema = project_schema(
+                        &dir,
+                        pinned.as_deref(),
+                        true,
+                        SystemTime::now(),
+                        read,
+                        |file, version| {
+                            eprintln!(
+                                "Downloading the Admin schema {version} into {}…",
+                                file.display()
+                            );
+                        },
+                    )?;
                     return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
                 }
             }

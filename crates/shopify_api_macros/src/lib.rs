@@ -259,8 +259,15 @@ impl LoadedSchema {
                 let read = |path: &Path| {
                     read_schema(path).map_err(|error| format!("`{}`: {error}", path.display()))
                 };
-                let schema =
-                    project_schema(&dir, pinned.as_deref(), primary, SystemTime::now(), read)?;
+                // A proc macro has no progress to show.
+                let schema = project_schema(
+                    &dir,
+                    pinned.as_deref(),
+                    primary,
+                    SystemTime::now(),
+                    read,
+                    |_, _| {},
+                )?;
                 (path, schema)
             }
         };
