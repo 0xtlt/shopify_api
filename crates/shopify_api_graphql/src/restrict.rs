@@ -181,7 +181,7 @@ impl Used {
                     fields: kept(fields, &mut pending),
                     possible_types: possible_types.clone(),
                 },
-                TypeDef::Input { fields } => {
+                TypeDef::Input { fields, .. } => {
                     pending.extend(
                         fields
                             .values()

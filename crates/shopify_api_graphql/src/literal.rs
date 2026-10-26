@@ -261,8 +261,8 @@ impl<'a> Literals<'a> {
         object: &Object,
     ) -> Result<TokenStream, Error> {
         let schema = self.schema;
-        let fields = match schema.get(name) {
-            Some(TypeDef::Input { fields }) => fields,
+        let (fields, one_of) = match schema.get(name) {
+            Some(TypeDef::Input { fields, one_of }) => (fields, *one_of),
             Some(other) => {
                 return error(
                     span,
@@ -288,7 +288,7 @@ impl<'a> Literals<'a> {
             }
         };
         let mut build = Build::default();
-        let body = self.object(name, fields, object, &mut build)?;
+        let body = self.object(name, fields, one_of, object, &mut build)?;
         let json = build.finish(body, &self.krate);
         let krate = &self.krate;
         let id = input_object_id(name);
@@ -332,7 +332,7 @@ impl<'a> Literals<'a> {
                 None => self.expression(&ident_expr(ident), ty, site, place, build),
             },
             Value::Object(object) => match self.input_fields(inner) {
-                Some((name, fields)) => self.object(name, fields, object, build),
+                Some((name, fields, one_of)) => self.object(name, fields, one_of, object, build),
                 None => error(
                     object.span,
                     format!("{site} expects {}, not an object", self.what(ty)),
@@ -397,14 +397,23 @@ impl<'a> Literals<'a> {
         }
     }
 
-    /// The fields of an object literal, for the input object `name`.
+    /// The fields of an object literal, for the input object `name`, a
+    /// `@oneOf` one when `one_of`.
     fn object(
         &mut self,
         name: &str,
         definitions: &BTreeMap<String, InputValue>,
+        one_of: bool,
         object: &Object,
         build: &mut Build,
     ) -> Result<TokenStream, Error> {
+        let one_of_rule = || {
+            let fields: Vec<String> = definitions.keys().map(|key| format!("`{key}`")).collect();
+            format!(
+                "`{name}` is a oneOf input: give exactly one of {}, not null",
+                join(&fields, "or")
+            )
+        };
         let mut given: Vec<&str> = Vec::new();
         let mut fields = Vec::new();
         for field in &object.fields {
@@ -423,6 +432,23 @@ impl<'a> Literals<'a> {
                     field.name_span,
                     format!("The field `{key}` of `{name}` is given twice"),
                 );
+            }
+            if one_of {
+                if let Some(first) = given.first() {
+                    return error(
+                        field.name_span,
+                        format!("{}: `{first}` is given already", one_of_rule()),
+                    );
+                }
+                if let Some(question) = field.optional {
+                    return error(
+                        question,
+                        format!("{}: write `{key}: …`, not `{key}?:`", one_of_rule()),
+                    );
+                }
+                if let Value::Null(span) = field.value {
+                    return error(span, format!("{}: `{key}: null` is not one", one_of_rule()));
+                }
             }
             given.push(key);
             if let Some(reason) = &definition.deprecation {
@@ -451,12 +477,20 @@ impl<'a> Literals<'a> {
                     quote!(literal::Optional(#key, #value))
                 }
                 None => {
-                    let value =
-                        self.value(&field.value, &definition.ty, &site, Place::Field, build)?;
+                    // The field of a oneOf input is nullable in the schema, and
+                    // takes a value that is not null.
+                    let ty = match one_of {
+                        true => TypeRef::NonNull(Box::new(definition.ty.nullable().clone())),
+                        false => definition.ty.clone(),
+                    };
+                    let value = self.value(&field.value, &ty, &site, Place::Field, build)?;
                     quote!(literal::Field(#key, #value))
                 }
             };
             fields.push(code);
+        }
+        if one_of && given.is_empty() {
+            return error(object.span, one_of_rule());
         }
         let missing: Vec<String> = definitions
             .iter()
@@ -884,13 +918,17 @@ impl<'a> Literals<'a> {
         }
     }
 
-    fn input_fields(&self, ty: &TypeRef) -> Option<(&'a str, &'a BTreeMap<String, InputValue>)> {
+    /// The name, the fields and whether it is `@oneOf`, of an input object.
+    fn input_fields(
+        &self,
+        ty: &TypeRef,
+    ) -> Option<(&'a str, &'a BTreeMap<String, InputValue>, bool)> {
         let schema = self.schema;
         match ty {
             TypeRef::Named(name) => match schema.get(name) {
-                Some(TypeDef::Input { fields }) => {
+                Some(TypeDef::Input { fields, one_of }) => {
                     let (name, _) = schema.types.get_key_value(name)?;
-                    Some((name.as_str(), fields))
+                    Some((name.as_str(), fields, *one_of))
                 }
                 _ => None,
             },
@@ -1289,7 +1327,7 @@ fn unraw(ident: &Ident) -> String {
 }
 
 /// `a`, `a and b`, `a, b and c`.
-fn join(items: &[String], last: &str) -> String {
+pub(crate) fn join(items: &[String], last: &str) -> String {
     match items {
         [] => String::new(),
         [one] => one.clone(),

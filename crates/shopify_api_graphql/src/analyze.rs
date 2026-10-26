@@ -1192,6 +1192,43 @@ impl<'a> Analyzer<'a> {
         Ok(variable)
     }
 
+    /// The rule of a `@oneOf` input object: exactly one field, whose value is
+    /// not `null`, nor a variable that may be.
+    fn check_one_of(
+        &mut self,
+        named: &str,
+        fields: &BTreeMap<String, InputValue>,
+        given: &BTreeMap<String, Value<'a>>,
+        place: &str,
+        position: Pos,
+    ) -> Result<()> {
+        let names: Vec<String> = fields.keys().map(|key| format!("`{key}`")).collect();
+        let rule = format!(
+            "`{named}` is a oneOf input: give exactly one of {}, not null (in {place})",
+            crate::literal::join(&names, "or")
+        );
+        let mut entries = given.iter();
+        let (Some((name, value)), None) = (entries.next(), entries.next()) else {
+            return error_at(position, rule);
+        };
+        match value {
+            ast::Value::Null => error_at(position, format!("{rule}: `{name}: null` is not one")),
+            ast::Value::Variable(variable) => {
+                let ty = self.variable(variable, position)?.ty.clone();
+                if ty.is_non_null() {
+                    return Ok(());
+                }
+                error_at(
+                    position,
+                    format!(
+                        "{rule}: `${variable}` is of type `{ty}`, which may be null; declare it `{ty}!`"
+                    ),
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Checks a literal or a variable given where `expected` is wanted.
     fn check_value(
         &mut self,
@@ -1250,12 +1287,15 @@ impl<'a> Analyzer<'a> {
             }
             ast::Value::Object(given) => {
                 let named = inner.name();
-                let Some(TypeDef::Input { fields }) = self.schema.get(named) else {
+                let Some(TypeDef::Input { fields, one_of }) = self.schema.get(named) else {
                     return error_at(
                         position,
                         format!("An object is given for {place}, of type `{}`", expected.ty),
                     );
                 };
+                if *one_of {
+                    self.check_one_of(named, fields, given, place, position)?;
+                }
                 for (name, value) in given {
                     let Some(field) = fields.get(name) else {
                         return error_at(

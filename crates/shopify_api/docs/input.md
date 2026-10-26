@@ -40,7 +40,8 @@ async fn set_colors(shopify: &Shopify, rows: &[Row]) -> shopify_api::Result<()> 
 compile error, with the closest input object. The fields follow the rules of
 the [literals of `graphql!`](crate::graphql!#input-values): GraphQL names, every
 required field, `?:` for a field that may be left out, enum values bare or
-`raw(…)`, nested objects and lists, `[for … => …]`.
+`raw(…)`, nested objects and lists, `[for … => …]`. A `@oneOf` input object
+takes exactly one field, not `null`: `input!(ProductSetIdentifiers { handle: "shirt" })`.
 
 A value of another input type is refused where one is expected, with a
 message that names the place and the GraphQL type it expects:

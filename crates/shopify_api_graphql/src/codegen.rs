@@ -251,7 +251,7 @@ pub fn deprecation_warning(span: Span, note: &str) -> TokenStream {
 
 /// The input objects a value of input type `name` may hold, `name` included.
 fn reachable_inputs<'a>(schema: &'a Schema, name: &'a str, found: &mut BTreeSet<&'a str>) {
-    if let Some(TypeDef::Input { fields }) = schema.get(name)
+    if let Some(TypeDef::Input { fields, .. }) = schema.get(name)
         && found.insert(name)
     {
         for field in fields.values() {

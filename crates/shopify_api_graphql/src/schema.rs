@@ -12,6 +12,7 @@ use serde_json::Value;
 ///
 /// It asks for deprecated fields, arguments, input fields and enum values
 /// too: an operation may still use them, and `graphql!` warns when it does.
+/// `isOneOf` marks the input objects that take exactly one field.
 pub const INTROSPECTION_QUERY: &str = "\
 query IntrospectionQuery {
   __schema {
@@ -28,6 +29,7 @@ query IntrospectionQuery {
         deprecationReason
       }
       inputFields(includeDeprecated: true) { ...InputValue }
+      isOneOf
       interfaces { name }
       enumValues(includeDeprecated: true) { name isDeprecated deprecationReason }
       possibleTypes { name }
@@ -54,7 +56,7 @@ fragment TypeRef on __Type {
 ";
 
 /// The version of the stored form written by [`Schema::to_json`].
-pub(crate) const FORMAT: u32 = 1;
+pub(crate) const FORMAT: u32 = 2;
 
 /// The reason GraphQL gives when a deprecation has none.
 const NO_REASON: &str = "No longer supported";
@@ -223,6 +225,9 @@ pub enum TypeDef {
     },
     Input {
         fields: BTreeMap<String, InputValue>,
+        /// A `@oneOf` input object: a value gives exactly one of its fields,
+        /// not `null`.
+        one_of: bool,
     },
 }
 
@@ -337,13 +342,17 @@ enum StoredEnum {
     WithDeprecations { v: Vec<String>, d: Deprecations },
 }
 
-/// `{ "id": "ID!" }`, or `{ "f": { … }, "d": { "id": "reason" } }`.
+/// `{ "id": "ID!" }`, or `{ "f": { … }, "d": { "id": "reason" } }`, with
+/// `"o": true` for a `@oneOf` input object.
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum StoredInput {
-    WithDeprecations {
+    Detailed {
         f: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         d: Deprecations,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        o: bool,
     },
     Plain(BTreeMap<String, String>),
 }
@@ -530,9 +539,11 @@ impl Schema {
                     StoredType::Union(possible_types) => TypeDef::Union { possible_types },
                     StoredType::Input(StoredInput::Plain(fields)) => TypeDef::Input {
                         fields: load_inputs(&name, fields, &Deprecations::new())?,
+                        one_of: false,
                     },
-                    StoredType::Input(StoredInput::WithDeprecations { f, d }) => TypeDef::Input {
+                    StoredType::Input(StoredInput::Detailed { f, d, o }) => TypeDef::Input {
                         fields: load_inputs(&name, f, &d)?,
+                        one_of: o,
                     },
                 };
                 Ok((name, definition))
@@ -608,7 +619,7 @@ impl Schema {
                         })
                     }
                     TypeDef::Union { possible_types } => StoredType::Union(possible_types.clone()),
-                    TypeDef::Input { fields } => {
+                    TypeDef::Input { fields, one_of } => {
                         let stored = fields
                             .iter()
                             .map(|(name, value)| (name.clone(), store_input(value)))
@@ -619,12 +630,13 @@ impl Schema {
                                 Some((name.clone(), value.deprecation.clone()?))
                             })
                             .collect();
-                        StoredType::Input(if deprecated.is_empty() {
+                        StoredType::Input(if deprecated.is_empty() && !one_of {
                             StoredInput::Plain(stored)
                         } else {
-                            StoredInput::WithDeprecations {
+                            StoredInput::Detailed {
                                 f: stored,
                                 d: deprecated,
+                                o: *one_of,
                             }
                         })
                     }
@@ -749,6 +761,7 @@ impl Schema {
                 },
                 "INPUT_OBJECT" => TypeDef::Input {
                     fields: introspected_inputs(entry.get("inputFields"))?,
+                    one_of: entry.get("isOneOf").and_then(Value::as_bool) == Some(true),
                 },
                 other => {
                     return Err(schema_error(format!(
@@ -968,6 +981,10 @@ mod tests {
                         "deprecationReason": "Use `notes`.",
                     },
                 ] },
+                { "kind": "INPUT_OBJECT", "name": "OrderKey", "isOneOf": true, "inputFields": [
+                    { "name": "id", "type": named("SCALAR", "ID"), "defaultValue": null },
+                    { "name": "name", "type": named("SCALAR", "String"), "defaultValue": null },
+                ] },
                 { "kind": "SCALAR", "name": "ID" },
                 { "kind": "OBJECT", "name": "__Type", "interfaces": [], "fields": [] },
             ],
@@ -1005,12 +1022,30 @@ mod tests {
             Some("No longer supported")
         );
 
-        let Some(TypeDef::Input { fields }) = schema.get("OrderInput") else {
+        let Some(TypeDef::Input { fields, one_of }) = schema.get("OrderInput") else {
             panic!("OrderInput is an input object");
         };
         assert!(fields["id"].is_required());
         assert!(!fields["tags"].is_required());
         assert_eq!(fields["note"].deprecation.as_deref(), Some("Use `notes`."));
+        assert!(!one_of);
+        assert_eq!(
+            schema.get("OrderKey"),
+            Some(&TypeDef::Input {
+                fields: [
+                    (
+                        "id".to_string(),
+                        InputValue::of(TypeRef::Named("ID".to_string()))
+                    ),
+                    (
+                        "name".to_string(),
+                        InputValue::of(TypeRef::Named("String".to_string()))
+                    ),
+                ]
+                .into(),
+                one_of: true,
+            })
+        );
 
         assert_eq!(schema.possible_types("Node"), ["Order"]);
         assert_eq!(schema.possible_types("Resource"), ["Order"]);
@@ -1031,7 +1066,10 @@ mod tests {
         let json = schema.to_json();
 
         assert_eq!(Schema::from_json(&json).unwrap(), schema);
-        assert!(json.starts_with("{\"format\":1,\"apiVersion\":\"2026-10\","));
+        assert!(json.starts_with("{\"format\":2,\"apiVersion\":\"2026-10\","));
+        assert!(json.contains(
+            "\n\"OrderKey\":{\"i\":{\"f\":{\"id\":\"ID\",\"name\":\"String\"},\"o\":true}},\n"
+        ));
         // One type per line, in name order.
         assert!(json.contains(
             "\n\"Order\":{\"o\":{\"f\":{\"id\":\"ID!\",\"legacyName\":\"String\"},\"t\":[\"Node\"],\"d\":{\"legacyName\":\"No longer supported\"}}},\n"
@@ -1125,12 +1163,12 @@ mod tests {
         assert_eq!(
             Schema::from_json(r#"{"format":9,"apiVersion":"2026-10","query":"Q","types":{}}"#),
             Err(SchemaError(
-                "Unsupported schema file format 9, this version reads format 1".to_string()
+                "Unsupported schema file format 9, this version reads format 2".to_string()
             ))
         );
         assert_eq!(
             Schema::from_json(
-                r#"{"format":1,"apiVersion":"2026-10","query":"Q","types":{"Q":{"o":{"f":{"a":"[Int"}}}}}"#
+                r#"{"format":2,"apiVersion":"2026-10","query":"Q","types":{"Q":{"o":{"f":{"a":"[Int"}}}}}"#
             ),
             Err(SchemaError("Invalid type \"[Int\" for Q.a".to_string()))
         );

@@ -254,6 +254,37 @@ fn refuses_an_input_field_given_twice() {
     );
 }
 
+#[test]
+fn a_one_of_input_takes_exactly_one_field_not_null() {
+    let rule = "`ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null (in argument `identifier` of `Mutation.productSet`)";
+    let operation = |identifier: &str| {
+        format!(
+            "mutation($id: ID, $handle: String!) {{ productSet(identifier: {identifier}, input: {{}}) {{ product {{ id }} }} }}"
+        )
+    };
+    let refused = |identifier: &str| refusal(&operation(identifier));
+    assert!(refused("{}").starts_with(rule), "{}", refused("{}"));
+    assert!(
+        refused(r#"{id: "1", handle: "a"}"#).starts_with(rule),
+        "{}",
+        refused(r#"{id: "1", handle: "a"}"#)
+    );
+    let null = refused("{id: null}");
+    assert!(
+        null.starts_with(&format!("{rule}: `id: null` is not one")),
+        "{null}"
+    );
+    let nullable = refused("{id: $id}");
+    assert!(
+        nullable.starts_with(&format!(
+            "{rule}: `$id` is of type `ID`, which may be null; declare it `ID!`"
+        )),
+        "{nullable}"
+    );
+    check(r#"mutation { productSet(identifier: {handle: "a"}, input: {}) { product { id } } }"#);
+    check(&operation("{handle: $handle}").replace("$id: ID, ", ""));
+}
+
 /// Only a default other than `null` lets a nullable variable fill a non-null place.
 #[test]
 fn refuses_a_null_default_for_a_non_null_place() {

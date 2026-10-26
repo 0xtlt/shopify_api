@@ -32,6 +32,7 @@ query IntrospectionQuery {
         deprecationReason
       }
       inputFields(includeDeprecated: true) { ...InputValue }
+      isOneOf
       interfaces { name }
       enumValues(includeDeprecated: true) { name isDeprecated deprecationReason }
       possibleTypes { name }

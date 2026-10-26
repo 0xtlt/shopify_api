@@ -192,6 +192,13 @@ object or a list where the type wants another form are compile errors that
 point at the token. A deprecated field or enum value is a warning that gives
 Shopify's reason.
 
+A `@oneOf` input object, such as `ProductSetIdentifiers`, takes exactly one
+of its fields, written `field: value`, with a value that is not `null`:
+`{ handle: "shirt" }`. No field, two fields, `field: null` and `field?: …`
+are compile errors at the token, which list the fields to choose from. In
+the text of an operation the same holds, and a variable given to such a field
+must be non-null (`$handle: String!`).
+
 A field is written one of four ways:
 
 | Field | Sends |

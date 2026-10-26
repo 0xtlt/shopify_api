@@ -478,7 +478,7 @@ fn input_object_ids_differ_for_every_input_object_of_the_schema() {
 #[test]
 fn each_expression_is_checked_for_its_scalar() {
     let schema = Schema::from_json(
-        r#"{"format": 1, "apiVersion": "2026-10", "query": "Q", "types": {
+        r#"{"format": 2, "apiVersion": "2026-10", "query": "Q", "types": {
             "String": "s", "Int": "s", "Float": "s", "Boolean": "s", "JSON": "s",
             "T": {"i": {"i": "Int!", "f": "[Float]", "j": "JSON!", "jd": "JSON!=", "jl": "[JSON!]", "jn": "JSON", "s": "String"}},
             "Q": {"o": {"f": {"echo": ["String", {"input": "T!"}]}}}
@@ -574,7 +574,7 @@ fn integer_literals_outside_of_int_are_refused() {
         message("`$first`")
     );
     let schema = Schema::from_json(
-        r#"{"format": 1, "apiVersion": "2026-10", "query": "Q", "types": {
+        r#"{"format": 2, "apiVersion": "2026-10", "query": "Q", "types": {
             "Int": "s", "String": "s",
             "T": {"i": {"l": "[Int!]", "m": "[[Int]]"}},
             "Q": {"o": {"f": {"echo": ["String", {"input": "T!"}]}}}
@@ -691,4 +691,46 @@ fn constants_are_written_in_place() {
         let (code, _) = input("DraftOrderLineItemInput", fields).unwrap();
         assert!(code.contains("Checks"), "{field}: {value}");
     }
+}
+
+#[test]
+fn a_one_of_input_takes_exactly_one_field_not_null() {
+    let rule = "`ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null";
+    let (code, _) = input("ProductSetIdentifiers", vec![("handle", rust("handle"))]).unwrap();
+    assert!(code.contains("\"handle\""), "{code}");
+    input(
+        "ProductSetIdentifiers",
+        vec![("id", rust("\"gid://shopify/Product/1\""))],
+    )
+    .unwrap();
+
+    assert_eq!(refusal("ProductSetIdentifiers", vec![]), rule);
+    assert_eq!(
+        refusal(
+            "ProductSetIdentifiers",
+            vec![("id", rust("id")), ("handle", rust("handle"))]
+        ),
+        format!("{rule}: `id` is given already")
+    );
+    assert_eq!(
+        refusal("ProductSetIdentifiers", vec![("handle?", rust("handle"))]),
+        format!("{rule}: write `handle: …`, not `handle?:`")
+    );
+    assert_eq!(
+        refusal("ProductSetIdentifiers", vec![("handle", null())]),
+        format!("{rule}: `handle: null` is not one")
+    );
+    // The value of the field is checked as non-null: no `Option` nor `Maybe`.
+    let (_, items) = input("ProductSetIdentifiers", vec![("handle", rust("handle"))]).unwrap();
+    assert!(!items.contains("or an `Option` of it"), "{items}");
+
+    // Nested, and as the value of a variable.
+    let source = "mutation($identifier: ProductSetIdentifiers, $input: ProductSetInput!) { productSet(identifier: $identifier, input: $input) { product { id } } }";
+    let two = Value::Object(object(vec![("id", rust("id")), ("handle", rust("h"))]));
+    assert_eq!(
+        variable(source, two).unwrap_err(),
+        format!("{rule}: `id` is given already")
+    );
+    let one = Value::Object(object(vec![("id", rust("id"))]));
+    variable(source, one).unwrap();
 }

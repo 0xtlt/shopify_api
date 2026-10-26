@@ -1,4 +1,4 @@
-{"format":1,"apiVersion":"2026-10","query":"QueryRoot","mutation":"Mutation",
+{"format":2,"apiVersion":"2026-10","query":"QueryRoot","mutation":"Mutation",
 "directives":{"idempotent":{"l":["FIELD"],"a":{"key":"String!"}},"include":{"l":["FIELD","FRAGMENT_SPREAD","INLINE_FRAGMENT"],"a":{"if":"Boolean!"}},"skip":{"l":["FIELD","FRAGMENT_SPREAD","INLINE_FRAGMENT"],"a":{"if":"Boolean!"}}},"types":{
 "ApiVersion":{"o":{"f":{"handle":"String!"}}},
 "Boolean":"s",

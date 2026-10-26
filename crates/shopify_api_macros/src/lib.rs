@@ -648,7 +648,7 @@ pub fn __input_internal(input: proc_macro::TokenStream) -> proc_macro::TokenStre
 mod tests {
     use super::*;
 
-    const SCHEMA: &str = r#"{"format":1,"apiVersion":"2026-07","query":"QueryRoot","types":{
+    const SCHEMA: &str = r#"{"format":2,"apiVersion":"2026-07","query":"QueryRoot","types":{
 "QueryRoot":{"o":{"f":{"ping":"String"}}},
 "String":"s"
 }}"#;

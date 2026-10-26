@@ -7,7 +7,7 @@ error[E0277]: `vendor` of `ProductUpdateInput` expects a `String`, not `Option<S
   |                                                                                             `Option<String>` doesn't satisfy the trait bound
   |                                                                                             `String`, `&str`, `&String` or `Cow<str>`
   |
-  = help: the trait `__ShopifyApiExpect1_c2385860` is not implemented for `Option<String>`
+  = help: the trait `__ShopifyApiExpect1_c2385b33` is not implemented for `Option<String>`
   = note: `vendor?: value` takes an `Option`, `None` leaving the field out; `vendor: null` sends `null`
 note: required by a bound in `Checks::build`
  --> tests/ui/literal_option_in_field.rs:3:13
