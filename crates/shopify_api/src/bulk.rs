@@ -46,6 +46,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
@@ -84,8 +85,9 @@ pub struct BulkOperation {
     pub status: BulkOperationStatus,
     /// Why it failed: `ACCESS_DENIED`, `INTERNAL_SERVER_ERROR`, `TIMEOUT`.
     pub error_code: Option<String>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
+    pub created_at: DateTime<Utc>,
+    /// When it completed, failed or was canceled.
+    pub completed_at: Option<DateTime<Utc>>,
     /// The objects written so far, nested ones included.
     pub object_count: u64,
     /// The top-level objects written so far.
@@ -121,7 +123,9 @@ impl std::fmt::Debug for BulkOperation {
 }
 
 /// The status of a bulk operation. A status Shopify adds later is `Other`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// It serializes as Shopify writes it: `"COMPLETED"`, and `Other` as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BulkOperationStatus {
     Created,
@@ -149,6 +153,20 @@ impl BulkOperationStatus {
         }
     }
 
+    /// As Shopify writes it: `COMPLETED`.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Created => "CREATED",
+            Self::Running => "RUNNING",
+            Self::Completed => "COMPLETED",
+            Self::Canceling => "CANCELING",
+            Self::Canceled => "CANCELED",
+            Self::Failed => "FAILED",
+            Self::Expired => "EXPIRED",
+            Self::Other(other) => other,
+        }
+    }
+
     fn parse(value: &str) -> Self {
         match value {
             "CREATED" => Self::Created,
@@ -171,7 +189,10 @@ impl BulkOperationStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The type of a bulk operation. A type Shopify adds later is `Other`.
+///
+/// It serializes as Shopify writes it: `"QUERY"`, and `Other` as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BulkOperationType {
     Query,
@@ -180,6 +201,15 @@ pub enum BulkOperationType {
 }
 
 impl BulkOperationType {
+    /// As Shopify writes it: `QUERY`.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Query => "QUERY",
+            Self::Mutation => "MUTATION",
+            Self::Other(other) => other,
+        }
+    }
+
     fn parse(value: &str) -> Self {
         match value {
             "QUERY" => Self::Query,
@@ -188,6 +218,26 @@ impl BulkOperationType {
         }
     }
 }
+
+/// Serde as Shopify writes the enum: its text, an unknown one as `Other`.
+macro_rules! wire_serde {
+    ($($type:ty),*) => {$(
+        impl Serialize for $type {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $type {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+                let text = std::borrow::Cow::<str>::deserialize(deserializer)?;
+                Ok(Self::parse(&text))
+            }
+        }
+    )*};
+}
+
+wire_serde!(BulkOperationStatus, BulkOperationType);
 
 /// The selection every operation of this module makes on `BulkOperation`,
 /// as Shopify sends it.
@@ -199,8 +249,8 @@ struct Wire {
     kind: String,
     status: String,
     error_code: Option<String>,
-    created_at: String,
-    completed_at: Option<String>,
+    created_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
     object_count: String,
     root_object_count: String,
     file_size: Option<String>,
@@ -215,7 +265,7 @@ impl Wire {
             value
                 .parse::<u64>()
                 // The value is not shown: it is the answer's.
-                .map_err(|_| Error::Bulk(format!("`{field}` is not an unsigned integer")))
+                .map_err(|_| bulk_error(format!("`{field}` is not an unsigned integer")))
         };
         Ok(BulkOperation {
             object_count: number("objectCount", &self.object_count)?,
@@ -238,9 +288,17 @@ impl Wire {
     }
 }
 
+/// An [`Error::Bulk`] without an operation.
+pub(crate) fn bulk_error(message: impl Into<String>) -> Error {
+    Error::Bulk {
+        message: message.into(),
+        operation: None,
+    }
+}
+
 /// The ID of a bulk operation as an error shows it: a `gid://` of Shopify,
 /// else nothing of the text.
-fn shown_id(id: &str) -> &str {
+pub(crate) fn shown_id(id: &str) -> &str {
     let shown = id
         .strip_prefix("gid://shopify/BulkOperation/")
         .is_some_and(|number| {
@@ -249,26 +307,50 @@ fn shown_id(id: &str) -> &str {
     if shown { id } else { "[id not shown]" }
 }
 
+/// What `Debug` of an [`Error::Bulk`] shows of its operation: what its
+/// message shows.
+pub(crate) struct ShownOperation<'a>(pub &'a BulkOperation);
+
+impl std::fmt::Debug for ShownOperation<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BulkOperation")
+            .field("id", &shown_id(&self.0.id))
+            .field("status", &self.0.status.shown())
+            .field(
+                "error_code",
+                &self.0.error_code.as_deref().map(shown_error_code),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 /// The error of an operation that ended without completing.
-pub(crate) fn not_completed(operation: &BulkOperation) -> Error {
-    Error::Bulk(format!(
-        "the bulk operation {} ended {}{}",
-        shown_id(&operation.id),
-        operation.status.shown(),
-        operation
-            .error_code
-            .as_deref()
-            .map(|code| format!(" ({})", shown_error_code(code)))
-            .unwrap_or_default()
-    ))
+pub(crate) fn not_completed(operation: BulkOperation) -> Error {
+    Error::Bulk {
+        message: format!(
+            "the bulk operation {} ended {}{}",
+            shown_id(&operation.id),
+            operation.status.shown(),
+            operation
+                .error_code
+                .as_deref()
+                .map(|code| format!(" ({})", shown_error_code(code)))
+                .unwrap_or_default()
+        ),
+        operation: Some(Box::new(operation)),
+    }
 }
 
 /// The error of a wait that ran out.
 pub(crate) fn timed_out(id: &str, timeout: Duration) -> Error {
-    Error::Timeout(format!(
-        "the bulk operation {} did not end within {timeout:?}",
-        shown_id(id)
-    ))
+    Error::Timeout {
+        message: format!(
+            "the bulk operation {} did not end within {timeout:?}",
+            shown_id(id)
+        ),
+        id: Some(id.to_string()),
+    }
 }
 
 /// A `BulkOperationErrorCode` as an error shows it.
@@ -399,7 +481,7 @@ impl Shopify {
             .await?;
         let payload = data
             .bulk_operation_run_query
-            .ok_or_else(|| Error::Bulk("bulkOperationRunQuery returned nothing".to_string()))?;
+            .ok_or_else(|| bulk_error("bulkOperationRunQuery returned nothing".to_string()))?;
         started(
             "bulkOperationRunQuery",
             payload.bulk_operation,
@@ -489,7 +571,7 @@ impl Shopify {
             .await?;
         let payload = data
             .bulk_operation_run_mutation
-            .ok_or_else(|| Error::Bulk("bulkOperationRunMutation returned nothing".to_string()))?;
+            .ok_or_else(|| bulk_error("bulkOperationRunMutation returned nothing".to_string()))?;
         started(
             "bulkOperationRunMutation",
             payload.bulk_operation,
@@ -528,7 +610,7 @@ impl Shopify {
             .await?;
         let payload = data
             .staged_uploads_create
-            .ok_or_else(|| Error::Bulk("stagedUploadsCreate returned nothing".to_string()))?;
+            .ok_or_else(|| bulk_error("stagedUploadsCreate returned nothing".to_string()))?;
         let errors = user_errors(&payload.user_errors)?;
         if !errors.is_empty() {
             return Err(Error::UserErrors {
@@ -541,10 +623,10 @@ impl Shopify {
             .into_iter()
             .flatten()
             .next()
-            .ok_or_else(|| Error::Bulk("stagedUploadsCreate returned no target".to_string()))?;
+            .ok_or_else(|| bulk_error("stagedUploadsCreate returned no target".to_string()))?;
         let url = target
             .url
-            .ok_or_else(|| Error::Bulk("the staged upload target has no address".to_string()))?;
+            .ok_or_else(|| bulk_error("the staged upload target has no address".to_string()))?;
         let parameters: Vec<(String, String)> = target
             .parameters
             .into_iter()
@@ -555,7 +637,7 @@ impl Shopify {
             .find(|(name, _)| name == "key")
             .map(|(_, value)| value.clone())
             .ok_or_else(|| {
-                Error::Bulk("the staged upload target has no `key` parameter".to_string())
+                bulk_error("the staged upload target has no `key` parameter".to_string())
             })?;
 
         // The storage server wants the length of the body up front: the
@@ -627,7 +709,7 @@ impl Shopify {
             .await?;
         let payload = data
             .bulk_operation_cancel
-            .ok_or_else(|| Error::Bulk("bulkOperationCancel returned nothing".to_string()))?;
+            .ok_or_else(|| bulk_error("bulkOperationCancel returned nothing".to_string()))?;
         started(
             "bulkOperationCancel",
             payload.bulk_operation,
@@ -653,7 +735,7 @@ impl Shopify {
             }
             tokio::time::sleep(wait).await;
             let operation = self.bulk_operation(id).await?.ok_or_else(|| {
-                Error::Bulk(format!(
+                bulk_error(format!(
                     "the bulk operation {} does not exist",
                     shown_id(id)
                 ))
@@ -791,7 +873,7 @@ impl Shopify {
     async fn completed_url(&self, id: &str, options: BulkWaitOptions) -> Result<Option<String>> {
         let operation = self.wait_for_bulk_operation(id, options).await?;
         if operation.status != BulkOperationStatus::Completed {
-            return Err(not_completed(&operation));
+            return Err(not_completed(operation));
         }
         Ok(operation.url)
     }
@@ -868,7 +950,7 @@ fn started<O: Serialize, E: Serialize>(
         return Err(Error::UserErrors { mutation, errors });
     }
     let operation =
-        operation.ok_or_else(|| Error::Bulk(format!("{mutation} returned no operation")))?;
+        operation.ok_or_else(|| bulk_error(format!("{mutation} returned no operation")))?;
     operation_of(&operation)
 }
 
@@ -929,7 +1011,7 @@ mod tests {
             kind: BulkOperationType::Query,
             status: BulkOperationStatus::Completed,
             error_code: None,
-            created_at: "2026-10-22T10:00:00Z".to_string(),
+            created_at: "2026-10-22T10:00:00Z".parse().unwrap(),
             completed_at: None,
             object_count: 0,
             root_object_count: 0,
@@ -989,6 +1071,58 @@ mod tests {
                  --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"vars.jsonl\"\r\nContent-Type: text/jsonl\r\n\r\n{{}}\n\r\n\
                  --{boundary}--\r\n"
             )
+        );
+    }
+
+    #[test]
+    fn statuses_and_types_serialize_as_shopify_writes_them() {
+        for (status, text) in [
+            (BulkOperationStatus::Completed, "\"COMPLETED\""),
+            (BulkOperationStatus::Canceling, "\"CANCELING\""),
+            (
+                BulkOperationStatus::Other("PAUSED".to_string()),
+                "\"PAUSED\"",
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), text);
+            assert_eq!(
+                serde_json::from_str::<BulkOperationStatus>(text).unwrap(),
+                status
+            );
+        }
+        for (kind, text) in [
+            (BulkOperationType::Mutation, "\"MUTATION\""),
+            (BulkOperationType::Other("EXPORT".to_string()), "\"EXPORT\""),
+        ] {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), text);
+            assert_eq!(
+                serde_json::from_str::<BulkOperationType>(text).unwrap(),
+                kind
+            );
+        }
+        // A stored operation reads back as it was.
+        let operation = operation_of(&serde_json::json!({
+            "id": "gid://shopify/BulkOperation/1",
+            "type": "QUERY",
+            "status": "FAILED",
+            "errorCode": "TIMEOUT",
+            "createdAt": "2026-10-22T10:00:00Z",
+            "completedAt": "2026-10-22T10:05:00Z",
+            "objectCount": "3",
+            "rootObjectCount": "1",
+            "fileSize": null,
+            "url": null,
+            "partialDataUrl": null,
+            "query": "{ shop { id } }",
+        }))
+        .unwrap();
+        let stored = serde_json::to_value(&operation).unwrap();
+        assert_eq!(stored["status"], "FAILED");
+        assert_eq!(stored["kind"], "QUERY");
+        assert_eq!(stored["created_at"], "2026-10-22T10:00:00Z");
+        assert_eq!(
+            serde_json::from_value::<BulkOperation>(stored).unwrap(),
+            operation
         );
     }
 

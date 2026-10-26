@@ -127,6 +127,7 @@ async fn a_failed_operation_is_an_error() {
     mock.push_data(json!({ "bulkOperationRunQuery": { "bulkOperation": operation("CREATED", None), "userErrors": [] } }));
     let mut failed = operation("FAILED", None);
     failed["errorCode"] = json!("ACCESS_DENIED");
+    failed["partialDataUrl"] = json!(RESULTS_URL);
     mock.push_data(json!({ "bulkOperation": failed }));
     let shopify = client(&mock);
 
@@ -138,6 +139,17 @@ async fn a_failed_operation_is_an_error() {
         error.to_string(),
         "bulk operation: the bulk operation gid://shopify/BulkOperation/1 ended Failed (ACCESS_DENIED)"
     );
+    // The operation stays reachable: what failed, and what was written before.
+    let Error::Bulk {
+        operation: Some(operation),
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(operation.status, BulkOperationStatus::Failed);
+    assert_eq!(operation.error_code.as_deref(), Some("ACCESS_DENIED"));
+    assert_eq!(operation.partial_data_url.as_deref(), Some(RESULTS_URL));
 }
 
 #[tokio::test]
@@ -260,7 +272,11 @@ async fn waiting_gives_up_after_its_timeout() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Timeout(_)), "{error:?}");
+    // The ID, to cancel the operation that keeps running.
+    let Error::Timeout { id, .. } = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(id.as_deref(), Some("gid://shopify/BulkOperation/1"));
     // 1 + 2 + 4 + 8 + 10 seconds, then the 5 that are left.
     assert_eq!(mock.requests().len(), 6);
 }

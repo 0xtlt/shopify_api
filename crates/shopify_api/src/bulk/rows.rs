@@ -83,7 +83,7 @@ impl Lines {
 
     fn too_long(&mut self, line: usize) -> Error {
         self.finish();
-        Error::Bulk(format!(
+        super::bulk_error(format!(
             "line {line} of the results is longer than {} bytes",
             self.max
         ))
@@ -387,7 +387,7 @@ impl<P, C> BulkGroups<P, C> {
         } else {
             "is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
         };
-        Error::Bulk(format!("line {number} of the results {message}"))
+        super::bulk_error(format!("line {number} of the results {message}"))
     }
 
     /// [`BulkRows::max_line_length`].
@@ -649,7 +649,7 @@ mod tests {
             BulkRows::new(Some(chunks(endless)), "https://storage.test/r.jsonl")
                 .max_line_length(1024 * 1024);
         let error = rows.next_row().await.unwrap().unwrap_err();
-        assert!(matches!(error, Error::Bulk(_)), "{error:?}");
+        assert!(matches!(error, Error::Bulk { .. }), "{error:?}");
         assert!(rows.next_row().await.is_none());
     }
 
@@ -886,7 +886,7 @@ mod tests {
         ] {
             let groups = all_groups(groups_of(body)).await;
             assert_eq!(groups.len(), 1, "{body}");
-            assert!(matches!(groups[0], Err(Error::Bulk(_))), "{body}");
+            assert!(matches!(groups[0], Err(Error::Bulk { .. })), "{body}");
         }
     }
 

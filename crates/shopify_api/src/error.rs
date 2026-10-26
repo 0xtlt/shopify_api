@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::bulk::BulkOperation;
 use crate::graphql::{Cost, GraphqlError, InvalidValueReason, UserError};
 use crate::transport::{HttpResponse, TransportError};
 
@@ -70,10 +71,7 @@ pub enum Error {
     /// Not an API version this crate supports. `version` is shown only when
     /// it is written `YYYY-MM`.
     #[non_exhaustive]
-    InvalidApiVersion {
-        version: String,
-        reason: String,
-    },
+    InvalidApiVersion { version: String, reason: String },
 
     /// The request did not reach Shopify, or its answer did not arrive.
     #[non_exhaustive]
@@ -178,9 +176,24 @@ pub enum Error {
     },
 
     /// A bulk operation failed, or its answer misses what was expected.
-    Bulk(String),
+    #[non_exhaustive]
+    Bulk {
+        message: String,
+        /// The operation as Shopify last reported it, when it ended without
+        /// completing: its `error_code`, its `partial_data_url`. `Debug`
+        /// shows its ID, status and error code as `message` does.
+        operation: Option<Box<BulkOperation>>,
+    },
 
-    Timeout(String),
+    /// A wait ran out.
+    #[non_exhaustive]
+    Timeout {
+        message: String,
+        /// The bulk operation waited for, which keeps running: to cancel it
+        /// with [`Shopify::cancel_bulk_operation`](crate::Shopify::cancel_bulk_operation).
+        /// `Debug` shows it when it is a `gid://` of Shopify.
+        id: Option<String>,
+    },
 
     /// The [`TokenStore`](crate::TokenStore) of the client failed to save a
     /// renewed token. The client holds the new token all the same.
@@ -236,8 +249,8 @@ impl fmt::Display for Error {
             Self::UserErrors { mutation, errors } => {
                 write!(formatter, "{mutation} refused: {}", UserErrors(errors))
             }
-            Self::Bulk(message) => write!(formatter, "bulk operation: {message}"),
-            Self::Timeout(message) => write!(formatter, "timed out: {message}"),
+            Self::Bulk { message, .. } => write!(formatter, "bulk operation: {message}"),
+            Self::Timeout { message, .. } => write!(formatter, "timed out: {message}"),
             Self::TokenStore(error) => write!(formatter, "the token store failed: {error}"),
             Self::NoTransport => formatter.write_str(
                 "no HTTP transport: enable the `rustls` or `native-tls` feature, or set one with `ShopifyBuilder::transport`",
@@ -341,8 +354,19 @@ impl fmt::Debug for Error {
                 .field("mutation", mutation)
                 .field("errors", errors)
                 .finish(),
-            Self::Bulk(message) => formatter.debug_tuple("Bulk").field(message).finish(),
-            Self::Timeout(message) => formatter.debug_tuple("Timeout").field(message).finish(),
+            Self::Bulk { message, operation } => formatter
+                .debug_struct("Bulk")
+                .field("message", message)
+                .field(
+                    "operation",
+                    &operation.as_deref().map(crate::bulk::ShownOperation),
+                )
+                .finish(),
+            Self::Timeout { message, id } => formatter
+                .debug_struct("Timeout")
+                .field("message", message)
+                .field("id", &id.as_deref().map(crate::bulk::shown_id))
+                .finish(),
             Self::TokenStore(error) => formatter.debug_tuple("TokenStore").field(error).finish(),
             Self::NoTransport => formatter.write_str("NoTransport"),
             Self::Verification(message) => formatter
@@ -914,9 +938,12 @@ mod tests {
             "query": "{ shop { id } }",
         }))
         .unwrap();
-        errors.push(("Bulk ended", crate::bulk::not_completed(&operation)));
+        errors.push(("Bulk ended", crate::bulk::not_completed(operation.clone())));
         operation.id = format!("gid://shopify/BulkOperation/{TOKEN}");
-        errors.push(("Bulk ended, odd id", crate::bulk::not_completed(&operation)));
+        errors.push((
+            "Bulk ended, odd id",
+            crate::bulk::not_completed(operation.clone()),
+        ));
         errors.push((
             "Timeout",
             crate::bulk::timed_out(TOKEN, std::time::Duration::from_secs(1)),
@@ -1070,8 +1097,8 @@ mod tests {
             Error::InvalidValue { .. } => "InvalidValue",
             Error::Auth { .. } => "Auth",
             Error::UserErrors { .. } => "UserErrors",
-            Error::Bulk(_) => "Bulk",
-            Error::Timeout(_) => "Timeout",
+            Error::Bulk { .. } => "Bulk",
+            Error::Timeout { .. } => "Timeout",
             Error::TokenStore(_) => "TokenStore",
             Error::NoTransport => "NoTransport",
             Error::Verification(_) => "Verification",
