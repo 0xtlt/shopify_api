@@ -264,6 +264,7 @@ pub fn analyze_bulk_query(
     checker.variables(definition)?;
 
     let top = top_level_field(selection_set(definition), "query")?;
+    Checker::check_key(top)?;
     if top.name == "node" || top.name == "nodes" {
         return error_at(
             top.position,

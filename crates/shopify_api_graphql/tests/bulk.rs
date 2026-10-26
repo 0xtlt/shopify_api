@@ -291,6 +291,14 @@ fn the_rules_of_shopify_are_refusals() {
             "`__typename` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 30)",
         ),
         (
+            "{ _shopifyApiTypename: things { edges { node { id } } } }",
+            "`_shopifyApiTypename` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 3)",
+        ),
+        (
+            "{ __things: things { edges { node { id } } } }",
+            "`__things` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 3)",
+        ),
+        (
             "mutation { make(id: \"1\") { a { edges { node { id } } } b { edges { node { id } } } } }",
             "The mutation of a bulk operation selects one connection at most (`a`), Shopify's limit: `b` is a second one (line 1, column 56)",
         ),
