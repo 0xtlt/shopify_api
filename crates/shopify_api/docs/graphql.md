@@ -523,7 +523,11 @@ mutation, its `errors`, and the `index` of its line.
   send any text.
 - The order of the lines: the reader relies on the order `groupObjects`
   writes, each child after its parent and before the next top-level object.
-  A file of another order is an error, not a misplaced child.
+  A file of another order is an error, not a misplaced child. Shopify's
+  guide shows it for one level; a live test of the repository
+  (`a_typed_bulk_query_regroups_two_levels_and_sibling_connections`, run by
+  `mise run test:live`) checks two levels, sibling connections, and that the
+  `_shopifyApiTypename` alias is kept in the file.
 
 # Schema and API version
 

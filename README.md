@@ -534,7 +534,21 @@ mise tasks              # every task
 ```
 
 The tests never reach Shopify: they script it with `MockTransport`.
-`mise run test:live` runs a few against a real development store.
+`mise run test:live` runs a few against a real development store:
+
+```bash
+SHOPIFY_TEST_SHOP=my-dev-store SHOPIFY_TEST_ACCESS_TOKEN=shpat_… mise run test:live
+# or SHOPIFY_TEST_CLIENT_ID and SHOPIFY_TEST_CLIENT_SECRET instead of the token
+```
+
+The token needs `read_products` and `write_products`. One of them runs a
+typed bulk query, `products { variants { metafields } media }`, and compares
+its items with the raw JSONL regrouped by `__parentId`: it confirms what
+Shopify's guide does not show and the typed reader relies on, that the
+`_shopifyApiTypename` alias is kept in the file and that `groupObjects`
+writes each object right after its parent at the second level too. When
+the store has no product with an image and a variant metafield, it creates
+one, tagged `shopify-api-live-test`, and reuses it later.
 
 ## License
 
