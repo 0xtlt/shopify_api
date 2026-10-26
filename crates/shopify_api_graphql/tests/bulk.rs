@@ -174,6 +174,37 @@ fn shape(connections: &[Connection]) -> String {
 }
 
 #[test]
+fn strings_the_parser_misreads_are_refused() {
+    let escape = "This string would not reach Shopify as written: the GraphQL parser this crate uses reads it otherwise, and a bulk query is sent as the text it read. Write `\\u0008` rather than `\\b`";
+    let block = "This string would not reach Shopify as written: the GraphQL parser this crate uses reads it otherwise, and a bulk query is sent as the text it read. Write it as a quoted string, with escapes";
+    assert_eq!(
+        refusal(r#"{ things(q: "a\bb") { edges { node { id } } } }"#),
+        format!("{escape} (line 1, column 13)")
+    );
+    assert_eq!(
+        refusal("query($q: String = \"\\b\") { things(q: $q) { edges { node { id } } } }"),
+        format!("{escape} (line 1, column 20)")
+    );
+    assert_eq!(
+        refusal("{ things(q: \"\"\"a\rb\"\"\") { edges { node { id } } } }"),
+        format!("{block} (line 1, column 13)")
+    );
+    assert_eq!(
+        refusal("{ things(q: \"\"\"\n\u{a0}a\n\u{a0}b\"\"\") { edges { node { id } } } }"),
+        format!("{block} (line 1, column 13)")
+    );
+    // In a comment, a `\b` is nothing.
+    bulk("# \"\\b\"\n{ things(q: \"\\u0008\") { edges { node { id } } } }");
+    // `\u{…}` and surrogate pairs do not parse.
+    for source in [
+        r#"{ things(q: "\u{1F600}") { edges { node { id } } } }"#,
+        r#"{ things(q: "\uD83D\uDE00") { edges { node { id } } } }"#,
+    ] {
+        assert!(analyze(schema(), source).is_err(), "{source}");
+    }
+}
+
+#[test]
 fn siblings_that_may_return_one_type_are_refused() {
     assert_eq!(
         refusal(

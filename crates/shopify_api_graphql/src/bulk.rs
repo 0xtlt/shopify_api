@@ -24,6 +24,8 @@
 //! as GraphQL literals at run time: the text is kept as [`Part`]s, with the
 //! argument lists that hold a variable apart.
 
+mod strings;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use graphql_parser::Pos;
@@ -244,6 +246,7 @@ pub fn analyze_bulk_query(
     if operation.kind != OperationKind::Query {
         return error("A bulk query is a query");
     }
+    strings::check(source)?;
     let document = parse(source)?;
     let (definition, fragments) = parts_of(&document);
     let mut checker = Checker {
