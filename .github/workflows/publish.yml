@@ -22,13 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
-      # In dependency order: the schema and checker, the macro, then the client.
-      - run: cargo publish --locked -p shopify_api_graphql
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
-      - run: cargo publish --locked -p shopify_api_macros
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
-      - run: cargo publish --locked -p shopify_api
+      # The three crates at once, in dependency order: when one fails to
+      # build, none is published.
+      - run: cargo publish --workspace --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}

@@ -11,16 +11,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-# `graphql/admin.schema.json`, the whole Admin schema the tests use, stays
-# out: the crate's own operations need only `graphql/internal.schema.json`.
+# What `cargo test` of the published crate needs, offline: the sources and
+# their doctests, which read the Admin schema of `graphql/`. The tests and the
+# examples stay in the repository: they need its other files and toolchain.
 include = [
   "src/**",
   "docs/**",
-  "tests/**",
-  "examples/**",
+  "graphql/admin.schema.json",
   "graphql/internal.schema.json",
   "graphql/operations/**",
   "Cargo.toml",
+  "LICENSE.txt",
 ]
 
 # The version of the tests, the examples and `graphql/internal.schema.json`.

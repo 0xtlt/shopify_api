@@ -22,6 +22,8 @@ jobs:
       - check
       - features
       - msrv
+      - package
+      - audit
     steps:
       - run: exit 0
 
@@ -53,3 +55,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-features --locked
+
+  # What `cargo publish --workspace` uploads: each crate builds from its own
+  # files, with the license, and nothing that needs the network.
+  package:
+    name: cargo package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo package --workspace --locked
+
+  audit:
+    name: advisories, licenses, sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run audit
