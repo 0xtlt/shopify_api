@@ -93,5 +93,11 @@ required-features = ["rustls"]
 name = "metafields"
 required-features = ["rustls"]
 
+# With one feature set only: `mise run check` runs the tests of two at once,
+# in two processes, and this test's cargo projects are in one directory.
+[[test]]
+name = "schema_override"
+required-features = ["testing"]
+
 [lints]
 workspace = true
