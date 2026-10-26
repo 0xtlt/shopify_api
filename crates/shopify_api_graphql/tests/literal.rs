@@ -121,7 +121,7 @@ fn an_object_is_sent_field_by_field_in_its_order() {
     let id = input_object_id("ProductUpdateInput");
     assert!(
         code.starts_with(&format!(
-            ":: shopify_api :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , ({{"
+            ":: shopify_api :: __private :: InputObject :: < {id}u64 > :: __new (\"ProductUpdateInput\" , ({{"
         )),
         "{code}"
     );
