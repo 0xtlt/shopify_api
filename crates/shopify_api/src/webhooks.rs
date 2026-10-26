@@ -56,9 +56,12 @@
 //! The client secret also signs the launch queries of Shopify admin, the app
 //! proxy requests and the session tokens, which an installer of the app can
 //! read. So that none of them passes for a webhook, only JSON webhooks
-//! verify, a body that starts with `{`: a form-encoded query, a JWT or a JSON
-//! array never does, while a signed query can be made to read as XML.
-//! The subscriptions this crate creates or syncs are JSON.
+//! verify, a body whose first byte is `{`, with nothing before it, not even
+//! whitespace or a byte order mark. None of the other texts starts so: each
+//! starts with a parameter name that sorts before Shopify's own lowercase
+//! names, or with `eyJ` for a session token. A signed query can still be made
+//! to read as XML, or as JSON after some whitespace, which is why both are
+//! refused. The subscriptions this crate creates or syncs are JSON.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -74,7 +77,7 @@ use shopify_api_macros::{__graphql_internal as graphql, __input_internal as inpu
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
 /// `body` with `secret`, the client secret of the app. Compares in constant time.
 ///
-/// `false` for a body that is not a JSON object, as
+/// `false` for a body whose first byte is not `{`, as
 /// [`Webhook::verify`] refuses it: see [what the signature covers](self#what-the-signature-covers).
 pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     // Anyone can sign with an empty key: it verifies nothing.
@@ -91,15 +94,15 @@ pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
-/// Whether `body` starts as a JSON webhook does, with `{`. The other texts
-/// the client secret signs start otherwise: a query with a parameter name, a
-/// session token with `eyJ`, and an app proxy request with a name that sorts
-/// before `path_prefix`, never `{`, though `[` or `<` (XML) may.
+/// Whether `body` starts as a JSON webhook does, its first byte `{`. The
+/// other texts the client secret signs start otherwise: a query with a
+/// parameter name, a session token with `eyJ`, and an app proxy request with
+/// a name that sorts before Shopify's lowercase ones, so never `{`, though
+/// `[`, `<` (XML) or whitespace may.
 fn is_webhook_body(body: &[u8]) -> bool {
-    matches!(
-        body.iter().find(|byte| !byte.is_ascii_whitespace()),
-        Some(b'{')
-    )
+    // Exactly `{`, nothing skipped: a signed app proxy query can start with
+    // whitespace then `{`, never with `{`.
+    body.first() == Some(&b'{')
 }
 
 /// The signature Shopify would send for `body`, base64: for tests.
@@ -153,9 +156,9 @@ impl Webhook {
     /// `headers` are name and value pairs: an `http::HeaderMap` by
     /// reference, or pairs of strings. Names are read in any case, with or
     /// without their `X-` (`X-Shopify-Topic` or `shopify-topic`). Fails when
-    /// the signature is missing or does not match, when the body is not a
-    /// JSON object (XML webhooks are refused), or when a header Shopify
-    /// always sends is missing.
+    /// the signature is missing or does not match, when the first byte of the
+    /// body is not the `{` of a JSON object (XML webhooks are refused), or
+    /// when a header Shopify always sends is missing.
     ///
     /// The headers are not signed: see [what the signature covers](self#what-the-signature-covers).
     pub fn verify<K, V>(
@@ -215,7 +218,7 @@ impl Webhook {
         }
         if !is_webhook_body(&body) {
             return Err(Error::Verification(
-                "the body of the webhook is not a JSON object: only JSON webhooks verify"
+                "the body of the webhook does not start with `{`: only JSON webhooks verify"
                     .to_string(),
             ));
         }

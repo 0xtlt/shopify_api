@@ -196,7 +196,7 @@ mod verification {
 
         use super::*;
 
-        const NOT_A_WEBHOOK: &str = "verification failed: the body of the webhook is not a JSON object: only JSON webhooks verify";
+        const NOT_A_WEBHOOK: &str = "verification failed: the body of the webhook does not start with `{`: only JSON webhooks verify";
 
         #[test]
         fn the_hmac_of_a_launch_query_is_not_a_webhook_signature() {
@@ -222,7 +222,28 @@ mod verification {
         }
 
         /// The parameters of an app proxy request are the storefront's: a
-        /// name that sorts first can open a JSON array, never an object.
+        /// name that sorts first can open a JSON object after a tab, a
+        /// whitespace `Webhook::verify` does not skip.
+        #[test]
+        fn an_app_proxy_request_that_reads_as_json_after_a_tab_is_not_a_webhook() {
+            let app = ShopifyApp::new("client-id", SECRET);
+            let query = "%09%7B%22x%22%3A%22=&logged_in_customer_id=&path_prefix=%2Fapps%2Fx\
+                         &shop=attacker.myshopify.com&timestamp=1700000000\
+                         &z=%22%2C%22shop_domain%22%3A%22victim.myshopify.com%22%7D";
+            let message = "\t{\"x\":\"=logged_in_customer_id=path_prefix=/apps/xshop=attacker.myshopify.comtimestamp=1700000000z=\",\"shop_domain\":\"victim.myshopify.com\"}";
+            let payload: serde_json::Value = serde_json::from_str(message).unwrap();
+            assert_eq!(payload["shop_domain"], "victim.myshopify.com");
+            let signature = app.sign_app_proxy(query).unwrap();
+            let signature = STANDARD.encode(hex::decode(signature).unwrap());
+            assert_eq!(
+                sign(SECRET, message.as_bytes()),
+                signature,
+                "the message signed"
+            );
+            assert_eq!(refusal(&signature, message.as_bytes()), NOT_A_WEBHOOK);
+        }
+
+        /// Or a JSON array, which is not an object.
         #[test]
         fn an_app_proxy_request_is_not_a_webhook() {
             let app = ShopifyApp::new("client-id", SECRET);
@@ -269,8 +290,8 @@ mod verification {
     }
 
     #[test]
-    fn only_json_objects_verify() {
-        for body in [&b"{\"id\":1}"[..], b"\n  {}"] {
+    fn only_bodies_that_start_with_a_brace_verify() {
+        for body in [&b"{\"id\":1}"[..], b"{}", b"{ }\n"] {
             assert!(
                 Webhook::verify(
                     headers(&sign(SECRET, body), "orders/create", "a"),
@@ -289,6 +310,12 @@ mod verification {
             b"eyJhbGciOiJIUzI1NiJ9.e30",
             b"<?xml version=\"1.0\"?><order/>",
             b" <order/>",
+            // JSON objects, but not first: nothing is skipped before the `{`.
+            b" {}",
+            b"\t{}",
+            b"\n{}",
+            b"\r\n{}",
+            b"\xEF\xBB\xBF{}",
         ] {
             refusal(&sign(SECRET, body), body);
         }

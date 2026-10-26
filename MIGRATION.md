@@ -228,9 +228,10 @@ let webhooks = warp::path("webhooks")
 With axum, `async fn(headers: HeaderMap, body: Bytes)` takes the same two
 values (see the docs of `shopify_api::webhooks`). `Webhook::verify` requires
 the `X-Shopify-Topic` and `X-Shopify-Shop-Domain` headers, which Shopify always
-sends, and only verifies JSON webhooks, whose body is a JSON object: the
-client secret also signs texts an installer of the app can read and make look
-like XML. `sync_webhook_subscriptions` updates an XML subscription of a
+sends, and only verifies JSON webhooks, whose body starts with `{` as its
+first byte, with no whitespace or byte order mark before it: the client
+secret also signs texts an installer of the app can read and make look like
+XML, or like JSON after some whitespace. `sync_webhook_subscriptions` updates an XML subscription of a
 desired topic and address to JSON;
 `webhooks::verify_hmac(secret, body, header)` checks the signature alone.
 
