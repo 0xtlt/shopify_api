@@ -165,11 +165,19 @@ pub fn schema_source(
 /// workspace or a path dependency outside it, rather than a packaged,
 /// vendored or checked-out copy of a dependency.
 ///
-/// A package is not local when its directory holds a `Cargo.toml.orig`,
-/// which cargo writes into every packaged crate (registry sources, and the
-/// copy `cargo package` verifies), or a `.cargo-checksum.json` (vendored), or
-/// when it is under `cargo_home`, where cargo keeps registry sources and git
-/// checkouts.
+/// A package is not local when:
+/// - its directory holds a `Cargo.toml.orig`, which cargo writes into every
+///   packaged crate (registry sources, and the copy `cargo package`
+///   verifies), or a `.cargo-checksum.json` (vendored);
+/// - its directory or one of its ancestors holds a `.cargo-ok`, which cargo
+///   writes at the root of every extracted registry source and of every git
+///   checkout, where a git dependency may be a subdirectory;
+/// - it is under `cargo_home`, where cargo keeps registry sources and git
+///   checkouts.
+///
+/// Paths are compared both as given and with symbolic links resolved, so a
+/// `$CARGO_HOME`, or a `git` or `registry` directory in it, that links to
+/// another disk still counts.
 ///
 /// It depends on the directory and its files only, which stay the same for a
 /// compiled crate: cargo reuses that crate whatever command built it.
@@ -177,11 +185,33 @@ pub fn is_local_package(dir: &Path, cargo_home: Option<&Path>) -> bool {
     if dir.join("Cargo.toml.orig").exists() || dir.join(".cargo-checksum.json").exists() {
         return false;
     }
+    let dirs = both_forms(dir);
+    let in_cargo_checkout = dirs
+        .iter()
+        .any(|dir| dir.ancestors().any(|dir| dir.join(".cargo-ok").exists()));
+    if in_cargo_checkout {
+        return false;
+    }
     let Some(home) = cargo_home else {
         return true;
     };
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    !canonical(dir).starts_with(canonical(home))
+    let homes = both_forms(home);
+    !dirs
+        .iter()
+        .any(|dir| homes.iter().any(|home| dir.starts_with(home)))
+}
+
+/// `path` made absolute, and also with symbolic links resolved when it
+/// exists.
+fn both_forms(path: &Path) -> Vec<PathBuf> {
+    let logical = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut forms = vec![logical];
+    if let Ok(canonical) = forms[0].canonicalize()
+        && canonical != forms[0]
+    {
+        forms.push(canonical);
+    }
+    forms
 }
 
 /// The directory where cargo keeps registry sources and git checkouts:
@@ -890,6 +920,58 @@ mod tests {
         std::os::unix::fs::symlink(&real.0, &linked).unwrap();
         assert!(!is_local_package(registry.parent().unwrap(), Some(&linked)));
         let _ = std::fs::remove_file(&linked);
+    }
+
+    #[test]
+    fn a_package_in_a_cargo_checkout_is_not_local() {
+        let home = Project::new("marker-home");
+        // `.cargo-ok` in the package directory itself, as in a registry source.
+        let source = Project::new("marker-source");
+        source.manifest(None);
+        source.write(".cargo-ok", "{\"v\":1}");
+        assert!(!is_local_package(&source.0, Some(&home.0)));
+        assert!(!is_local_package(&source.0, None));
+
+        // A package nested in a git checkout, `.cargo-ok` at its root.
+        let checkout = Project::new("marker-checkout");
+        checkout.write(".cargo-ok", "");
+        let nested = checkout.write("crates/lib/Cargo.toml", "");
+        let nested = nested.parent().unwrap();
+        assert!(!is_local_package(nested, Some(&home.0)));
+        assert!(!is_local_package(nested, None));
+    }
+
+    /// `$CARGO_HOME/<linked>` links to a directory outside `$CARGO_HOME`.
+    #[cfg(unix)]
+    fn linked_cargo_home(name: &str, linked: &str) -> (Project, Project) {
+        let home = Project::new(&format!("{name}-home"));
+        let store = Project::new(&format!("{name}-store"));
+        let link = home.0.join(linked);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&store.0, &link).unwrap();
+        (home, store)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_to_the_git_directory_keeps_its_packages_not_local() {
+        for (name, linked, below) in [
+            ("linked-git", "git", "checkouts/lib-1a2b/0c9d"),
+            ("linked-checkouts", "git/checkouts", "lib-1a2b/0c9d"),
+        ] {
+            let (home, store) = linked_cargo_home(name, linked);
+            let package = home.0.join(linked).join(below).join("crates/lib");
+            store.write(&format!("{below}/crates/lib/Cargo.toml"), "");
+            // Without a marker, the path under `$CARGO_HOME` tells.
+            assert!(!is_local_package(&package, Some(&home.0)), "{name}");
+            // With its symbolic links resolved, the path is outside
+            // `$CARGO_HOME`: the `.cargo-ok` at the checkout root tells.
+            let resolved = package.canonicalize().unwrap();
+            assert!(!resolved.starts_with(home.0.canonicalize().unwrap()));
+            store.write(&format!("{below}/.cargo-ok"), "");
+            assert!(!is_local_package(&package, Some(&home.0)), "{name}");
+            assert!(!is_local_package(&resolved, Some(&home.0)), "{name}");
+        }
     }
 
     #[test]

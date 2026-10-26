@@ -379,8 +379,12 @@ copies of a dependency: a crate from crates.io or another registry, a git
 dependency, a vendored crate, or the copy `cargo package` verifies. A package
 is not local when a `Cargo.toml.orig` sits next to its `Cargo.toml` (cargo
 writes one into every packaged crate), when it has a `.cargo-checksum.json`
-(vendored), or when it is under `$CARGO_HOME` (`~/.cargo` by default), where
-cargo keeps registry sources and git checkouts. The schema a crate is
+(vendored), when its directory or one above it holds a `.cargo-ok` (cargo
+writes one at the root of every extracted registry source and git checkout),
+or when it is under `$CARGO_HOME` (`~/.cargo` by default), where cargo keeps
+registry sources and git checkouts. Paths count both as written and with
+symbolic links resolved, so a `$CARGO_HOME` or a `git` directory in it that
+links elsewhere changes nothing. The schema a crate is
 checked against depends on that only, never on the cargo command: cargo
 reuses a compiled crate whatever command built it first.
 
