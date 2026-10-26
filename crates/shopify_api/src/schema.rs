@@ -1,9 +1,11 @@
 //! Downloading Shopify's Admin GraphQL schema, as an introspection result.
 //!
-//! [`graphql!`](crate::graphql!) checks operations against the schema of
-//! the version a crate declares in its `Cargo.toml`, else of the latest
-//! version, and downloads it by itself. These functions return the raw
-//! introspection result, for other tools.
+//! [`graphql!`](crate::graphql!) checks operations against a crate's schema
+//! file, of the version its `Cargo.toml` pins, else of the version that file
+//! holds, else, when there is no file yet, of the latest version. It
+//! downloads that file only in some cases, see
+//! [the schema rules](crate::graphql!#schema-and-api-version). These
+//! functions return the raw introspection result, for other tools.
 
 use serde_json::{Value, json};
 
