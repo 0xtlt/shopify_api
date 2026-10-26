@@ -303,6 +303,9 @@ fn jitter_fraction() -> f64 {
 /// Builds a [`Shopify`] client.
 ///
 /// ```
+/// # // Without `rustls` or `native-tls`, `build` needs a `transport(…)`.
+/// # #[cfg(any(feature = "rustls", feature = "native-tls"))]
+/// # {
 /// use std::time::Duration;
 /// use shopify_api::{ApiVersion, RetryPolicy, Shopify};
 ///
@@ -311,6 +314,7 @@ fn jitter_fraction() -> f64 {
 ///     .api_version(ApiVersion::V2026_10)
 ///     .retry(RetryPolicy::new(6).with_max_delay(Duration::from_secs(10)))
 ///     .build()?;
+/// # }
 /// # Ok::<(), shopify_api::Error>(())
 /// ```
 #[must_use]

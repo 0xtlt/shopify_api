@@ -28,12 +28,13 @@ description = "Build and test the client with its default features only"
 run = "cargo test -p shopify_api --locked"
 
 [tasks."check:features"]
-description = "Build the client without its default features, then with each feature alone: what feature unification in the workspace hides"
+description = "Build the client without its default features, then with each feature alone, and run its doctests without them: what feature unification in the workspace hides"
 run = [
   "cargo check -p shopify_api --no-default-features --lib --locked",
   "cargo check -p shopify_api --no-default-features --features webhooks --lib --locked",
   "cargo check -p shopify_api --no-default-features --features oauth --lib --locked",
   "cargo check -p shopify_api --no-default-features --features testing --lib --locked",
+  "cargo test -p shopify_api --no-default-features --doc --locked",
 ]
 
 [tasks.doc]
