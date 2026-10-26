@@ -297,7 +297,9 @@ impl ExtensionSessionToken {
 
     /// `sub`: the GID of the logged-in customer, such as
     /// `gid://shopify/Customer/1`. Shopify only sends it when a customer is
-    /// logged in and the app may read customers.
+    /// logged in and the app may read customers. `None` for an admin token,
+    /// whose `sub` is a staff member, not a customer: it stays in
+    /// [`claims`](Self::claims).
     pub fn customer(&self) -> Option<&str> {
         self.customer.as_deref()
     }
@@ -646,7 +648,10 @@ impl ShopifyApp {
             check_admin_issuer(issuer, &shop)?;
         }
         Ok(ExtensionSessionToken {
-            customer: verified.text("sub"),
+            // Only a customer's GID: the `sub` of an admin token is a staff member.
+            customer: verified
+                .text("sub")
+                .filter(|sub| sub.starts_with("gid://shopify/Customer/")),
             shop,
             expires_at: verified.expires_at,
             claims: verified.claims,
@@ -1150,11 +1155,12 @@ mod tests {
         admin_shaped["dest"] = json!("https://store-name.myshopify.com");
         admin_shaped["iss"] = json!("https://store-name.myshopify.com/admin");
         assert!(verify(&admin_shaped).is_ok());
-        // An admin token verifies here too: it proves its shop as well.
-        assert_eq!(
-            verify(&claims(now)).unwrap().shop().as_str(),
-            "my-shop.myshopify.com"
-        );
+        // An admin token verifies here too: it proves its shop as well, but
+        // its staff member is not a customer.
+        let admin = verify(&claims(now)).unwrap();
+        assert_eq!(admin.shop().as_str(), "my-shop.myshopify.com");
+        assert_eq!(admin.customer(), None);
+        assert_eq!(admin.claims()["sub"], claims(now)["sub"]);
 
         // An `iss` is compared whole here as well.
         let mut prefixed = extension_claims(now);

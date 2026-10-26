@@ -1,0 +1,31 @@
+error[E0277]: `u32` is not a bulk query to start
+ --> tests/ui/bulk_start_not_a_query.rs:7:21
+  |
+7 |     let _ = shopify.start_bulk_query(42u32);
+  |                     ^^^^^^^^^^^^^^^^ ----- `u32` doesn't satisfy the trait bound
+  |                     |
+  |                     a `&str`, a `String`, `GroupObjects(…)`, or a `graphql!(bulk(…))` query or its `Variables`
+  |
+  = help: the trait `StartBulkQuery<shopify_api::bulk::TypedQuery<_>>` is not implemented for `u32`
+help: the following other types implement trait `StartBulkQuery<M>`
+ --> src/bulk.rs
+  |
+  | impl StartBulkQuery<sealed::Text> for &str {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&str`
+...
+  | impl StartBulkQuery<sealed::Text> for String {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `String`
+...
+  | impl StartBulkQuery<sealed::Text> for &String {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&String`
+...
+  | impl<Q: Into<String>> StartBulkQuery<sealed::Text> for GroupObjects<Q> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `GroupObjects<Q>`
+note: required by a bound in `bulk::<impl Shopify>::start_bulk_query`
+ --> src/bulk.rs
+  |
+  |     pub async fn start_bulk_query<M>(
+  |                  ---------------- required by a bound in this associated function
+  |         &self,
+  |         query: impl StartBulkQuery<M>,
+  |                     ^^^^^^^^^^^^^^^^^ required by this bound in `bulk::<impl Shopify>::start_bulk_query`

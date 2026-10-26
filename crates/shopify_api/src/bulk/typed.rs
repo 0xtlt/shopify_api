@@ -138,6 +138,9 @@ impl<I: BulkItem, Q: Into<BulkQuery<I>>> sealed::Sealed<TypedQuery<I>> for Q {
     }
 }
 
+// Not suggested in errors: `start_bulk_query(42)` gets the message of
+// `StartBulkQuery` rather than one about `From<u32>`.
+#[diagnostic::do_not_recommend]
 impl<I: BulkItem, Q: Into<BulkQuery<I>>> StartBulkQuery<TypedQuery<I>> for Q {}
 
 /// A bulk query checked by `graphql!(bulk("…"))`, and its variables. Its
