@@ -24,6 +24,7 @@ jobs:
       - msrv
       - package
       - audit
+      - windows
     steps:
       - run: exit 0
 
@@ -74,3 +75,15 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - run: mise run audit
+
+  # Paths read from `Cargo.toml` follow other rules on Windows (drive
+  # prefixes, `\`): the tests of those rules run there too.
+  windows:
+    name: paths on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p shopify_api_graphql --lib --locked
+      - run: cargo test -p shopify_api --features cli --bin shopify-api --locked
