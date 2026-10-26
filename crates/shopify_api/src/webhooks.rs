@@ -430,7 +430,7 @@ impl Shopify {
     pub async fn webhook_subscriptions(&self) -> Result<Vec<WebhookSubscription>> {
         let pages = self
             .paginate(
-                |after| list::operation(list::Variables { after }),
+                |after| list::operation(list::Variables { after }).own(),
                 |data| {
                     let connection = data.webhook_subscriptions;
                     crate::Page::new(
@@ -449,7 +449,7 @@ impl Shopify {
         spec: &WebhookSubscriptionSpec,
     ) -> Result<WebhookSubscription> {
         let data = self
-            .execute(create::Variables {
+            .execute_own(create::Variables {
                 topic: spec.topic.clone(),
                 webhook_subscription: subscription_input(spec, false),
             })
@@ -474,7 +474,7 @@ impl Shopify {
 
     pub async fn delete_webhook_subscription(&self, id: &str) -> Result<()> {
         let data = self
-            .execute(delete::Variables { id: id.to_string() })
+            .execute_own(delete::Variables { id: id.to_string() })
             .await?;
         let payload = data.webhook_subscription_delete.ok_or_else(|| {
             Error::decode(
@@ -494,7 +494,7 @@ impl Shopify {
         spec: &WebhookSubscriptionSpec,
     ) -> Result<WebhookSubscription> {
         let data = self
-            .execute(update::Variables {
+            .execute_own(update::Variables {
                 id: id.to_string(),
                 webhook_subscription: subscription_input(spec, true),
             })

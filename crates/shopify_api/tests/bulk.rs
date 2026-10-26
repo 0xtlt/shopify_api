@@ -264,3 +264,46 @@ async fn waiting_gives_up_after_its_timeout() {
     // 1 + 2 + 4 + 8 + 10 seconds, then the 5 that are left.
     assert_eq!(mock.requests().len(), 6);
 }
+
+/// Counts the warnings of the current thread.
+struct Warnings(Arc<Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Warnings {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::WARN
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(event.metadata().name().to_string());
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// The crate's operations go to a pinned version, without a warning that
+/// would tell the app to change its own schema.
+#[tokio::test]
+async fn the_operations_of_the_crate_follow_a_pinned_version_unwarned() {
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let _guard = tracing::subscriber::set_default(Warnings(warnings.clone()));
+    let mock = MockTransport::new();
+    mock.push_data(json!({ "bulkOperation": null }));
+    let shopify = client(&mock).with_api_version(shopify_api::ApiVersion::V2026_07);
+
+    assert!(
+        shopify
+            .bulk_operation("gid://shopify/BulkOperation/1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(mock.requests()[0].url.contains("/admin/api/2026-07/"));
+    assert!(warnings.lock().unwrap().is_empty(), "{warnings:?}");
+}

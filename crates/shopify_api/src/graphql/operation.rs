@@ -213,6 +213,8 @@ pub struct Operation<D> {
     name: Option<Cow<'static, str>>,
     /// The Admin API version of the schema the operation was checked against.
     checked_against: Option<&'static str>,
+    /// One of this crate's operations: it goes to a pinned version unwarned.
+    own: bool,
     /// Each variable as the JSON it is sent as, in the order it was set.
     variables: std::result::Result<Vec<(String, Box<RawValue>)>, VariablesFailure>,
     data: PhantomData<fn() -> D>,
@@ -227,6 +229,7 @@ impl<D> Operation<D> {
             query,
             name: None,
             checked_against: None,
+            own: false,
             variables: Ok(Vec::new()),
             data: PhantomData,
         }
@@ -245,6 +248,7 @@ impl<D> Operation<D> {
             kind,
             name: name.map(Cow::Borrowed),
             checked_against: Some(checked_against),
+            own: false,
             variables: Ok(Vec::new()),
             data: PhantomData,
         }
@@ -274,6 +278,16 @@ impl<D> Operation<D> {
     /// against; `None` for an operation built with [`Operation::new`].
     pub fn checked_against(&self) -> Option<&'static str> {
         self.checked_against
+    }
+
+    /// Marks one of this crate's operations.
+    pub(crate) fn own(mut self) -> Self {
+        self.own = true;
+        self
+    }
+
+    pub(crate) fn is_own(&self) -> bool {
+        self.own
     }
 
     /// The Admin API version the operation is sent to when the client pins
@@ -494,6 +508,7 @@ impl<D> Clone for Operation<D> {
             kind: self.kind,
             name: self.name.clone(),
             checked_against: self.checked_against,
+            own: self.own,
             variables: self.variables.clone(),
             data: PhantomData,
         }

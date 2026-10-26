@@ -392,7 +392,7 @@ impl Shopify {
         group_objects: bool,
     ) -> Result<BulkOperation> {
         let data = self
-            .execute(run_query::Variables {
+            .execute_own(run_query::Variables {
                 query: query.to_string(),
                 group_objects,
             })
@@ -481,7 +481,7 @@ impl Shopify {
         client_identifier: Option<&str>,
     ) -> Result<BulkOperation> {
         let data = self
-            .execute(run_mutation::Variables {
+            .execute_own(run_mutation::Variables {
                 mutation: mutation.to_string(),
                 staged_upload_path: staged_upload_path.to_string(),
                 client_identifier: client_identifier.map(str::to_string),
@@ -517,7 +517,7 @@ impl Shopify {
         I::Item: Serialize,
     {
         let data = self
-            .execute(staged_uploads::Variables {
+            .execute_own(staged_uploads::Variables {
                 input: vec![input!(StagedUploadInput {
                     filename: "bulk_op_vars.jsonl",
                     mimeType: "text/jsonl",
@@ -588,7 +588,9 @@ impl Shopify {
 
     /// A bulk operation by ID, `None` when the shop has none of that ID.
     pub async fn bulk_operation(&self, id: &str) -> Result<Option<BulkOperation>> {
-        let data = self.execute(get::Variables { id: id.to_string() }).await?;
+        let data = self
+            .execute_own(get::Variables { id: id.to_string() })
+            .await?;
         data.bulk_operation.as_ref().map(operation_of).transpose()
     }
 
@@ -598,7 +600,7 @@ impl Shopify {
         filter: BulkOperationsFilter,
     ) -> Result<Page<BulkOperation>> {
         let data = self
-            .execute(list::Variables {
+            .execute_own(list::Variables {
                 first: i64::from(filter.first),
                 after: filter.after,
                 query: filter.query,
@@ -621,7 +623,7 @@ impl Shopify {
     /// Asks Shopify to cancel a running bulk operation.
     pub async fn cancel_bulk_operation(&self, id: &str) -> Result<BulkOperation> {
         let data = self
-            .execute(cancel::Variables { id: id.to_string() })
+            .execute_own(cancel::Variables { id: id.to_string() })
             .await?;
         let payload = data
             .bulk_operation_cancel

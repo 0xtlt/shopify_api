@@ -58,7 +58,14 @@ impl Shopify {
         operation: impl Into<Operation<D>>,
     ) -> Result<Response<D>> {
         let operation = operation.into();
-        let version = self.version_for(operation.checked_against())?;
+        let version = if operation.is_own() {
+            // Written for the version of the crate's schema, and kept working
+            // on the versions it supports: a pinned one is not a mistake.
+            self.pinned_api_version()
+                .map_or_else(|| self.version_for(operation.checked_against()), Ok)?
+        } else {
+            self.version_for(operation.checked_against())?
+        };
         let body = operation.body()?.into_bytes();
         let raw = self.send_graphql(version, body, operation.kind()).await?;
         let (data, extensions) = into_data(raw)?;
@@ -66,6 +73,14 @@ impl Shopify {
             data: crate::decode::from_value(data)?,
             extensions,
         })
+    }
+
+    /// [`Shopify::execute`] for one of this crate's operations.
+    pub(crate) async fn execute_own<D: DeserializeOwned>(
+        &self,
+        operation: impl Into<Operation<D>>,
+    ) -> Result<D> {
+        self.execute(operation.into().own()).await
     }
 
     /// Runs any query or mutation and returns its `data`. Nothing checks the
