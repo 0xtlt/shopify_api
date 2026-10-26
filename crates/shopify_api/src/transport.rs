@@ -1,5 +1,17 @@
 //! The HTTP layer, behind a trait: [`ReqwestTransport`] by default, a
 //! [`MockTransport`](crate::testing::MockTransport) in tests, or your own.
+//!
+//! # reqwest
+//!
+//! No item of this crate names a type of `reqwest` but those of
+//! [`reqwest_0_13`], the module named after the major version it is built
+//! with. A later major version of `reqwest` comes as a module of its own,
+//! next to it, in a minor release of this crate: `reqwest_0_13` stays, and
+//! code that builds a client with it keeps compiling. [`ReqwestTransport::new`]
+//! may move to the newer `reqwest` in a minor release.
+//!
+//! The default transport, and the token renewals, run on Tokio: call the
+//! client from a Tokio runtime.
 
 use std::fmt;
 use std::future::Future;
@@ -382,10 +394,41 @@ pub trait Transport: Send + Sync + 'static {
     }
 }
 
-/// The `reqwest` this crate is built with, for [`ReqwestTransport::from_builder`].
+/// A [`ReqwestTransport`] from a client of `reqwest` 0.13 you configure.
+///
+/// ```
+/// use shopify_api::transport::reqwest_0_13::{self, reqwest};
+///
+/// let builder = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(3));
+/// let transport = reqwest_0_13::from_builder(builder)?;
+/// # Ok::<(), shopify_api::Error>(())
+/// ```
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "rustls", feature = "native-tls"))))]
-pub use reqwest;
+pub mod reqwest_0_13 {
+    use super::ReqwestTransport;
+
+    /// The `reqwest` 0.13 this crate is built with: build the client of
+    /// [`from_builder`] with it.
+    pub use reqwest;
+
+    /// A transport from a client you configure: a proxy, other timeouts,
+    /// other certificates. Redirections are turned off whatever the builder
+    /// says, as [`Transport`](super::Transport) requires.
+    pub fn from_builder(builder: reqwest::ClientBuilder) -> Result<ReqwestTransport, crate::Error> {
+        let client = builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| {
+                // A proxy's address may hold a password: errors leave it out.
+                crate::Error::Config(format!(
+                    "the HTTP client does not start: {}",
+                    error.without_url()
+                ))
+            })?;
+        Ok(ReqwestTransport { client })
+    }
+}
 
 /// The default [`Transport`], over `reqwest`: no redirections, a 10-second
 /// connection timeout and a 60-second request timeout. A streamed answer
@@ -400,31 +443,13 @@ pub struct ReqwestTransport {
 
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 impl ReqwestTransport {
+    /// To configure the client, see [`reqwest_0_13::from_builder`].
     pub fn new() -> Result<Self, crate::Error> {
-        Self::from_builder(
+        reqwest_0_13::from_builder(
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(60)),
         )
-    }
-
-    /// A transport from a client you configure: a proxy, other timeouts,
-    /// other certificates. Redirections are turned off whatever the builder
-    /// says, as [`Transport`] requires.
-    ///
-    /// Build `builder` with the [`reqwest`] this module re-exports.
-    pub fn from_builder(builder: reqwest::ClientBuilder) -> Result<Self, crate::Error> {
-        let client = builder
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| {
-                // A proxy's address may hold a password: errors leave it out.
-                crate::Error::Config(format!(
-                    "the HTTP client does not start: {}",
-                    error.without_url()
-                ))
-            })?;
-        Ok(Self { client })
     }
 }
 
