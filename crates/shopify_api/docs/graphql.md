@@ -370,8 +370,10 @@ schema = "schemas/admin-2026-07.json"   # optional
 
 The file `schema` names must be inside the package, so that `cargo package`
 ships it: an absolute path, or one that climbs above `Cargo.toml` with `..`,
-is a compile error. It is a relative path with `/`, inside the package,
-without `:` or `\`. A symbolic link inside the package may point elsewhere:
+is a compile error. It is a relative path with `/` and portable names: no
+`:`, `\`, `<>"|?*` or control character, no name ending in `.` or a space,
+and no device name such as `CON`, which Windows would read as another file
+or a device. A symbolic link inside the package may point elsewhere:
 `cargo package` ships the content of the file it links to.
 
 Both keys belong to the package whose `Cargo.toml` holds them: a dependency

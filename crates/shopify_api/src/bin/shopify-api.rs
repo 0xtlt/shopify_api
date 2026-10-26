@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use shopify_api_graphql::project::{
-    inside_package, package_config, previous_api_version, project_schema, schema_snippet,
-    write_atomically,
+    PORTABLE_PATH, inside_package, package_config, previous_api_version, project_schema,
+    schema_snippet, write_atomically,
 };
 use shopify_api_graphql::{Schema, SchemaSource, analyze, latest_api_version, schema_source};
 
@@ -215,8 +215,7 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
             ),
             None => eprintln!(
                 "`graphql!` cannot use it: `schema` in {} names a file inside the package, \
-                 as a relative path with `/` separators and no `:` or `\\`, \
-                 and `cargo package` ships only the package's files.",
+                 as {PORTABLE_PATH}, and `cargo package` ships only the package's files.",
                 root.join("Cargo.toml").display()
             ),
         }

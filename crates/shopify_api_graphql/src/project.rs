@@ -179,14 +179,42 @@ fn schema_in(value: Option<&toml::Value>) -> Result<Option<PathBuf>, String> {
     }
 }
 
+/// What [`inside_package`] accepts, for the messages that refuse a path.
+pub const PORTABLE_PATH: &str = "a relative path with `/` separators and portable names: \
+     no `:`, `\\`, `<`, `>`, `\"`, `|`, `?`, `*` or control character, no name ending in `.` or a space, \
+     and no device name such as `CON` or `NUL`";
+
+/// A name that means the same file on every system. Windows reads `:` and
+/// `\` as a drive and a separator, drops a final `.` or space (`x.json.`
+/// opens `x.json`), refuses `<>"|?*` and control characters, and opens a
+/// device for `CON`, `NUL`, `COM1`… whatever the extension.
+fn portable_name(name: &str) -> bool {
+    if name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c.is_control() || r#":\<>"|?*"#.contains(c))
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|number| {
+            matches!(number, "¹" | "²" | "³")
+                || (number.len() == 1 && number.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+    };
+    !(["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()) || numbered("COM") || numbered("LPT"))
+}
+
 /// `path`, relative to a package's `Cargo.toml`, normalized, when it names a
 /// file inside the package: `cargo package` ships only the package's files,
 /// so a packaged crate would look for any other file at another place, and
 /// fail, or find another schema there.
 ///
 /// `path` is portable, since a published crate may be built on any system:
-/// it is read with `/` separators, and no segment may hold a `:` or a `\`,
-/// a drive or a separator on Windows and part of a name elsewhere.
+/// it is read with `/` separators, and each name must mean the same file
+/// everywhere ([`PORTABLE_PATH`]).
 ///
 /// The check is lexical: `.`, empty segments and `a/..` are removed, and the
 /// path must not be absolute, nor climb above the package. A symbolic link
@@ -200,7 +228,7 @@ pub fn inside_package(path: &str) -> Result<PathBuf, String> {
     let refused = || {
         format!(
             "`{SCHEMA_KEY} = {}` in [package.metadata.{METADATA_TABLE}] must name a file inside the package, \
-             as a relative path with `/` separators and no `:` or `\\`, such as \"graphql/admin.schema.json\": \
+             as {PORTABLE_PATH}, such as \"graphql/admin.schema.json\": \
              `cargo package` ships only the package's files, and a published crate may be built on any system",
             toml::Value::from(path)
         )
@@ -210,9 +238,6 @@ pub fn inside_package(path: &str) -> Result<PathBuf, String> {
     }
     let mut names = Vec::new();
     for segment in path.split('/') {
-        if segment.contains([':', '\\']) {
-            return Err(refused());
-        }
         match segment {
             "" | "." => {}
             ".." => {
@@ -220,6 +245,8 @@ pub fn inside_package(path: &str) -> Result<PathBuf, String> {
                     return Err(refused());
                 }
             }
+            // Checked even when a later `..` removes it.
+            name if !portable_name(name) => return Err(refused()),
             name => names.push(name),
         }
     }
@@ -925,9 +952,16 @@ mod tests {
 
     #[test]
     fn the_schema_snippet_reads_back_as_the_path() {
-        // A backslash is not a `schema` value: `shopify-api` prints a note
-        // instead of a snippet for such a name.
-        for name in ["schemas/a\"b.json", "schemas/tab\t'q'.json", "admin.json"] {
+        // Names `schema` accepts that TOML must still quote. `\\`, `"` and
+        // control characters are not portable names: `shopify-api` prints a
+        // note instead of a snippet for them.
+        for name in [
+            "schemas/it's.json",
+            "schemas/a#b=c.json",
+            "schemas/[x] y.json",
+            "schémas/é.json",
+            "admin.json",
+        ] {
             let snippet = schema_snippet("2026-07", Path::new(name));
             let config = config_in(&format!("[package]\nname = \"app\"\n\n{snippet}\n"));
             assert_eq!(
@@ -967,10 +1001,7 @@ mod tests {
                 error.contains("must name a file inside the package"),
                 "{error}"
             );
-            assert!(
-                error.contains("relative path with `/` separators and no `:` or `\\`"),
-                "{error}"
-            );
+            assert!(error.contains(PORTABLE_PATH), "{error}");
             assert!(error.contains("`cargo package` ships"), "{error}");
         }
         // Not portable, so refused on every system: a drive on Windows, even
@@ -986,7 +1017,36 @@ mod tests {
             "a:b/x.json",
         ] {
             let error = schema(outside).unwrap_err();
-            assert!(error.contains("no `:` or `\\`"), "{outside}: {error}");
+            assert!(error.contains(PORTABLE_PATH), "{outside}: {error}");
+        }
+        // Names Windows reads as another file, or as a device: refused on
+        // every system too, even when a later `..` removes them.
+        for alias in [
+            "schema.json.",
+            "schema.json ",
+            "schemas./admin.json",
+            "schemas /admin.json",
+            "x.json./../y.json",
+            "x<y.json",
+            "x>y.json",
+            "x\"y.json",
+            "x|y.json",
+            "x?.json",
+            "x*.json",
+            "x\ty.json",
+            "x\u{7f}y.json",
+            "CON",
+            "con.json",
+            "Nul.schema.json",
+            "AUX .json",
+            "schemas/PRN/x.json",
+            "COM1.json",
+            "lpt9",
+            "COM\u{b9}.json",
+            "CON/../x.json",
+        ] {
+            let error = schema(alias).unwrap_err();
+            assert!(error.contains(PORTABLE_PATH), "{alias:?}: {error}");
         }
         #[cfg(windows)]
         for outside in [
@@ -1003,6 +1063,11 @@ mod tests {
             ("schemas/../schemas/admin.json", "schemas/admin.json"),
             ("schemas//admin.json", "schemas/admin.json"),
             ("schemas/admin.json/", "schemas/admin.json"),
+            ("console.json", "console.json"),
+            ("con-schema.json", "con-schema.json"),
+            ("COM10.json", "COM10.json"),
+            (".hidden/admin.json", ".hidden/admin.json"),
+            ("admin.schema.json", "admin.schema.json"),
         ] {
             assert_eq!(schema(inside), Ok(Some(PathBuf::from(normal))), "{inside}");
         }
