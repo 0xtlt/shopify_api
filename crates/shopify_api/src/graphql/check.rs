@@ -29,6 +29,10 @@ pub enum InvalidValueReason {
     /// bulk query writes its variables into its text, where it would not
     /// read as written.
     NotAGraphqlName,
+    /// An enum value `true`, `false` or `null`, which GraphQL does not
+    /// allow: written into a bulk query, it would read as a boolean or as
+    /// `null`.
+    ReservedEnumValue,
 }
 
 impl std::fmt::Display for InvalidValueReason {
@@ -40,6 +44,9 @@ impl std::fmt::Display for InvalidValueReason {
             Self::Unserializable => "could not serialize",
             Self::NotAGraphqlName => {
                 "not a GraphQL name, as an enum value or a field written into a bulk query must be"
+            }
+            Self::ReservedEnumValue => {
+                "`true`, `false` or `null`, which GraphQL does not allow as an enum value"
             }
         })
     }

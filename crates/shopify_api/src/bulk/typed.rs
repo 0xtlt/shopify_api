@@ -339,6 +339,17 @@ impl<'a> Json<'a> {
         }
     }
 
+    /// An enum value: a GraphQL name but `true`, `false` and `null`, which
+    /// would read as another kind of value.
+    fn enum_value(token: &str) -> std::result::Result<String, Invalid> {
+        let name = Self::name(token)?;
+        if matches!(name.as_str(), "true" | "false" | "null") {
+            Err(Invalid::new(InvalidValueReason::ReservedEnumValue))
+        } else {
+            Ok(name)
+        }
+    }
+
     fn write(&mut self, ty: &BulkType, out: &mut String) -> std::result::Result<(), Invalid> {
         self.skip_whitespace();
         match self.text.get(self.at) {
@@ -416,7 +427,7 @@ impl<'a> Json<'a> {
             Some(b'"') => {
                 let token = self.string();
                 if matches!(element(ty), BulkType::Enum) {
-                    out.push_str(&Self::name(token)?);
+                    out.push_str(&Self::enum_value(token)?);
                 } else {
                     out.push_str(token);
                 }

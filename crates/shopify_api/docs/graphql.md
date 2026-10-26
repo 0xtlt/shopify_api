@@ -446,8 +446,10 @@ GraphQL literal, and the variable definitions are left out.
 - An enum value bare (`sortKey: TITLE`), in an input object and in a list
   too. One that is not a GraphQL name, which `raw(…)` or a `String` field of
   `Variables` may hold, fails with [`Error::InvalidValue`](crate::Error::InvalidValue)
-  (`NotAGraphqlName`) before anything is sent, as do the values any
-  operation refuses.
+  (`NotAGraphqlName`) before anything is sent, as does an enum value
+  `true`, `false` or `null` (`ReservedEnumValue`), which would read as a
+  boolean or as `null`, and as do the values any operation refuses. A
+  `None` is still written `null`.
 - An input object as `{field: value}`, a list as `[a, b]`.
 - A variable without a value takes its default value, or is left out with
   its argument or field, as GraphQL leaves out an argument whose variable
