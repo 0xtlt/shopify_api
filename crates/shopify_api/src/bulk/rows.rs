@@ -281,13 +281,87 @@ impl<T: DeserializeOwned> FusedStream for BulkRows<T> {
     }
 }
 
+/// The alias of the `__typename` that [`BulkQuery::text`](crate::bulk::BulkQuery::text)
+/// selects where nested lines need it, `shopify_api_graphql::bulk::TYPENAME_KEY`.
+pub(crate) const TYPENAME_KEY: &str = "_shopifyApiTypename";
+
+/// What places a line. Its `id` is read only when it is a string: an alias
+/// `id` of another field is the query's to read, and an object whose lines
+/// are placed under it selects `id` itself.
 #[derive(Deserialize)]
 struct Keys {
+    #[serde(default, deserialize_with = "string_or_none")]
     id: Option<String>,
     #[serde(rename = "__parentId")]
     parent_id: Option<String>,
-    #[serde(rename = "__typename")]
+    #[serde(rename = "_shopifyApiTypename")]
     typename: Option<String>,
+}
+
+/// A string, or `None` for any other value.
+fn string_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("any value")
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E> {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+
+        fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(None)
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            while map
+                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                .is_some()
+            {}
+            Ok(None)
+        }
+    }
+    deserializer.deserialize_any(Visitor)
 }
 
 /// The error of a line whose `__parentId` matches no object it may be a child of.
@@ -517,7 +591,8 @@ struct ItemGroup<I> {
 /// A nested line goes to its parent by its `__parentId`, and, when its
 /// parent has several connections, to the connection that returns its
 /// `__typename`, which [`BulkQuery::text`](crate::bulk::BulkQuery::text)
-/// selects for that.
+/// selects for that under the alias `_shopifyApiTypename`. A `__typename`
+/// the query selects itself is not read to place lines.
 ///
 /// # Errors
 ///
@@ -614,7 +689,7 @@ impl<I: BulkItem> BulkItems<I> {
             _ => {
                 let typename = keys.typename.as_deref().ok_or_else(|| {
                     super::bulk_error(format!(
-                        "line {number} of the results has no `__typename`, which tells which connection of its parent it belongs to"
+                        "line {number} of the results has no `{TYPENAME_KEY}`, the `__typename` that tells which connection of its parent it belongs to"
                     ))
                 })?;
                 connections
@@ -622,7 +697,7 @@ impl<I: BulkItem> BulkItems<I> {
                     .position(|connection| connection.types.contains(&typename))
                     .ok_or_else(|| {
                         super::bulk_error(format!(
-                            "line {number} of the results has a `__typename` that no connection of its parent returns"
+                            "line {number} of the results has a `{TYPENAME_KEY}`, its `__typename`, that no connection of its parent returns"
                         ))
                     })?
             }
@@ -701,6 +776,12 @@ impl<I: BulkItem> FusedStream for BulkItems<I> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cli")]
+    #[test]
+    fn the_typename_key_is_the_one_the_macros_select() {
+        assert_eq!(super::TYPENAME_KEY, shopify_api_graphql::bulk::TYPENAME_KEY);
+    }
+
     use super::*;
     use crate::transport::{TransportError, chunks};
 

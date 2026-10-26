@@ -403,12 +403,19 @@ Where the guide is silent, what it does not show is refused: a query
 - A nested connection is written right in the `node { … }` of its parent
   connection: not in a fragment, nor under another field.
 - A node with nested connections selects `id`, without an alias or a
-  directive. Shopify refuses the query without it, and the lines of the
-  children are placed under their parent by that `id`: `graphql!` asks you to
-  add it rather than adding it itself.
+  directive, and no other field aliased `id`. Shopify refuses the query
+  without it, and the lines of the children are placed under their parent
+  by that `id`: `graphql!` asks you to add it rather than adding it itself.
+  Elsewhere, `id` may be the alias of any field.
 - Two connections of one node that may return the same type, such as two
   aliased `metafields(…)`, are refused: their lines could not be told apart.
-- No alias starting with `__`.
+- No alias starting with `__`, nor `_shopifyApiTypename`.
+- A string the GraphQL parser of `graphql!` reads otherwise than the
+  GraphQL specification: the query is sent as the text it read. That is a
+  `\b` escape, which it reads as U+0010 (write `\u0008`), and a block string
+  with a lone carriage return or indented with other whitespace than spaces
+  and tabs (write a quoted string). Escapes `\u{…}` and surrogate pairs do not
+  parse at all.
 
 ## The items of a bulk query
 
@@ -430,8 +437,10 @@ and [`Shopify::download_bulk_items`] split the steps, for an operation you
 wait for yourself.
 
 The text sent is not the text written. Where a node has several nested
-connections, their nodes gain `__typename`, which tells their lines apart;
-the types do not show it. [`BulkQuery::text`](crate::bulk::BulkQuery::text)
+connections, their nodes gain `_shopifyApiTypename: __typename`, which
+tells their lines apart; the types do not show it, and a `__typename` you
+select is left as you wrote it. `_shopifyApiTypename` is reserved: it cannot
+be an alias in a bulk query, nor can an alias that starts with `__`. [`BulkQuery::text`](crate::bulk::BulkQuery::text)
 gives the text sent.
 
 ## Variables of a bulk query

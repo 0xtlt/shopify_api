@@ -205,6 +205,30 @@ fn strings_the_parser_misreads_are_refused() {
 }
 
 #[test]
+fn another_field_aliased_id_is_refused_beside_a_nested_connection() {
+    let message = "`id: name` is refused on the nodes of `things`, which have the nested connection `parts`: each nested line is placed under its parent by the `id` of that parent. Give `name` another alias";
+    assert_eq!(
+        refusal("{ things { edges { node { id: name parts { edges { node { id } } } } } } }"),
+        format!("{message} (line 1, column 27)")
+    );
+    assert_eq!(
+        refusal(
+            "{ things { edges { node { ...F parts { edges { node { id } } } } } } } fragment F on Thing { id: name }"
+        ),
+        format!("{message} (line 1, column 94)")
+    );
+    // The analysis refuses two fields under one key before the bulk rules.
+    let error = analyze(
+        schema(),
+        "{ things { edges { node { id id: name parts { edges { node { id } } } } } } }",
+    )
+    .unwrap_err();
+    assert!(error.message.contains("`id` is selected twice"), "{error}");
+    // Without a nested connection, `id` may name any field.
+    bulk("{ things { edges { node { id: name parts: name } } } }");
+}
+
+#[test]
 fn siblings_that_may_return_one_type_are_refused() {
     assert_eq!(
         refusal(
@@ -251,7 +275,7 @@ fn the_rules_of_shopify_are_refusals() {
         ),
         (
             "{ things { edges { node { id __typename: name } } } }",
-            "`__typename` cannot be an alias in a bulk query: the lines of its results hold `__parentId` and `__typename` (line 1, column 30)",
+            "`__typename` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 30)",
         ),
         (
             "mutation { make(id: \"1\") { a { edges { node { id } } } b { edges { node { id } } } } }",

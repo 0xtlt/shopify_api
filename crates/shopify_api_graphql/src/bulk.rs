@@ -16,7 +16,8 @@
 //! - the nodes of a connection implement `Node`;
 //! - a nested connection written in the `node { … }` of its parent, not in
 //!   a fragment or under another field;
-//! - an object with nested connections selects `id`, without an alias;
+//! - an object with nested connections selects `id`, without an alias,
+//!   and no other field under the key `id`;
 //! - two connections of one object that may return the same type are
 //!   refused: their lines could not be told apart.
 //!
@@ -49,6 +50,11 @@ pub const MAX_DEPTH: usize = 2;
 
 /// The name of the type generated for each top-level object of a bulk query.
 pub const ITEM_TYPE: &str = "Item";
+
+/// The alias of the `__typename` written on the nodes of the connections
+/// that share a parent, which tells their lines apart. The lines are routed
+/// by it alone: a `__typename` the query selects is left as written.
+pub const TYPENAME_KEY: &str = "_shopifyApiTypename";
 
 /// Arguments Shopify ignores in a bulk query: it reads every object.
 const PAGINATION: [&str; 4] = ["first", "last", "after", "before"];
@@ -432,7 +438,7 @@ struct Checker<'a, 's> {
     fragments: &'a Fragments<'a>,
     /// The connections seen so far.
     count: usize,
-    /// The `node` fields whose selection gains `__typename`.
+    /// The `node` fields whose selection gains `__typename`, aliased [`TYPENAME_KEY`].
     typename: BTreeSet<(usize, usize)>,
 }
 
@@ -531,6 +537,15 @@ impl<'a> Checker<'a, '_> {
 
         let children = self.node_selection(&node.selection_set, &node_type, depth)?;
         if let Some(child) = children.first() {
+            if let Some(other) = self.aliased_id(&node.selection_set, 0) {
+                return error_at(
+                    other.position,
+                    format!(
+                        "`id: {}` is refused on the nodes of `{}`, which have the nested connection `{}`: each nested line is placed under its parent by the `id` of that parent. Give `{}` another alias",
+                        other.name, field.name, child.name, other.name
+                    ),
+                );
+            }
             let has_id = node.selection_set.items.iter().any(|item| {
                 matches!(item, ast::Selection::Field(id) if id.name == "id" && id.alias.is_none() && id.directives.is_empty())
             });
@@ -585,15 +600,39 @@ impl<'a> Checker<'a, '_> {
         fields_of(self.schema, parent).and_then(|fields| fields.get(&field.name))
     }
 
+    /// A field other than `id` aliased `id` in `set` or its fragments.
+    fn aliased_id(
+        &self,
+        set: &'a SelectionSet<'a>,
+        depth: usize,
+    ) -> Option<&'a ast::Field<'a, String>> {
+        // Fragments do not nest without end: `analyze` refused that.
+        if depth > 64 {
+            return None;
+        }
+        set.items.iter().find_map(|item| match item {
+            ast::Selection::Field(field) => {
+                (field.alias.as_deref() == Some("id") && field.name != "id").then_some(field)
+            }
+            ast::Selection::InlineFragment(fragment) => {
+                self.aliased_id(&fragment.selection_set, depth + 1)
+            }
+            ast::Selection::FragmentSpread(spread) => self
+                .fragments
+                .get(spread.fragment_name.as_str())
+                .and_then(|fragment| self.aliased_id(&fragment.selection_set, depth + 1)),
+        })
+    }
+
     /// Refuses an alias Shopify or this crate writes in the lines.
     fn check_key(field: &ast::Field<'_, String>) -> Result<(), Error> {
         if let Some(alias) = &field.alias
-            && alias.starts_with("__")
+            && (alias.starts_with("__") || alias == TYPENAME_KEY)
         {
             return error_at(
                 field.position,
                 format!(
-                    "`{alias}` cannot be an alias in a bulk query: the lines of its results hold `__parentId` and `__typename`"
+                    "`{alias}` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `{TYPENAME_KEY}` where this crate selects `__typename` to place them"
                 ),
             );
         }
@@ -880,7 +919,7 @@ fn value_part(value: &Value<'_>) -> ValuePart {
 }
 
 /// Writes a document back as text, without its variable definitions, with
-/// `__typename` where the lines need it.
+/// `__typename` aliased [`TYPENAME_KEY`] where the lines need it.
 struct Printer<'c> {
     typename: &'c BTreeSet<(usize, usize)>,
     parts: Vec<Part>,
@@ -938,7 +977,9 @@ impl Printer<'_> {
     fn selection_set(&mut self, set: &SelectionSet<'_>, typename: bool) {
         self.text.push('{');
         if typename {
-            self.text.push_str(" __typename");
+            self.text.push(' ');
+            self.text.push_str(TYPENAME_KEY);
+            self.text.push_str(": __typename");
         }
         for item in &set.items {
             self.text.push(' ');

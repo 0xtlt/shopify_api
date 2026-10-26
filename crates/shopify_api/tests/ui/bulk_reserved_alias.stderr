@@ -1,4 +1,4 @@
-error: `__parentId` cannot be an alias in a bulk query: the lines of its results hold `__parentId` and `__typename` (line 1, column 29)
+error: `__parentId` cannot be an alias in a bulk query: the lines of its results hold `__parentId`, and `_shopifyApiTypename` where this crate selects `__typename` to place them (line 1, column 29)
        (checked against the Shopify Admin API 2026-10)
  --> tests/ui/bulk_reserved_alias.rs:2:40
   |

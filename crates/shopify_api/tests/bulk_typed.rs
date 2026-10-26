@@ -101,12 +101,12 @@ fn shopify_with(jsonl: &'static str) -> (MockTransport, Arc<Mutex<Vec<HttpReques
 }
 
 const CATALOG: &str = r#"{"id":"gid://shopify/Product/1","title":"Shirt"}
-{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":"S-1","__parentId":"gid://shopify/Product/1"}
+{"_shopifyApiTypename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":"S-1","__parentId":"gid://shopify/Product/1"}
 {"key":"color","value":"red","__parentId":"gid://shopify/ProductVariant/1"}
-{"__typename":"MediaImage","id":"gid://shopify/MediaImage/1","alt":"Front","__parentId":"gid://shopify/Product/1"}
+{"_shopifyApiTypename":"MediaImage","id":"gid://shopify/MediaImage/1","alt":"Front","__parentId":"gid://shopify/Product/1"}
 {"key":"size","value":"M","__parentId":"gid://shopify/ProductVariant/1"}
-{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/2","sku":null,"__parentId":"gid://shopify/Product/1"}
-{"__typename":"Video","__parentId":"gid://shopify/Product/1"}
+{"_shopifyApiTypename":"ProductVariant","id":"gid://shopify/ProductVariant/2","sku":null,"__parentId":"gid://shopify/Product/1"}
+{"_shopifyApiTypename":"Video","__parentId":"gid://shopify/Product/1"}
 {"id":"gid://shopify/Product/2","title":"Hat"}
 "#;
 
@@ -124,15 +124,15 @@ async fn a_bulk_query_sends_its_text_with_group_objects_and_reads_its_items() {
         .unwrap();
 
     let start = &mock.graphql_requests()[0];
-    // `__typename` on the nodes of the two connections of a product, which
+    // `__typename`, aliased, on the nodes of the two connections of a product, which
     // tells their lines apart; not on those of `metafields`, alone under
     // its variant.
     assert_eq!(
         start.variables,
         json!({
             "query": "{ products(query: \"status:active\") { edges { node { id title \
-                      variants { edges { node { __typename id sku metafields { edges { node { key value } } } } } } \
-                      media { edges { node { __typename ... on MediaImage { id alt } } } } } } } }",
+                      variants { edges { node { _shopifyApiTypename: __typename id sku metafields { edges { node { key value } } } } } } \
+                      media { edges { node { _shopifyApiTypename: __typename ... on MediaImage { id alt } } } } } } } }",
             "groupObjects": true,
         })
     );
@@ -269,7 +269,7 @@ async fn an_enum_value_that_is_not_a_name_fails_before_anything_is_sent() {
 async fn a_child_out_of_place_ends_the_stream() {
     let (mock, _) = shopify_with(
         r#"{"id":"gid://shopify/Product/1","title":"Shirt"}
-{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":"S-1","__parentId":"gid://shopify/Product/9"}
+{"_shopifyApiTypename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":"S-1","__parentId":"gid://shopify/Product/9"}
 {"id":"gid://shopify/Product/2","title":"Hat"}
 "#,
     );
@@ -290,12 +290,12 @@ async fn a_child_out_of_place_ends_the_stream() {
 async fn a_child_no_connection_returns_ends_the_stream() {
     for (line, message) in [
         (
-            r#"{"__typename":"Collection","id":"gid://shopify/Collection/1","__parentId":"gid://shopify/Product/1"}"#,
-            "line 2 of the results has a `__typename` that no connection of its parent returns",
+            r#"{"_shopifyApiTypename":"Collection","id":"gid://shopify/Collection/1","__parentId":"gid://shopify/Product/1"}"#,
+            "line 2 of the results has a `_shopifyApiTypename`, its `__typename`, that no connection of its parent returns",
         ),
         (
             r#"{"id":"gid://shopify/ProductVariant/1","__parentId":"gid://shopify/Product/1"}"#,
-            "line 2 of the results has no `__typename`, which tells which connection of its parent it belongs to",
+            "line 2 of the results has no `_shopifyApiTypename`, the `__typename` that tells which connection of its parent it belongs to",
         ),
     ] {
         let jsonl: &'static str = Box::leak(
@@ -318,7 +318,7 @@ async fn a_child_no_connection_returns_ends_the_stream() {
 async fn a_line_that_does_not_read_as_its_type_ends_the_stream() {
     let (mock, _) = shopify_with(
         r#"{"id":"gid://shopify/Product/1","title":"Shirt"}
-{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":12,"__parentId":"gid://shopify/Product/1"}
+{"_shopifyApiTypename":"ProductVariant","id":"gid://shopify/ProductVariant/1","sku":12,"__parentId":"gid://shopify/Product/1"}
 {"id":"gid://shopify/Product/2","title":"Hat"}
 "#,
     );

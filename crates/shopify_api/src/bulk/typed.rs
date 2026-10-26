@@ -184,14 +184,16 @@ impl<I> BulkQuery<I> {
 
     /// The text Shopify runs: without variable definitions, each variable
     /// written in as a GraphQL literal (an enum value bare, an input object
-    /// as `{field: value}`), and `__typename` selected on the nodes of the
-    /// connections that share a parent, which tells their lines apart. A
+    /// as `{field: value}`), and `_shopifyApiTypename: __typename` selected
+    /// on the nodes of the connections that share a parent, which tells
+    /// their lines apart. A
     /// variable without a value is left out, as GraphQL leaves out an
     /// argument whose variable has none, or takes its default value.
     ///
     /// Fails with [`Error::InvalidValue`] for a value the variables refuse
-    /// ([`Shopify::execute`] would), and for an enum value or a field name
-    /// that is not a GraphQL name.
+    /// ([`Shopify::execute`] would), for an enum value or a field name
+    /// that is not a GraphQL name, and for an enum value `true`, `false` or
+    /// `null`, which would read as another value.
     pub fn text(&self) -> Result<String> {
         let values = self.operation.variable_values()?;
         let writer = Writer {
