@@ -1,6 +1,6 @@
 [package]
 name = "shopify_api_graphql"
-description = "Checks Shopify Admin GraphQL operations against the schema and generates their Rust types. Used by the `graphql!` macro of `shopify_api`."
+description = "Internal to shopify_api, no semver guarantee: checks Shopify Admin GraphQL operations against the schema and generates their Rust types for its `graphql!` macro. Depend on `shopify_api` instead."
 documentation = "https://docs.rs/shopify_api_graphql"
 keywords = ["shopify", "graphql", "codegen"]
 categories = ["development-tools", "api-bindings"]
