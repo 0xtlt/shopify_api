@@ -9,6 +9,7 @@ const URL: &str = "https://storage.googleapis.com/shopify-tiers-assets-prod-us-e
 
 graphql! {
     mod sorted = bulk("query($sort: ProductSortKeys) { products(sortKey: $sort) { edges { node { title } } } }");
+    mod sorted_by_title = bulk("query($sort: ProductSortKeys = TITLE) { products(sortKey: $sort) { edges { node { title } } } }");
     mod topics = bulk("query($topics: [WebhookSubscriptionTopic!]) { webhookSubscriptions(topics: $topics) { edges { node { id } } } }");
     mod priced = bulk("query($context: ContextualPricingContext!) { products { edges { node { contextualPricing(context: $context) { priceRange { minVariantPrice { amount } } } } } } }");
     mod aliased_id = bulk("{ products { edges { node { id: totalInventory title } } } }");
@@ -53,6 +54,28 @@ fn an_enum_variable_true_false_or_null_is_refused() {
     .text()
     .unwrap();
     assert!(text.contains("products(sortKey: nullable)"), "{text}");
+}
+
+#[test]
+fn a_none_in_variables_is_absence_and_null_is_null() {
+    // `None` in `Variables` leaves the variable out: its argument goes, or
+    // takes the variable's default.
+    let text = sorted::operation(sorted::Variables { sort: None })
+        .text()
+        .unwrap();
+    assert_eq!(text, "{ products { edges { node { title } } } }");
+    let text = sorted_by_title::operation(sorted_by_title::Variables { sort: None })
+        .text()
+        .unwrap();
+    assert!(text.contains("products(sortKey: TITLE)"), "{text}");
+    // An explicit `null` is written, and replaces the default.
+    let text = graphql!(
+        bulk("query($sort: ProductSortKeys = TITLE) { products(sortKey: $sort) { edges { node { title } } } }"),
+        sort = null,
+    )
+    .text()
+    .unwrap();
+    assert!(text.contains("products(sortKey: null)"), "{text}");
 }
 
 #[test]

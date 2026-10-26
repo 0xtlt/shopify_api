@@ -457,12 +457,18 @@ GraphQL literal, and the variable definitions are left out.
   `Variables` may hold, fails with [`Error::InvalidValue`](crate::Error::InvalidValue)
   (`NotAGraphqlName`) before anything is sent, as does an enum value
   `true`, `false` or `null` (`ReservedEnumValue`), which would read as a
-  boolean or as `null`, and as do the values any operation refuses. A
-  `None` is still written `null`.
+  boolean or as `null`, and as do the values any operation refuses.
 - An input object as `{field: value}`, a list as `[a, b]`.
 - A variable without a value takes its default value, or is left out with
   its argument or field, as GraphQL leaves out an argument whose variable
-  has no value; in a list, it is `null`.
+  has no value; in a list, it is `null`. A `None` in an optional field of a
+  module's `Variables` is such a variable without a value, not a `null`:
+  `sorted::Variables { sort: None }` sends `products { … }`, or
+  `products(sortKey: TITLE)` if `$sort` defaults to `TITLE`.
+- A `null` given as a value is written `null` and replaces the default:
+  `sort = null`, or `sort = option` with `None` in an inline `graphql!`,
+  sends `products(sortKey: null)`. So does a `None` in a list, and `null` or
+  a `Maybe::Null` in an input object.
 - A variable that may hold a `JSON` value is refused at compile time.
 
 ## Bulk mutations
