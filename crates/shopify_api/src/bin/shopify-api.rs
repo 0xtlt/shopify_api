@@ -11,12 +11,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use shopify_api_graphql::project::{
-    configured_api_version, previous_api_version, project_schema, write_atomically,
+    API_VERSION_KEY, METADATA_TABLE, SCHEMA_KEY, package_config, previous_api_version,
+    project_schema, write_atomically,
 };
-use shopify_api_graphql::{
-    PROJECT_SCHEMA_PATH, SCHEMA_ENV, Schema, SchemaSource, analyze, latest_api_version,
-    schema_source,
-};
+use shopify_api_graphql::{Schema, SchemaSource, analyze, latest_api_version, schema_source};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -57,8 +55,9 @@ enum SchemaCommand {
 /// `Debug` hides the access token and the client secret.
 #[derive(Args)]
 struct DownloadArgs {
-    /// Where to write it. By default, `graphql/admin.schema.json` next to the
-    /// nearest `Cargo.toml` of a package, where `graphql!` reads it
+    /// Where to write it. By default, where `graphql!` reads it for the
+    /// nearest package: `schema` in `[package.metadata.shopify_api]` of its
+    /// `Cargo.toml`, else `graphql/admin.schema.json` next to it
     /// (`graphql/admin.introspection.json` with --introspection).
     #[arg(long)]
     out: Option<PathBuf>,
@@ -132,7 +131,8 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
     let root = package_root().ok_or(
         "no Cargo.toml of a package in this directory or above: run it in the crate's directory",
     )?;
-    let declared = configured_api_version(&root)?;
+    let config = package_config(&root)?;
+    let declared = config.api_version.clone();
     let latest = declared.is_none();
     let wanted = declared.unwrap_or_else(|| latest_api_version(SystemTime::now()));
     if latest {
@@ -160,11 +160,11 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
         Some(out) => (out.clone(), false),
         None => {
             let file = if args.introspection {
-                "graphql/admin.introspection.json"
+                root.join("graphql/admin.introspection.json")
             } else {
-                PROJECT_SCHEMA_PATH
+                config.schema_path(&root)
             };
-            (root.join(file), !args.introspection)
+            (file, !args.introspection)
         }
     };
     let created = !out.exists();
@@ -199,17 +199,21 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
     eprintln!("Wrote {} ({types} types).", out.display());
 
     if project {
-        if created && let Some(root) = out.parent().and_then(Path::parent) {
-            touch_sources(root);
+        if created {
+            touch_sources(&root);
         }
         eprintln!(
             "`graphql!` checks the operations of this crate against the Admin API {version}, \
              and sends them to that version. Commit the file: offline builds need it."
         );
     } else if !args.introspection {
+        let absolute = std::path::absolute(&out).unwrap_or_else(|_| out.clone());
+        let named = absolute.strip_prefix(&root).unwrap_or(&absolute);
         eprintln!(
-            "Set {SCHEMA_ENV}={} for `graphql!` to use it.",
-            out.display()
+            "For `graphql!` to use it, name it in {}:\n\n\
+             [package.metadata.{METADATA_TABLE}]\n{API_VERSION_KEY} = \"{version}\"\n{SCHEMA_KEY} = \"{}\"",
+            root.join("Cargo.toml").display(),
+            named.display()
         );
     }
     Ok(ExitCode::SUCCESS)
@@ -287,28 +291,26 @@ fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
     };
     let path = match path {
         Some(path) => path.to_path_buf(),
-        None => {
-            let named = std::env::var_os(SCHEMA_ENV);
-            match schema_source(package_root().as_deref(), named.as_deref())? {
-                SchemaSource::File(path) => path,
-                SchemaSource::Project { dir, path, pinned } => {
-                    let schema = project_schema(
-                        &dir,
-                        pinned.as_deref(),
-                        true,
-                        SystemTime::now(),
-                        read,
-                        |file, version| {
-                            eprintln!(
-                                "Downloading the Admin schema {version} into {}…",
-                                file.display()
-                            );
-                        },
-                    )?;
-                    return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
-                }
+        None => match schema_source(package_root().as_deref(), None)? {
+            SchemaSource::File(path) => path,
+            SchemaSource::Project { dir, path, pinned } => {
+                let schema = project_schema(
+                    &dir,
+                    &path,
+                    pinned.as_deref(),
+                    true,
+                    SystemTime::now(),
+                    read,
+                    |file, version| {
+                        eprintln!(
+                            "Downloading the Admin schema {version} into {}…",
+                            file.display()
+                        );
+                    },
+                )?;
+                return Ok((Arc::unwrap_or_clone(schema), path.display().to_string()));
             }
-        }
+        },
     };
     let schema = read(&path)?;
     Ok((Arc::unwrap_or_clone(schema), path.display().to_string()))

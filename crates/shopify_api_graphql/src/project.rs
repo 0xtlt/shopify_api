@@ -1,16 +1,21 @@
 //! The Admin API version of a crate, and the schema file that goes with it.
 //!
-//! A crate may pin its version in its `Cargo.toml`:
+//! A crate may pin its version, and name its schema file, in its `Cargo.toml`:
 //!
 //! ```toml
 //! [package.metadata.shopify_api]
 //! api-version = "2026-07"
+//! schema = "schemas/admin-2026-07.json"
 //! ```
 //!
-//! Without it, the version is the one of the schema file the crate has, kept
-//! in [`PROJECT_SCHEMA_PATH`], and the latest stable one when there is no file
-//! yet. `graphql!` checks the crate's operations against that schema: see
-//! [`schema_plan`] for when it is downloaded.
+//! Without `schema`, the file is [`PROJECT_SCHEMA_PATH`]. Without
+//! `api-version`, the version is the one of that file, and the latest stable
+//! one when there is no file yet. `graphql!` checks the crate's operations
+//! against that schema: see [`schema_plan`] for when it is downloaded.
+//!
+//! Both keys belong to the package: which schema a crate is checked against
+//! depends on its own `Cargo.toml` and files only, never on where it is, nor
+//! on the cargo command that built it.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -21,16 +26,23 @@ use crate::{MINIMUM_API_VERSION, is_supported_api_version};
 /// Where a crate keeps the schema of its API version, relative to its `Cargo.toml`.
 pub const PROJECT_SCHEMA_PATH: &str = "graphql/admin.schema.json";
 
-/// The environment variable naming another schema file for `graphql!`,
-/// relative to the `Cargo.toml` of the crate being compiled, or absolute.
-/// It applies to local packages only: see [`schema_rules`].
-pub const SCHEMA_ENV: &str = "SHOPIFY_GRAPHQL_SCHEMA";
+/// Internal to this repository's tests, not part of the API: a schema file
+/// `graphql!` uses for every package, relative to the `Cargo.toml` of the
+/// crate being compiled, or absolute, as it is. This repository's
+/// `.cargo/config.toml` sets it, for the projects `trybuild` compiles, which
+/// have no schema file. It applies to every package, with no exception, so
+/// that its effect does not depend on where a package is.
+pub const TEST_SCHEMA_ENV: &str = "SHOPIFY_API_INTERNAL_TEST_SCHEMA";
 
 /// The `[package.metadata]` table `shopify_api` reads.
 pub const METADATA_TABLE: &str = "shopify_api";
 
 /// The key of the API version in [`METADATA_TABLE`].
 pub const API_VERSION_KEY: &str = "api-version";
+
+/// The key of the schema file in [`METADATA_TABLE`], relative to the
+/// package's `Cargo.toml`; [`PROJECT_SCHEMA_PATH`] without it.
+pub const SCHEMA_KEY: &str = "schema";
 
 /// The lines to add to a `Cargo.toml` to select `version`.
 pub fn metadata_snippet(version: &str) -> String {
@@ -78,25 +90,77 @@ fn year_and_month(days: u64) -> (u64, u64) {
     (year, month)
 }
 
-/// The Admin API version the `Cargo.toml` in `manifest_dir` declares, if any.
-pub fn configured_api_version(manifest_dir: &Path) -> Result<Option<String>, String> {
+/// What the `[package.metadata.shopify_api]` of a `Cargo.toml` declares.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageConfig {
+    /// [`API_VERSION_KEY`].
+    pub api_version: Option<String>,
+    /// [`SCHEMA_KEY`], as written: relative to the `Cargo.toml`.
+    pub schema: Option<PathBuf>,
+}
+
+impl PackageConfig {
+    /// The schema file of the package in `dir`: [`SCHEMA_KEY`], else
+    /// [`PROJECT_SCHEMA_PATH`].
+    pub fn schema_path(&self, dir: &Path) -> PathBuf {
+        dir.join(
+            self.schema
+                .as_deref()
+                .unwrap_or(Path::new(PROJECT_SCHEMA_PATH)),
+        )
+    }
+}
+
+/// What the `Cargo.toml` in `manifest_dir` declares; nothing when there is none.
+pub fn package_config(manifest_dir: &Path) -> Result<PackageConfig, String> {
     let manifest = manifest_dir.join("Cargo.toml");
     let text = match std::fs::read_to_string(&manifest) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PackageConfig::default());
+        }
         Err(error) => return Err(format!("cannot read `{}`: {error}", manifest.display())),
     };
-    api_version_in(&text).map_err(|error| format!("`{}`: {error}", manifest.display()))
+    config_in(&text).map_err(|error| format!("`{}`: {error}", manifest.display()))
 }
 
-/// The API version a `Cargo.toml` declares, if any.
-fn api_version_in(manifest: &str) -> Result<Option<String>, String> {
+/// The Admin API version the `Cargo.toml` in `manifest_dir` declares, if any.
+pub fn configured_api_version(manifest_dir: &Path) -> Result<Option<String>, String> {
+    package_config(manifest_dir).map(|config| config.api_version)
+}
+
+/// What a `Cargo.toml` declares.
+fn config_in(manifest: &str) -> Result<PackageConfig, String> {
     let table: toml::Table = manifest.parse().map_err(|error| format!("{error}"))?;
-    let value = table
+    let ours = table
         .get("package")
         .and_then(|package| package.get("metadata"))
-        .and_then(|metadata| metadata.get(METADATA_TABLE))
-        .and_then(|ours| ours.get(API_VERSION_KEY));
+        .and_then(|metadata| metadata.get(METADATA_TABLE));
+    let Some(ours) = ours else {
+        return Ok(PackageConfig::default());
+    };
+    Ok(PackageConfig {
+        api_version: api_version_in(ours.get(API_VERSION_KEY))?,
+        schema: schema_in(ours.get(SCHEMA_KEY))?,
+    })
+}
+
+/// The schema file [`SCHEMA_KEY`] names, if any.
+fn schema_in(value: Option<&toml::Value>) -> Result<Option<PathBuf>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        Some(path) if !path.is_empty() => Ok(Some(PathBuf::from(path))),
+        _ => Err(format!(
+            "`{SCHEMA_KEY}` in [package.metadata.{METADATA_TABLE}] must be the path of a schema file, \
+             relative to Cargo.toml, such as \"graphql/admin.schema.json\""
+        )),
+    }
+}
+
+/// The API version [`API_VERSION_KEY`] declares, if any.
+fn api_version_in(value: Option<&toml::Value>) -> Result<Option<String>, String> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -117,14 +181,14 @@ fn api_version_in(manifest: &str) -> Result<Option<String>, String> {
 /// Where the schema of a crate comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaSource {
-    /// A schema file, used as it is.
+    /// A schema file, used as it is: the one [`TEST_SCHEMA_ENV`] names.
     File(PathBuf),
-    /// The crate's [`PROJECT_SCHEMA_PATH`], and the version its `Cargo.toml`
+    /// The schema file of the crate, and the version its `Cargo.toml`
     /// declares: see [`schema_plan`].
     Project {
         /// The directory of the crate's `Cargo.toml`.
         dir: PathBuf,
-        /// `dir` joined with [`PROJECT_SCHEMA_PATH`].
+        /// [`PackageConfig::schema_path`].
         path: PathBuf,
         /// The version its `Cargo.toml` declares.
         pinned: Option<String>,
@@ -133,20 +197,22 @@ pub enum SchemaSource {
 
 /// The schema `graphql!` uses for the crate in `manifest_dir`:
 ///
-/// 1. the file `named` by [`SCHEMA_ENV`];
-/// 2. else [`PROJECT_SCHEMA_PATH`], with the version `Cargo.toml` declares.
+/// 1. the file `test_schema` names, the value of [`TEST_SCHEMA_ENV`]
+///    (internal to this repository's tests);
+/// 2. else the one [`SCHEMA_KEY`] names, else [`PROJECT_SCHEMA_PATH`], with
+///    the version `Cargo.toml` declares.
 pub fn schema_source(
     manifest_dir: Option<&Path>,
-    named: Option<&OsStr>,
+    test_schema: Option<&OsStr>,
 ) -> Result<SchemaSource, String> {
-    if let Some(named) = named.filter(|value| !value.is_empty()) {
+    if let Some(named) = test_schema.filter(|value| !value.is_empty()) {
         let path = match manifest_dir {
             Some(dir) => dir.join(named),
             None => PathBuf::from(named),
         };
         if !path.is_file() {
             return Err(format!(
-                "{SCHEMA_ENV} names `{}`, which is not a file",
+                "{TEST_SCHEMA_ENV} names `{}`, which is not a file",
                 path.display()
             ));
         }
@@ -154,16 +220,18 @@ pub fn schema_source(
     }
     let dir = manifest_dir
         .ok_or("no Cargo.toml of a package: the schema of a crate is kept next to it")?;
+    let config = package_config(dir)?;
     Ok(SchemaSource::Project {
-        path: dir.join(PROJECT_SCHEMA_PATH),
-        pinned: configured_api_version(dir)?,
+        path: config.schema_path(dir),
+        pinned: config.api_version,
         dir: dir.to_path_buf(),
     })
 }
 
 /// Whether the package in `dir` is local: the user's own source, in a
 /// workspace or a path dependency outside it, rather than a packaged,
-/// vendored or checked-out copy of a dependency.
+/// vendored or checked-out copy of a dependency. It only gates downloads,
+/// see [`may_download`].
 ///
 /// A package is not local when:
 /// - its directory holds a `Cargo.toml.orig`, which cargo writes into every
@@ -179,8 +247,12 @@ pub fn schema_source(
 /// `$CARGO_HOME`, or a `git` or `registry` directory in it, that links to
 /// another disk still counts.
 ///
-/// It depends on the directory and its files only, which stay the same for a
-/// compiled crate: cargo reuses that crate whatever command built it.
+/// These are heuristics: an unrelated `.cargo-ok` above a workspace, for
+/// one, makes it look not local. That is acceptable because the answer
+/// never chooses a schema: it only lets a missing or outdated file be
+/// downloaded, or turns that into a compile error that names the file and
+/// the command to run. A mistake makes a build fail loudly, never compile
+/// against another schema.
 pub fn is_local_package(dir: &Path, cargo_home: Option<&Path>) -> bool {
     if dir.join("Cargo.toml.orig").exists() || dir.join(".cargo-checksum.json").exists() {
         return false;
@@ -226,29 +298,16 @@ pub fn cargo_home() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".cargo"))
 }
 
-/// What `graphql!` may do for the package being compiled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SchemaRules {
-    /// Whether [`SCHEMA_ENV`] applies: to a local package only, so that a
-    /// dependency is always checked against the schema it ships.
-    pub override_applies: bool,
-    /// Whether the schema file may be downloaded, see [`schema_plan`].
-    pub may_download: bool,
-}
-
-/// The rules for a package that is `local` ([`is_local_package`]) and,
-/// with `primary`, one cargo was asked to build.
+/// Whether `graphql!` may download the schema file of the package in `dir`,
+/// one cargo was asked to build when `primary` (`CARGO_PRIMARY_PACKAGE`):
+/// only a local one ([`is_local_package`]).
 ///
-/// What is compiled depends on `local` only, an input that is the same for
-/// a compiled crate. `primary` is not: cargo reuses a crate built as primary
-/// when it is later built as a dependency, and the other way round. It only
-/// decides whether a missing or outdated file is downloaded or refused, and
-/// a refusal is a compile error, never another schema.
-pub fn schema_rules(local: bool, primary: bool) -> SchemaRules {
-    SchemaRules {
-        override_applies: local,
-        may_download: local && primary,
-    }
+/// Neither input is tracked by cargo, and neither needs to be: they decide
+/// whether a missing or outdated file is downloaded or a compile error,
+/// never which file is read. A compiled crate read the same file whatever
+/// they were.
+pub fn may_download(dir: &Path, cargo_home: Option<&Path>, primary: bool) -> bool {
+    primary && is_local_package(dir, cargo_home)
 }
 
 /// What a crate's schema file holds.
@@ -283,32 +342,32 @@ pub enum SchemaPlan {
     Refuse(String),
 }
 
-/// What to do with the schema file of the crate in `dir`, `file`, when its
-/// `Cargo.toml` pins `pinned`.
+/// What to do with `file`, the schema file at `path` of the crate in `dir`,
+/// when its `Cargo.toml` pins `pinned`.
 ///
 /// The version of a crate is the one it pins, else the one of its file: a
 /// file is never replaced by a newer version on its own, so that a build
 /// gives the same result whatever the date. Without either, the crate takes
 /// the latest version at `now`.
 ///
-/// Only a package that `may_download` ([`schema_rules`]) downloads: a local
-/// one cargo was asked to build. Any other uses the file it ships, and
+/// Only a package that [`may_download`] downloads: a local one cargo was
+/// asked to build. Any other uses the file it ships, and
 /// refuses to build when it has none or when it is not the version its
 /// `Cargo.toml` pins: its author tested its operations against that file,
 /// and a registry, vendored or packaged copy is not to be written.
 pub fn schema_plan(
     dir: &Path,
+    path: &Path,
     file: &SchemaFile,
     pinned: Option<&str>,
     may_download: bool,
     now: SystemTime,
 ) -> SchemaPlan {
-    let path = dir.join(PROJECT_SCHEMA_PATH);
     let fix = || {
         format!(
             "Run `shopify-api schema download` in `{}` (`cargo install shopify_api --features cli`), \
              and commit the file. A crate downloads its schema only as a local package cargo was asked to build: \
-             as a dependency, or packaged, it uses the one it ships.",
+             as a dependency, packaged, vendored, under $CARGO_HOME or below a `.cargo-ok`, it uses the one it ships.",
             dir.display()
         )
     };
@@ -495,8 +554,9 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
         })
 }
 
-/// The schema of the crate in `dir`, read with `read`, after downloading it
-/// when [`schema_plan`] says so, with `may_download` from [`schema_rules`]. `on_download`
+/// The schema of the crate in `dir`, read from `path` with `read`, after
+/// downloading it when [`schema_plan`] says so, with `may_download` from
+/// [`may_download()`]. `on_download`
 /// is called with the file and the version before each download, to show
 /// progress.
 ///
@@ -506,48 +566,57 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
 #[cfg_attr(docsrs, doc(cfg(feature = "download")))]
 pub fn project_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
+    path: &Path,
     pinned: Option<&str>,
     may_download: bool,
     now: SystemTime,
     read: impl Fn(&Path) -> Result<S, String>,
     on_download: impl Fn(&Path, &str),
 ) -> Result<S, String> {
-    obtain_schema(dir, pinned, may_download, now, read, |path, version| {
-        on_download(path, version);
-        download_schema_file(path, version).map(drop)
-    })
+    obtain_schema(
+        dir,
+        path,
+        pinned,
+        may_download,
+        now,
+        read,
+        |path, version| {
+            on_download(path, version);
+            download_schema_file(path, version).map(drop)
+        },
+    )
 }
 
 /// [`project_schema`], downloading with `download`.
 #[cfg(feature = "download")]
 fn obtain_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
+    path: &Path,
     pinned: Option<&str>,
     may_download: bool,
     now: SystemTime,
     read: impl Fn(&Path) -> Result<S, String>,
     download: impl Fn(&Path, &str) -> Result<(), DownloadError>,
 ) -> Result<S, String> {
-    let path = dir.join(PROJECT_SCHEMA_PATH);
     let (file, current) = if path.is_file() {
-        match read(&path) {
+        match read(path) {
             Ok(schema) => {
                 let version = schema.as_ref().api_version.clone();
                 (SchemaFile::Usable { version }, Some(schema))
             }
             Err(reason) => {
-                let version = stored_api_version(&path);
+                let version = stored_api_version(path);
                 (SchemaFile::Unusable { version, reason }, None)
             }
         }
     } else {
         (SchemaFile::Missing, None)
     };
-    match schema_plan(dir, &file, pinned, may_download, now) {
-        SchemaPlan::Read => current.map_or_else(|| read(&path), Ok),
+    match schema_plan(dir, path, &file, pinned, may_download, now) {
+        SchemaPlan::Read => current.map_or_else(|| read(path), Ok),
         SchemaPlan::Refuse(message) => Err(message),
         SchemaPlan::Download { version, latest } => {
-            download_once(&path, &version, latest, download).map_err(|error| {
+            download_once(path, &version, latest, download).map_err(|error| {
                 let which = match (pinned, &file) {
                     (Some(_), _) => format!("{version}, the version Cargo.toml pins"),
                     (None, SchemaFile::Missing) => format!(
@@ -557,9 +626,9 @@ fn obtain_schema<S: AsRef<crate::Schema>>(
                         "{version}, the version of the schema file, again: this version of shopify_api cannot read it"
                     ),
                 };
-                download_failure(&error, &path, &which, &version, now)
+                download_failure(&error, path, &which, &version, now)
             })?;
-            read(&path)
+            read(path)
         }
     }
 }
@@ -736,24 +805,44 @@ mod tests {
         assert_eq!(previous_api_version("2026-05"), None);
     }
 
+    fn version_in(manifest: &str) -> Result<Option<String>, String> {
+        config_in(manifest).map(|config| config.api_version)
+    }
+
     #[test]
     fn the_version_is_read_from_the_package_metadata() {
-        assert_eq!(api_version_in("[package]\nname = \"app\""), Ok(None));
+        assert_eq!(version_in("[package]\nname = \"app\""), Ok(None));
         assert_eq!(
-            api_version_in("[package.metadata.shopify_api]\napi-version = \"2026-07\""),
+            version_in("[package.metadata.shopify_api]\napi-version = \"2026-07\""),
             Ok(Some("2026-07".to_string()))
         );
         assert_eq!(
-            api_version_in("[package.metadata.shopify_api]\napi-version = \"unstable\""),
+            version_in("[package.metadata.shopify_api]\napi-version = \"unstable\""),
             Ok(Some("unstable".to_string()))
         );
-        let old = api_version_in("[package.metadata.shopify_api]\napi-version = \"2025-01\"")
-            .unwrap_err();
+        let old =
+            version_in("[package.metadata.shopify_api]\napi-version = \"2025-01\"").unwrap_err();
         assert!(old.contains("is not a version shopify_api calls"), "{old}");
-        let number =
-            api_version_in("[package.metadata.shopify_api]\napi-version = 2026").unwrap_err();
+        let number = version_in("[package.metadata.shopify_api]\napi-version = 2026").unwrap_err();
         assert!(number.contains("must be a string"), "{number}");
-        assert!(api_version_in("[package").is_err());
+        assert!(version_in("[package").is_err());
+    }
+
+    #[test]
+    fn the_schema_file_is_read_from_the_package_metadata() {
+        let schema = |manifest: &str| config_in(manifest).map(|config| config.schema);
+        assert_eq!(schema("[package]\nname = \"app\""), Ok(None));
+        assert_eq!(
+            schema("[package.metadata.shopify_api]\nschema = \"schemas/admin.json\""),
+            Ok(Some(PathBuf::from("schemas/admin.json")))
+        );
+        for wrong in ["schema = 1", "schema = \"\""] {
+            let error = schema(&format!("[package.metadata.shopify_api]\n{wrong}")).unwrap_err();
+            assert!(
+                error.contains("must be the path of a schema file"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -780,7 +869,30 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_names_another_file() {
+    fn the_manifest_names_another_file_relative_to_it() {
+        let project = Project::new("key");
+        project.write(
+            "Cargo.toml",
+            "[package]\nname = \"app\"\n\n[package.metadata.shopify_api]\n\
+             api-version = \"2026-07\"\nschema = \"schemas/admin-2026-07.json\"\n",
+        );
+        // The file need not exist: missing, it is downloaded or refused as
+        // the default one is.
+        let expected = SchemaSource::Project {
+            dir: project.0.clone(),
+            path: project.0.join("schemas/admin-2026-07.json"),
+            pinned: Some("2026-07".to_string()),
+        };
+        assert_eq!(schema_source(Some(&project.0), None), Ok(expected.clone()));
+        // An empty test variable is no variable.
+        assert_eq!(
+            schema_source(Some(&project.0), Some(OsStr::new(""))),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn the_test_variable_names_a_file_for_every_package() {
         let project = Project::new("named");
         project.manifest(Some("2026-07"));
         let other = project.write("schemas/unstable.json", "{}");
@@ -799,7 +911,7 @@ mod tests {
         assert_eq!(
             schema_source(Some(&project.0), Some(OsStr::new("missing.json"))),
             Err(format!(
-                "SHOPIFY_GRAPHQL_SCHEMA names `{}`, which is not a file",
+                "SHOPIFY_API_INTERNAL_TEST_SCHEMA names `{}`, which is not a file",
                 project.0.join("missing.json").display()
             ))
         );
@@ -820,6 +932,10 @@ mod tests {
         }
     }
 
+    fn path(dir: &Path) -> PathBuf {
+        dir.join(PROJECT_SCHEMA_PATH)
+    }
+
     fn download(version: &str, latest: bool) -> SchemaPlan {
         SchemaPlan::Download {
             version: version.to_string(),
@@ -833,13 +949,27 @@ mod tests {
         let years_later = day(2031, 5, 6);
         for primary in [true, false] {
             assert_eq!(
-                schema_plan(dir, &usable("2026-07"), None, primary, years_later),
+                schema_plan(
+                    dir,
+                    &path(dir),
+                    &usable("2026-07"),
+                    None,
+                    primary,
+                    years_later
+                ),
                 SchemaPlan::Read
             );
         }
         // No file and no pin: the first build of the crate takes the latest.
         assert_eq!(
-            schema_plan(dir, &SchemaFile::Missing, None, true, day(2027, 2, 3)),
+            schema_plan(
+                dir,
+                &path(dir),
+                &SchemaFile::Missing,
+                None,
+                true,
+                day(2027, 2, 3)
+            ),
             download("2027-01", true)
         );
     }
@@ -849,25 +979,54 @@ mod tests {
         let dir = Path::new("/crate");
         let now = day(2026, 10, 22);
         assert_eq!(
-            schema_plan(dir, &usable("2026-07"), Some("2026-07"), true, now),
+            schema_plan(
+                dir,
+                &path(dir),
+                &usable("2026-07"),
+                Some("2026-07"),
+                true,
+                now
+            ),
             SchemaPlan::Read
         );
         assert_eq!(
-            schema_plan(dir, &usable("2026-07"), Some("2026-10"), true, now),
+            schema_plan(
+                dir,
+                &path(dir),
+                &usable("2026-07"),
+                Some("2026-10"),
+                true,
+                now
+            ),
             download("2026-10", false)
         );
         assert_eq!(
-            schema_plan(dir, &SchemaFile::Missing, Some("2026-04"), true, now),
+            schema_plan(
+                dir,
+                &path(dir),
+                &SchemaFile::Missing,
+                Some("2026-04"),
+                true,
+                now
+            ),
             download("2026-04", false)
         );
         // A file of an older format is downloaded again, for the same version.
         assert_eq!(
-            schema_plan(dir, &old_format(Some("2026-07")), None, true, now),
+            schema_plan(
+                dir,
+                &path(dir),
+                &old_format(Some("2026-07")),
+                None,
+                true,
+                now
+            ),
             download("2026-07", false)
         );
         assert_eq!(
             schema_plan(
                 dir,
+                &path(dir),
                 &old_format(Some("2026-07")),
                 Some("2026-10"),
                 true,
@@ -876,7 +1035,7 @@ mod tests {
             download("2026-10", false)
         );
         assert_eq!(
-            schema_plan(dir, &old_format(None), None, true, now),
+            schema_plan(dir, &path(dir), &old_format(None), None, true, now),
             download("2026-10", true)
         );
     }
@@ -975,25 +1134,16 @@ mod tests {
     }
 
     #[test]
-    fn the_override_applies_to_local_packages_and_only_a_primary_one_downloads() {
-        for primary in [true, false] {
-            assert_eq!(
-                schema_rules(true, primary),
-                SchemaRules {
-                    override_applies: true,
-                    may_download: primary,
-                }
-            );
-            // Packaged, vendored or checked out: never, even when primary,
-            // as in the verification of `cargo package`.
-            assert_eq!(
-                schema_rules(false, primary),
-                SchemaRules {
-                    override_applies: false,
-                    may_download: false,
-                }
-            );
-        }
+    fn only_a_local_primary_package_downloads() {
+        let home = Project::new("download-home");
+        let local = Project::new("download-local");
+        local.manifest(None);
+        assert!(may_download(&local.0, Some(&home.0), true));
+        assert!(!may_download(&local.0, Some(&home.0), false));
+        // Packaged: never, even when primary, as in the verification of
+        // `cargo package`.
+        local.write("Cargo.toml.orig", "");
+        assert!(!may_download(&local.0, Some(&home.0), true));
     }
 
     #[test]
@@ -1001,7 +1151,12 @@ mod tests {
         let dir = Path::new("/registry/deplib-1.0.0");
         let now = day(2026, 10, 22);
         let refusal = |file: &SchemaFile, pinned: Option<&str>| match schema_plan(
-            dir, file, pinned, false, now,
+            dir,
+            &path(dir),
+            file,
+            pinned,
+            false,
+            now,
         ) {
             SchemaPlan::Refuse(message) => {
                 let fix = "Run `shopify-api schema download` in `/registry/deplib-1.0.0`";
@@ -1011,7 +1166,14 @@ mod tests {
             other => panic!("{file:?}, {pinned:?}: {other:?}"),
         };
         assert_eq!(
-            schema_plan(dir, &usable("2026-07"), Some("2026-07"), false, now),
+            schema_plan(
+                dir,
+                &path(dir),
+                &usable("2026-07"),
+                Some("2026-07"),
+                false,
+                now
+            ),
             SchemaPlan::Read
         );
         let message = refusal(&usable("2026-07"), Some("2026-10"));
@@ -1095,10 +1257,11 @@ mod tests {
                 primary: bool,
                 now: SystemTime,
             ) -> Result<Arc<Schema>, String> {
-                let pinned = configured_api_version(&project.0).unwrap();
+                let config = package_config(&project.0).unwrap();
                 obtain_schema(
                     &project.0,
-                    pinned.as_deref(),
+                    &config.schema_path(&project.0),
+                    config.api_version.as_deref(),
                     primary,
                     now,
                     read,
@@ -1123,6 +1286,91 @@ mod tests {
             assert!(error.contains("holds the Admin API 2026-04"), "{error}");
             assert!(network.asked.borrow().is_empty());
             assert!(read(&file).unwrap().api_version == "2026-04");
+        }
+
+        /// A package whose `Cargo.toml` names `schemas/admin.json`.
+        fn with_key(name: &str, version: Option<&str>) -> Project {
+            let project = Project::new(name);
+            let pin = version.map_or(String::new(), |version| {
+                format!("api-version = \"{version}\"\n")
+            });
+            project.write(
+                "Cargo.toml",
+                &format!(
+                    "[package]\nname = \"app\"\n\n[package.metadata.shopify_api]\n\
+                     {pin}schema = \"schemas/admin.json\"\n"
+                ),
+            );
+            project
+        }
+
+        #[test]
+        fn the_file_the_manifest_names_follows_the_rules_of_the_default_one() {
+            let project = with_key("key-local", None);
+            // The default file is not read when the key names another.
+            project.write(PROJECT_SCHEMA_PATH, &schema("2026-04"));
+            project.write("schemas/admin.json", &schema("2026-07"));
+            let network = Network::new(true, &["2026-07", "2026-10"]);
+            let now = day(2026, 10, 22);
+            assert_eq!(
+                network.obtain(&project, true, now).unwrap().api_version,
+                "2026-07"
+            );
+            assert!(network.asked.borrow().is_empty());
+
+            // Missing: a local primary package downloads it there.
+            std::fs::remove_file(project.0.join("schemas/admin.json")).unwrap();
+            assert_eq!(
+                network.obtain(&project, true, now).unwrap().api_version,
+                "2026-10"
+            );
+            assert_eq!(*network.asked.borrow(), ["2026-10"]);
+            assert_eq!(
+                read(&project.0.join("schemas/admin.json"))
+                    .unwrap()
+                    .api_version,
+                "2026-10"
+            );
+            assert_eq!(
+                read(&project.0.join(PROJECT_SCHEMA_PATH))
+                    .unwrap()
+                    .api_version,
+                "2026-04"
+            );
+        }
+
+        #[test]
+        fn a_dependency_uses_the_file_its_manifest_names_and_never_downloads_it() {
+            let now = day(2026, 10, 22);
+            let network = Network::new(true, &["2026-04", "2026-07", "2026-10"]);
+            let project = with_key("key-dependency", Some("2026-07"));
+            project.write("schemas/admin.json", &schema("2026-07"));
+            assert_eq!(
+                network.obtain(&project, false, now).unwrap().api_version,
+                "2026-07"
+            );
+
+            // Missing: an error that names the file and the command.
+            std::fs::remove_file(project.0.join("schemas/admin.json")).unwrap();
+            let error = network.obtain(&project, false, now).unwrap_err();
+            let file = project.0.join("schemas/admin.json");
+            assert!(
+                error.starts_with(&format!("`{}` is missing", file.display())),
+                "{error}"
+            );
+            assert!(
+                error.contains(&format!(
+                    "Run `shopify-api schema download` in `{}`",
+                    project.0.display()
+                )),
+                "{error}"
+            );
+
+            // Of another version than the pinned one: an error too.
+            project.write("schemas/admin.json", &schema("2026-04"));
+            let error = network.obtain(&project, false, now).unwrap_err();
+            assert!(error.contains("holds the Admin API 2026-04"), "{error}");
+            assert!(network.asked.borrow().is_empty());
         }
 
         #[test]

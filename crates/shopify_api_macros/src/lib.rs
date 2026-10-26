@@ -13,11 +13,9 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::codegen::{DATA_TYPE, data_types, deprecation_warning, variables_types};
 use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
-use shopify_api_graphql::project::{
-    cargo_home, is_local_package, metadata_snippet, project_schema, schema_rules,
-};
+use shopify_api_graphql::project::{cargo_home, may_download, metadata_snippet, project_schema};
 use shopify_api_graphql::{
-    MINIMUM_API_VERSION, Operation, OperationKind, SCHEMA_ENV, Schema, SchemaSource, Variable,
+    MINIMUM_API_VERSION, Operation, OperationKind, Schema, SchemaSource, TEST_SCHEMA_ENV, Variable,
     analyze, is_supported_api_version, latest_api_version, schema_source,
 };
 use syn::parse::{Parse, ParseStream};
@@ -242,39 +240,32 @@ struct LoadedSchema {
 impl LoadedSchema {
     /// The schema of the crate being compiled.
     fn load() -> Result<Self, String> {
-        // What is compiled depends on whether the package is local, which
-        // is the same for a compiled crate whatever cargo command built it,
-        // never on `CARGO_PRIMARY_PACKAGE`, which cargo does not track.
+        // The file read depends on the package's `Cargo.toml` only, and on
+        // the internal test variable, which applies to every package: both
+        // are tracked. Where the package is, and whether cargo was asked to
+        // build it, are not: they only decide whether a missing or outdated
+        // file is downloaded or a compile error.
         let dir = manifest_dir();
-        let local = dir
-            .as_deref()
-            .is_some_and(|dir| is_local_package(dir, cargo_home().as_deref()));
-        // Untracked, `primary` may be stale for a reused crate. That is fine
-        // here: it only decides whether a missing or outdated file is
-        // downloaded or a compile error, never which schema is used.
-        let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
-        let rules = schema_rules(local, primary);
-        let named = std::env::var_os(SCHEMA_ENV).filter(|_| rules.override_applies);
-        let (path, schema) = match schema_source(dir.as_deref(), named.as_deref())? {
+        let test_schema = std::env::var_os(TEST_SCHEMA_ENV);
+        let (path, schema) = match schema_source(dir.as_deref(), test_schema.as_deref())? {
             SchemaSource::File(path) => {
                 let schema = read_schema(&path).map_err(|error| {
-                    format!(
-                        "`{}`, named by {SCHEMA_ENV}: {error}. Download it again with \
-                         `shopify-api schema download --out <file>`.",
-                        path.display()
-                    )
+                    format!("`{}`, named by {TEST_SCHEMA_ENV}: {error}", path.display())
                 })?;
                 (path, schema)
             }
             SchemaSource::Project { dir, path, pinned } => {
+                let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
+                let may_download = may_download(&dir, cargo_home().as_deref(), primary);
                 let read = |path: &Path| {
                     read_schema(path).map_err(|error| format!("`{}`: {error}", path.display()))
                 };
                 // A proc macro has no progress to show.
                 let schema = project_schema(
                     &dir,
+                    &path,
                     pinned.as_deref(),
-                    rules.may_download,
+                    may_download,
                     SystemTime::now(),
                     read,
                     |_, _| {},
@@ -313,7 +304,8 @@ impl LoadedSchema {
         let mut tracked = TRACKED
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // The manifest declares the API version, the schema file holds it.
+        // The manifest declares the API version and names the schema file,
+        // which holds the schema.
         let manifest = manifest_dir().map(|dir| dir.join("Cargo.toml"));
         let files = [manifest, Some(self.path.clone())]
             .into_iter()
@@ -330,9 +322,7 @@ impl LoadedSchema {
             .map(|path| path.to_string_lossy().to_string())
             .collect();
         quote! {
-            const _: ::core::option::Option<&str> = ::core::option_env!(#SCHEMA_ENV);
-            // Whether the package is local depends on it.
-            const _: ::core::option::Option<&str> = ::core::option_env!("CARGO_HOME");
+            const _: ::core::option::Option<&str> = ::core::option_env!(#TEST_SCHEMA_ENV);
             #(const _: &[u8] = ::core::include_bytes!(#files);)*
         }
     }

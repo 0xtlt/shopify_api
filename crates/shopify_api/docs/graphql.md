@@ -359,12 +359,21 @@ schema of its Admin API version in `graphql/admin.schema.json`, next to its
 the file: builds without network access (CI sandboxes, docs.rs) need it, and
 so does a published crate.
 
-The version is the one your `Cargo.toml` pins:
+The version is the one your `Cargo.toml` pins, and `schema` names another
+file than `graphql/admin.schema.json`, relative to that `Cargo.toml`:
 
 ```toml
 [package.metadata.shopify_api]
 api-version = "2026-07"
+schema = "schemas/admin-2026-07.json"   # optional
 ```
+
+Both keys belong to the package whose `Cargo.toml` holds them: a dependency
+is always checked against the file its own `Cargo.toml` names, whatever yours
+says. The file `schema` names follows the same rules as the default one: the
+version is the pinned one, else the one of the file; it is downloaded only
+where the default one would be; one in an older format is downloaded again,
+or is a compile error. Editing either key compiles the crate again.
 
 Without a pin, the version is the one of the schema file: it does not change
 when Shopify releases a new one, and a build gives the same result whatever
@@ -373,55 +382,50 @@ version (the one before, on the first day of a quarter when Shopify has not
 published it yet). `shopify-api schema download` moves an unpinned crate to
 the latest version; pinning one is clearer.
 
-`graphql!` tells local packages, your own source (the packages of the
-workspace, and path dependencies inside it or outside), from the others,
-copies of a dependency: a crate from crates.io or another registry, a git
-dependency, a vendored crate, or the copy `cargo package` verifies. A package
-is not local when a `Cargo.toml.orig` sits next to its `Cargo.toml` (cargo
-writes one into every packaged crate), when it has a `.cargo-checksum.json`
-(vendored), when its directory or one above it holds a `.cargo-ok` (cargo
-writes one at the root of every extracted registry source and git checkout),
-or when it is under `$CARGO_HOME` (`~/.cargo` by default), where cargo keeps
-registry sources and git checkouts. Paths count both as written and with
-symbolic links resolved, so a `$CARGO_HOME` or a `git` directory in it that
-links elsewhere changes nothing. The schema a crate is
-checked against depends on that only, never on the cargo command: cargo
-reuses a compiled crate whatever command built it first.
+Which file a crate is checked against depends on its `Cargo.toml` only. What
+happens when that file is missing, holds another version than the pinned
+one, or is in a format an older `shopify_api` wrote, depends on two more
+things:
 
-`SHOPIFY_GRAPHQL_SCHEMA` names a schema file for local packages, relative to
-their `Cargo.toml` or absolute, used as it is. It applies to every local
-package, the libraries of the workspace too, and is ignored for the others,
-which are always checked against the schema they ship.
+- whether cargo was asked to build the package: one of the workspace you
+  build, test or run, rather than a dependency of it;
+- whether the package is your own source (the packages of the workspace, and
+  path dependencies inside it or outside), rather than a copy of a
+  dependency: a crate from crates.io or another registry, a git dependency,
+  a vendored crate, or the copy `cargo package` verifies. `graphql!` takes a
+  package for a copy when a `Cargo.toml.orig` sits next to its `Cargo.toml`
+  (cargo writes one into every packaged crate), when it has a
+  `.cargo-checksum.json` (vendored), when its directory or one above it
+  holds a `.cargo-ok` (cargo writes one at the root of every extracted
+  registry source and git checkout), or when it is under `$CARGO_HOME`
+  (`~/.cargo` by default), with or without symbolic links resolved.
 
-When it builds a local package cargo was asked to build (one of the
-workspace you build, test or run), `graphql!` downloads the schema from
-Shopify's public endpoint when the file is missing, when it holds another
-version than the pinned one, or when it is in a format an older
-`shopify_api` wrote. It tries once per build: without network access, every
-operation fails at once with the reason, and `graphql!` never checks against
-another version than the one the operations go to.
+When both hold, `graphql!` downloads the file from Shopify's public endpoint.
+It tries once per build: without network access, every operation fails at
+once with the reason, and `graphql!` never checks against another version
+than the one the operations go to.
 
-Any other crate never downloads nor writes its schema: it uses the file it
-ships. When the file is missing, or does not hold the version its
-`Cargo.toml` pins, or is in an older format, the build fails and names the
-directory where to run `shopify-api schema download`. That includes a local
-library built only as a dependency of the package cargo was asked to build
-(build it alone once, or download its schema), and the verification of
-`cargo package`: a library that forgot to ship `graphql/admin.schema.json`
-fails there, before it is published.
+Otherwise it never downloads nor writes the file: it uses the one the crate
+ships. When that file is missing, or does not fit, the build fails, names the
+file, and names the directory where to run `shopify-api schema download`.
+That includes a local library built only as a dependency of the package cargo
+was asked to build (build it alone once, or download its schema), and the
+verification of `cargo package`: a library that forgot to ship its schema
+fails there, before it is published. A package taken for a copy by mistake
+(below an unrelated `.cargo-ok`, say) fails the same way: never with another
+schema.
 
 The `shopify-api` command (`cargo install shopify_api --features cli`)
-downloads the file on demand: `shopify-api schema download`, or
-`shopify-api schema download --shop my-shop` for the schema a shop's token
-sees.
+downloads the file on demand, where `schema` says: `shopify-api schema
+download`, or `shopify-api schema download --shop my-shop` for the schema a
+shop's token sees.
 
-| The schema of a crate | Local, cargo was asked to build it | Local, built as a dependency | Packaged, vendored or checked out |
+| The schema file of a crate (`schema`, else `graphql/admin.schema.json`) | Your own package, cargo was asked to build it | Your own package, built as a dependency | Packaged, vendored or checked out |
 | --- | --- | --- | --- |
-| `SHOPIFY_GRAPHQL_SCHEMA` is set | That file, relative to `Cargo.toml` or absolute, as it is. | That file. | Ignored. |
-| File present, no pin | The file, never downloaded again. | The file. | The file. |
-| File present, of the pinned version | The file. | The file. | The file. |
-| File present, of another version or an older format | Downloaded again. | Compile error. | Compile error. |
-| No file | Downloaded: the pinned version, else the latest. | Compile error. | Compile error. |
+| Present, no pin | The file, never downloaded again. | The file. | The file. |
+| Present, of the pinned version | The file. | The file. | The file. |
+| Present, of another version or an older format | Downloaded again. | Compile error. | Compile error. |
+| Missing | Downloaded: the pinned version, else the latest. | Compile error. | Compile error. |
 
 An operation goes to the version of the schema it was checked against: a
 crate whose schema is 2026-07 calls the 2026-07 endpoint, with nothing to

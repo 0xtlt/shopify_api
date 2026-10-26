@@ -1,5 +1,6 @@
-# The schema `graphql!` checks the operations of this workspace against,
-# tests and examples: the Admin schema 2026-10, without network access. It
-# also reaches the projects `trybuild` compiles for the compile-fail tests.
+# Internal to this repository's tests, not part of the API: the schema
+# `graphql!` checks every package against, the Admin schema 2026-10, without
+# network access. It reaches the projects `trybuild` compiles for the
+# compile-fail tests, which have no schema file of their own.
 [env]
-SHOPIFY_GRAPHQL_SCHEMA = { value = "crates/shopify_api/graphql/admin.schema.json", relative = true }
+SHOPIFY_API_INTERNAL_TEST_SCHEMA = { value = "crates/shopify_api/graphql/admin.schema.json", relative = true }

@@ -1,6 +1,8 @@
-//! Which schema `graphql!` takes for a library of the workspace, across cargo
-//! commands that share a target directory: cargo reuses a compiled crate
-//! whatever command built it, so the schema must not depend on which one did.
+//! Which schema `graphql!` takes for a library of the workspace, with
+//! `schema` in its `[package.metadata.shopify_api]`, across cargo commands
+//! that share a target directory: cargo reuses a compiled crate whatever
+//! command built it, so the schema must not depend on which one did, nor on
+//! where the package is.
 //!
 //! Builds a small workspace with cargo, offline, in `CARGO_TARGET_TMPDIR`.
 
@@ -8,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard};
 
-const SCHEMA_ENV: &str = "SHOPIFY_GRAPHQL_SCHEMA";
+/// Internal to this repository's tests: it would apply to the probes too.
+const TEST_SCHEMA_ENV: &str = "SHOPIFY_API_INTERNAL_TEST_SCHEMA";
 
 fn schema(version: &str) -> String {
     format!(
@@ -17,7 +20,8 @@ fn schema(version: &str) -> String {
 }
 
 /// A workspace of `app`, which prints the API version of `library`, a path
-/// dependency whose own schema is 2026-04, and `override.json`, of 2026-07.
+/// dependency whose default schema file is 2026-04, and `override.json`, of
+/// 2026-07, which the `schema` key of `library` may name.
 struct Workspace {
     root: PathBuf,
     target: PathBuf,
@@ -58,13 +62,6 @@ impl Workspace {
             "fn main() { print!(\"{}\", probe_library::probe::API_VERSION); }\n",
         );
         write(
-            "library/Cargo.toml",
-            &format!(
-                "[package]\nname = \"probe_library\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
-                 [dependencies]\nshopify_api = {{ path = '{shopify_api}', default-features = false }}\n"
-            ),
-        );
-        write(
             "library/src/lib.rs",
             "shopify_api::graphql! { pub mod probe = \"{ f }\"; }\n",
         );
@@ -72,14 +69,32 @@ impl Workspace {
         write("override.json", &schema("2026-07"));
         // Shared by the tests: later runs build only the probes again.
         let target = tmp.join("schema_override_target");
-        Self {
+        let workspace = Self {
             root,
             target,
             _alone: alone,
-        }
+        };
+        workspace.library_metadata("");
+        workspace
     }
 
-    fn cargo(&self, args: &[&str], with_override: bool) -> Output {
+    /// Writes the `Cargo.toml` of `library`, with these lines in its
+    /// `[package.metadata.shopify_api]`.
+    fn library_metadata(&self, lines: &str) {
+        let shopify_api = env!("CARGO_MANIFEST_DIR");
+        let manifest = format!(
+            "[package]\nname = \"probe_library\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+             [dependencies]\nshopify_api = {{ path = '{shopify_api}', default-features = false }}\n\
+             [package.metadata.shopify_api]\n{lines}"
+        );
+        std::fs::write(self.root.join("library/Cargo.toml"), manifest).unwrap();
+    }
+
+    fn with_override(&self) {
+        self.library_metadata("schema = \"../override.json\"\n");
+    }
+
+    fn cargo(&self, args: &[&str]) -> Output {
         let mut command = Command::new(std::env::var_os("CARGO").unwrap_or("cargo".into()));
         command
             .args(args)
@@ -91,16 +106,12 @@ impl Workspace {
             .env_remove("CARGO_PRIMARY_PACKAGE");
         // Empty is no file: the `[env]` of this repository's cargo config,
         // which the probes are under, sets the variable only when it is unset.
-        let named = match with_override {
-            true => self.root.join("override.json"),
-            false => PathBuf::new(),
-        };
-        command.env(SCHEMA_ENV, named);
+        command.env(TEST_SCHEMA_ENV, "");
         command.output().unwrap()
     }
 
-    fn succeed(&self, args: &[&str], with_override: bool) -> String {
-        let output = self.cargo(args, with_override);
+    fn succeed(&self, args: &[&str]) -> String {
+        let output = self.cargo(args);
         assert!(
             output.status.success(),
             "cargo {args:?} failed:\n{}",
@@ -109,8 +120,15 @@ impl Workspace {
         String::from_utf8(output.stdout).unwrap()
     }
 
-    fn app_version(&self, with_override: bool) -> String {
-        self.succeed(&["run", "-p", "probe_app"], with_override)
+    fn app_version(&self) -> String {
+        self.succeed(&["run", "-p", "probe_app"])
+    }
+
+    fn fail(&self, args: &[&str]) -> String {
+        let output = self.cargo(args);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(!output.status.success(), "cargo {args:?} succeeded");
+        stderr
     }
 
     fn touch_library(&self) {
@@ -121,36 +139,73 @@ impl Workspace {
     }
 }
 
-/// A library of the workspace is local: the variable applies to it, whether
-/// cargo was asked to build it or only the app, and in any order.
+/// The key applies to the library whether cargo was asked to build it or
+/// only the app, and in any order. An edit of `Cargo.toml` alone compiles
+/// the library again.
 #[test]
-fn a_local_library_takes_the_override_whatever_cargo_built_it_first() {
-    let workspace = Workspace::new("local_library");
-    workspace.succeed(&["build", "-p", "probe_library"], true);
-    assert_eq!(workspace.app_version(true), "2026-07");
+fn the_key_chooses_the_schema_whatever_cargo_built_first() {
+    let workspace = Workspace::new("key");
+    workspace.with_override();
+    workspace.succeed(&["build", "-p", "probe_library"]);
+    assert_eq!(workspace.app_version(), "2026-07");
     workspace.touch_library();
-    assert_eq!(workspace.app_version(true), "2026-07");
-    // The variable is tracked: without it, the library is compiled again.
-    assert_eq!(workspace.app_version(false), "2026-04");
-    workspace.succeed(&["build", "-p", "probe_library"], false);
-    assert_eq!(workspace.app_version(true), "2026-07");
+    assert_eq!(workspace.app_version(), "2026-07");
+    // Without the key: the default file, though the library was built last
+    // with it, and as the package cargo was asked to build.
+    workspace.library_metadata("");
+    assert_eq!(workspace.app_version(), "2026-04");
+    workspace.succeed(&["build", "-p", "probe_library"]);
+    assert_eq!(workspace.app_version(), "2026-04");
+    workspace.with_override();
+    assert_eq!(workspace.app_version(), "2026-07");
+
+    // `api-version` is followed too: a pin the file does not hold is an
+    // error for a library built as a dependency, which never downloads.
+    workspace.library_metadata("api-version = \"2026-07\"\nschema = \"../override.json\"\n");
+    assert_eq!(workspace.app_version(), "2026-07");
+    workspace.library_metadata("api-version = \"2026-10\"\nschema = \"../override.json\"\n");
+    let stderr = workspace.fail(&["run", "-p", "probe_app"]);
+    assert!(
+        stderr.contains("override.json` holds the Admin API 2026-07"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("shopify-api schema download"), "{stderr}");
 }
 
-/// A packaged library (a `Cargo.toml.orig` next to its `Cargo.toml`) keeps
-/// its own schema, even when cargo is asked to build it, and never
-/// downloads one it lacks.
+/// A `.cargo-ok` above the workspace makes its packages look like a cargo
+/// checkout. That changes nothing to the schema chosen: only a missing file
+/// is then a compile error rather than a download.
 #[test]
-fn a_packaged_library_keeps_its_schema_and_never_downloads() {
+fn an_unrelated_cargo_ok_above_does_not_change_the_schema() {
+    let workspace = Workspace::new("cargo_ok_above");
+    std::fs::write(workspace.root.join(".cargo-ok"), "not cargo's").unwrap();
+    workspace.with_override();
+    workspace.succeed(&["build", "-p", "probe_library"]);
+    assert_eq!(workspace.app_version(), "2026-07");
+    workspace.library_metadata("");
+    assert_eq!(workspace.app_version(), "2026-04");
+
+    std::fs::remove_file(workspace.root.join("library/graphql/admin.schema.json")).unwrap();
+    let stderr = workspace.fail(&["build", "-p", "probe_library"]);
+    assert!(stderr.contains("admin.schema.json` is missing"), "{stderr}");
+    assert!(stderr.contains("shopify-api schema download"), "{stderr}");
+    assert!(!stderr.contains("cannot download"), "{stderr}");
+}
+
+/// A packaged library (a `Cargo.toml.orig` next to its `Cargo.toml`) takes
+/// the file its key names too, even when cargo is asked to build it, and
+/// never downloads one it lacks.
+#[test]
+fn a_packaged_library_takes_its_key_and_never_downloads() {
     let workspace = Workspace::new("packaged_library");
     let library = workspace.root.join("library");
+    workspace.with_override();
     std::fs::copy(library.join("Cargo.toml"), library.join("Cargo.toml.orig")).unwrap();
-    workspace.succeed(&["build", "-p", "probe_library"], true);
-    assert_eq!(workspace.app_version(true), "2026-04");
+    workspace.succeed(&["build", "-p", "probe_library"]);
+    assert_eq!(workspace.app_version(), "2026-07");
 
-    std::fs::remove_file(library.join("graphql/admin.schema.json")).unwrap();
-    let output = workspace.cargo(&["build", "-p", "probe_library"], false);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success());
-    assert!(stderr.contains("admin.schema.json` is missing"), "{stderr}");
+    std::fs::remove_file(workspace.root.join("override.json")).unwrap();
+    let stderr = workspace.fail(&["build", "-p", "probe_library"]);
+    assert!(stderr.contains("override.json` is missing"), "{stderr}");
     assert!(!stderr.contains("cannot download"), "{stderr}");
 }

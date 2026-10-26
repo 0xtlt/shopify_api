@@ -13,6 +13,10 @@
 //! (`{ title: "x" }`) and writes the code that sends them. `project` finds
 //! the API version and the schema file of a crate, and downloads that
 //! version's schema (with the `download` feature). No schema is bundled.
+//!
+//! `SHOPIFY_API_INTERNAL_TEST_SCHEMA` (`project::TEST_SCHEMA_ENV`) is
+//! internal to this repository's tests, not part of the API: a schema file
+//! `graphql!` then uses for every package.
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -35,7 +39,7 @@ pub use analyze::{
 };
 #[doc(hidden)]
 pub use project::{
-    PROJECT_SCHEMA_PATH, SCHEMA_ENV, SchemaSource, latest_api_version, schema_source,
+    PROJECT_SCHEMA_PATH, SchemaSource, TEST_SCHEMA_ENV, latest_api_version, schema_source,
 };
 #[doc(hidden)]
 pub use schema::{Field, INTROSPECTION_QUERY, InputValue, Schema, SchemaError, TypeDef, TypeRef};
