@@ -319,7 +319,7 @@ fn load_schema(path: Option<&Path>) -> Result<(Schema, String), String> {
     };
     let path = match path {
         Some(path) => path.to_path_buf(),
-        None => match schema_source(package_root().as_deref(), None)? {
+        None => match schema_source(package_root().as_deref(), None, None)? {
             SchemaSource::File(path) => path,
             SchemaSource::Project { dir, path, pinned } => {
                 let schema = project_schema(

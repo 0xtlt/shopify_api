@@ -98,6 +98,11 @@ impl Workspace {
     }
 
     fn cargo(&self, args: &[&str]) -> Output {
+        self.cargo_with_test_schema(args, "")
+    }
+
+    /// `cargo`, with the internal test variable set to `test_schema`.
+    fn cargo_with_test_schema(&self, args: &[&str], test_schema: &str) -> Output {
         let mut command = Command::new(std::env::var_os("CARGO").unwrap_or("cargo".into()));
         command
             .args(args)
@@ -109,7 +114,7 @@ impl Workspace {
             .env_remove("CARGO_PRIMARY_PACKAGE");
         // Empty is no file: the `[env]` of this repository's cargo config,
         // which the probes are under, sets the variable only when it is unset.
-        command.env(TEST_SCHEMA_ENV, "");
+        command.env(TEST_SCHEMA_ENV, test_schema);
         command.output().unwrap()
     }
 
@@ -237,4 +242,28 @@ fn a_schema_outside_the_package_is_a_compile_error() {
     }
     workspace.library_metadata("schema = \"schemas/../schemas/override.json\"\n");
     assert_eq!(workspace.app_version(), "2026-07");
+}
+
+/// The internal test variable of this repository applies to `shopify_api`
+/// and its `trybuild` projects only: a user's crate, here the library,
+/// keeps its own schema, even when the variable names a file, or one that
+/// does not exist.
+#[test]
+fn the_internal_test_schema_does_not_reach_other_packages() {
+    let workspace = Workspace::new("internal_test_schema");
+    let elsewhere = workspace.root.join("override.json");
+    for test_schema in [elsewhere.to_str().unwrap(), "missing.json"] {
+        workspace.touch_library();
+        let output = workspace.cargo_with_test_schema(&["run", "-p", "probe_app"], test_schema);
+        assert!(
+            output.status.success(),
+            "{test_schema}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "2026-04",
+            "{test_schema}"
+        );
+    }
 }

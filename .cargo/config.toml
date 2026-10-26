@@ -1,6 +1,8 @@
 # Internal to this repository's tests, not part of the API: the schema
 # `graphql!` checks every package against, the Admin schema 2026-10, without
 # network access. It reaches the projects `trybuild` compiles for the
-# compile-fail tests, which have no schema file of their own.
+# compile-fail tests, which have no schema file of their own. The macro
+# honours it only for the packages `shopify_api` and `shopify_api-tests`
+# (trybuild's name for its projects), never for another crate.
 [env]
 SHOPIFY_API_INTERNAL_TEST_SCHEMA = { value = "crates/shopify_api/graphql/admin.schema.json", relative = true }

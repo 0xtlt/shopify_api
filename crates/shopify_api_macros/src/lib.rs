@@ -21,7 +21,7 @@ use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
 use shopify_api_graphql::project::{cargo_home, may_download, metadata_snippet, project_schema};
 use shopify_api_graphql::{
     MINIMUM_API_VERSION, Operation, OperationKind, Schema, SchemaSource, TEST_SCHEMA_ENV, Variable,
-    analyze, is_supported_api_version, latest_api_version, schema_source,
+    analyze, is_supported_api_version, latest_api_version, schema_source, test_schema_applies,
 };
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -279,32 +279,34 @@ impl LoadedSchema {
         // file is downloaded or a compile error.
         let dir = manifest_dir();
         let test_schema = std::env::var_os(TEST_SCHEMA_ENV);
-        let (path, schema) = match schema_source(dir.as_deref(), test_schema.as_deref())? {
-            SchemaSource::File(path) => {
-                let schema = read_schema(&path).map_err(|error| {
-                    format!("`{}`, named by {TEST_SCHEMA_ENV}: {error}", path.display())
-                })?;
-                (path, schema)
-            }
-            SchemaSource::Project { dir, path, pinned } => {
-                let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
-                let may_download = may_download(&dir, cargo_home().as_deref(), primary);
-                let read = |path: &Path| {
-                    read_schema(path).map_err(|error| format!("`{}`: {error}", path.display()))
-                };
-                // A proc macro has no progress to show.
-                let schema = project_schema(
-                    &dir,
-                    &path,
-                    pinned.as_deref(),
-                    may_download,
-                    SystemTime::now(),
-                    read,
-                    |_, _| {},
-                )?;
-                (path, schema)
-            }
-        };
+        let package = std::env::var("CARGO_PKG_NAME").ok();
+        let (path, schema) =
+            match schema_source(dir.as_deref(), test_schema.as_deref(), package.as_deref())? {
+                SchemaSource::File(path) => {
+                    let schema = read_schema(&path).map_err(|error| {
+                        format!("`{}`, named by {TEST_SCHEMA_ENV}: {error}", path.display())
+                    })?;
+                    (path, schema)
+                }
+                SchemaSource::Project { dir, path, pinned } => {
+                    let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
+                    let may_download = may_download(&dir, cargo_home().as_deref(), primary);
+                    let read = |path: &Path| {
+                        read_schema(path).map_err(|error| format!("`{}`: {error}", path.display()))
+                    };
+                    // A proc macro has no progress to show.
+                    let schema = project_schema(
+                        &dir,
+                        &path,
+                        pinned.as_deref(),
+                        may_download,
+                        SystemTime::now(),
+                        read,
+                        |_, _| {},
+                    )?;
+                    (path, schema)
+                }
+            };
         if !is_supported_api_version(&schema.api_version) {
             return Err(format!(
                 "`{}` is the schema of `{}`, a version shopify_api does not call (from {MINIMUM_API_VERSION}, or `unstable`): \
@@ -353,8 +355,15 @@ impl LoadedSchema {
             })
             .map(|path| path.to_string_lossy().to_string())
             .collect();
+        // The internal test variable is tracked only where it applies.
+        let package = std::env::var("CARGO_PKG_NAME").ok();
+        let test_schema = test_schema_applies(package.as_deref()).then(|| {
+            quote!(
+                const _: ::core::option::Option<&str> = ::core::option_env!(#TEST_SCHEMA_ENV);
+            )
+        });
         quote! {
-            const _: ::core::option::Option<&str> = ::core::option_env!(#TEST_SCHEMA_ENV);
+            #test_schema
             #(const _: &[u8] = ::core::include_bytes!(#files);)*
         }
     }

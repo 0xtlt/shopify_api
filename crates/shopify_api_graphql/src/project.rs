@@ -29,12 +29,22 @@ use crate::{MINIMUM_API_VERSION, is_supported_api_version};
 pub const PROJECT_SCHEMA_PATH: &str = "graphql/admin.schema.json";
 
 /// Internal to this repository's tests, not part of the API: a schema file
-/// `graphql!` uses for every package, relative to the `Cargo.toml` of the
-/// crate being compiled, or absolute, as it is. This repository's
-/// `.cargo/config.toml` sets it, for the projects `trybuild` compiles, which
-/// have no schema file. It applies to every package, with no exception, so
-/// that its effect does not depend on where a package is.
+/// `graphql!` uses, relative to the `Cargo.toml` of the crate being
+/// compiled, or absolute, as it is. This repository's `.cargo/config.toml`
+/// sets it, for the projects `trybuild` compiles, which have no schema file.
+/// It applies only to the packages [`TEST_SCHEMA_PACKAGES`] names, wherever
+/// they are: any other package, a dependency or a user's crate, ignores it.
 pub const TEST_SCHEMA_ENV: &str = "SHOPIFY_API_INTERNAL_TEST_SCHEMA";
+
+/// The packages [`TEST_SCHEMA_ENV`] applies to, by `CARGO_PKG_NAME`:
+/// `shopify_api` (its tests and doctests) and `shopify_api-tests`, the name
+/// `trybuild` gives the projects of its compile-fail tests.
+pub const TEST_SCHEMA_PACKAGES: [&str; 2] = ["shopify_api", "shopify_api-tests"];
+
+/// Whether [`TEST_SCHEMA_ENV`] applies to the package named `package`.
+pub fn test_schema_applies(package: Option<&str>) -> bool {
+    package.is_some_and(|package| TEST_SCHEMA_PACKAGES.contains(&package))
+}
 
 /// The `[package.metadata]` table `shopify_api` reads.
 pub const METADATA_TABLE: &str = "shopify_api";
@@ -305,14 +315,17 @@ pub enum SchemaSource {
 /// The schema `graphql!` uses for the crate in `manifest_dir`:
 ///
 /// 1. the file `test_schema` names, the value of [`TEST_SCHEMA_ENV`]
-///    (internal to this repository's tests);
+///    (internal to this repository's tests), for a `package` it applies to
+///    ([`test_schema_applies`]); any other package ignores it;
 /// 2. else the one [`SCHEMA_KEY`] names, else [`PROJECT_SCHEMA_PATH`], with
 ///    the version `Cargo.toml` declares.
 pub fn schema_source(
     manifest_dir: Option<&Path>,
     test_schema: Option<&OsStr>,
+    package: Option<&str>,
 ) -> Result<SchemaSource, String> {
-    if let Some(named) = test_schema.filter(|value| !value.is_empty()) {
+    let test_schema = test_schema.filter(|value| !value.is_empty() && test_schema_applies(package));
+    if let Some(named) = test_schema {
         let path = match manifest_dir {
             Some(dir) => dir.join(named),
             None => PathBuf::from(named),
@@ -1092,7 +1105,7 @@ mod tests {
             "[package]\nname = \"app\"\n\n[package.metadata.shopify_api]\nschema = \"schemas/admin.json\"\n",
         );
         assert_eq!(
-            schema_source(Some(&project.0), None),
+            schema_source(Some(&project.0), None, None),
             Ok(SchemaSource::Project {
                 dir: project.0.clone(),
                 path: project.0.join("schemas/admin.json"),
@@ -1110,12 +1123,12 @@ mod tests {
             path: project.0.join(PROJECT_SCHEMA_PATH),
             pinned: None,
         };
-        assert_eq!(schema_source(Some(&project.0), None), Ok(unpinned));
-        assert!(schema_source(None, None).is_err());
+        assert_eq!(schema_source(Some(&project.0), None, None), Ok(unpinned));
+        assert!(schema_source(None, None, None).is_err());
 
         project.manifest(Some("2026-07"));
         assert_eq!(
-            schema_source(Some(&project.0), None),
+            schema_source(Some(&project.0), None, None),
             Ok(SchemaSource::Project {
                 dir: project.0.clone(),
                 path: project.0.join(PROJECT_SCHEMA_PATH),
@@ -1139,33 +1152,75 @@ mod tests {
             path: project.0.join("schemas/admin-2026-07.json"),
             pinned: Some("2026-07".to_string()),
         };
-        assert_eq!(schema_source(Some(&project.0), None), Ok(expected.clone()));
+        assert_eq!(
+            schema_source(Some(&project.0), None, None),
+            Ok(expected.clone())
+        );
         // An empty test variable is no variable.
         assert_eq!(
-            schema_source(Some(&project.0), Some(OsStr::new(""))),
+            schema_source(Some(&project.0), Some(OsStr::new("")), Some("shopify_api")),
             Ok(expected)
         );
     }
 
+    /// The published macro honours the internal variable only for this
+    /// repository's own packages: a user's crate, or a dependency, keeps its
+    /// own schema whatever the environment holds.
     #[test]
-    fn the_test_variable_names_a_file_for_every_package() {
+    fn the_test_variable_applies_only_to_this_repository() {
+        let project = Project::new("foreign");
+        project.manifest(Some("2026-07"));
+        project.write("schemas/unstable.json", "{}");
+        for package in [
+            None,
+            Some("my_app"),
+            Some("shopify_api_graphql"),
+            Some("shopify_api-tests-extra"),
+            Some("shopify_api_extra"),
+            Some("openshop"),
+        ] {
+            assert!(!test_schema_applies(package), "{package:?}");
+            for named in ["schemas/unstable.json", "missing.json"] {
+                assert!(
+                    matches!(
+                        schema_source(Some(&project.0), Some(OsStr::new(named)), package),
+                        Ok(SchemaSource::Project { .. })
+                    ),
+                    "{package:?} {named}"
+                );
+            }
+        }
+        assert!(test_schema_applies(Some("shopify_api")));
+        assert!(test_schema_applies(Some("shopify_api-tests")));
+    }
+
+    #[test]
+    fn the_test_variable_names_a_file_for_the_packages_of_this_repository() {
         let project = Project::new("named");
         project.manifest(Some("2026-07"));
         let other = project.write("schemas/unstable.json", "{}");
         assert_eq!(
-            schema_source(Some(&project.0), Some(OsStr::new("schemas/unstable.json"))),
+            schema_source(
+                Some(&project.0),
+                Some(OsStr::new("schemas/unstable.json")),
+                Some("shopify_api")
+            ),
             Ok(SchemaSource::File(other.clone()))
         );
         assert_eq!(
-            schema_source(None, Some(other.as_os_str())),
+            schema_source(None, Some(other.as_os_str()), Some("shopify_api-tests")),
             Ok(SchemaSource::File(other))
         );
         assert!(matches!(
-            schema_source(Some(&project.0), Some(OsStr::new(""))),
+            schema_source(Some(&project.0), Some(OsStr::new("")), Some("shopify_api")),
             Ok(SchemaSource::Project { .. })
         ));
         assert_eq!(
-            schema_source(Some(&project.0), Some(OsStr::new("missing.json"))),
+            schema_source(
+                Some(&project.0),
+                Some(OsStr::new("missing.json")),
+                Some("shopify_api")
+            ),
             Err(format!(
                 "SHOPIFY_API_INTERNAL_TEST_SCHEMA names `{}`, which is not a file",
                 project.0.join("missing.json").display()

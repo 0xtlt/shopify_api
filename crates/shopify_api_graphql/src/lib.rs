@@ -16,7 +16,8 @@
 //!
 //! `SHOPIFY_API_INTERNAL_TEST_SCHEMA` (`project::TEST_SCHEMA_ENV`) is
 //! internal to this repository's tests, not part of the API: a schema file
-//! `graphql!` then uses for every package.
+//! `graphql!` then uses for `shopify_api` and the projects `trybuild`
+//! compiles for it (`project::TEST_SCHEMA_PACKAGES`), and no other package.
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
@@ -42,7 +43,8 @@ pub use analyze::{
 };
 #[doc(hidden)]
 pub use project::{
-    PROJECT_SCHEMA_PATH, SchemaSource, TEST_SCHEMA_ENV, latest_api_version, schema_source,
+    PROJECT_SCHEMA_PATH, SchemaSource, TEST_SCHEMA_ENV, TEST_SCHEMA_PACKAGES, latest_api_version,
+    schema_source, test_schema_applies,
 };
 #[doc(hidden)]
 pub use schema::{Field, INTROSPECTION_QUERY, InputValue, Schema, SchemaError, TypeDef, TypeRef};
