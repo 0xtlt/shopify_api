@@ -228,16 +228,19 @@ let webhooks = warp::path("webhooks")
 With axum, `async fn(headers: HeaderMap, body: Bytes)` takes the same two
 values (see the docs of `shopify_api::webhooks`). `Webhook::verify` requires
 the `X-Shopify-Topic` and `X-Shopify-Shop-Domain` headers, which Shopify always
-sends, and only verifies a JSON object or an XML body;
+sends, and only verifies JSON webhooks, whose body is a JSON object: the
+client secret also signs texts an installer of the app can read and make look
+like XML. `sync_webhook_subscriptions` updates an XML subscription of a
+desired topic and address to JSON;
 `webhooks::verify_hmac(secret, body, header)` checks the signature alone.
 
 | 0.10 | 1.0 |
 | --- | --- |
 | `shopify.verify_hmac(data, header)` | `webhooks::verify_hmac(secret, data, header)` |
 | `list_webhooks()` | `webhook_subscriptions()`, every page |
-| `add_webhook(address, topic, format)` | `create_webhook_subscription(&WebhookSubscriptionSpec::new(topic, address))` |
+| `add_webhook(address, topic, format)` | `create_webhook_subscription(&WebhookSubscriptionSpec::new(topic, address))`, always JSON |
 | `delete_webhook(id)` | `delete_webhook_subscription(id)` |
-| `webhook_auto_config(vec![(address, topic, format)])` | `sync_webhook_subscriptions(&[WebhookSubscriptionSpec::new(topic, address)])`, which returns what it did |
+| `webhook_auto_config(vec![(address, topic, format)])` | `sync_webhook_subscriptions(&[WebhookSubscriptionSpec::new(topic, address)])`, always JSON, which returns what it did |
 | `delete_webhook(id)` then `add_webhook(…)`, to change a subscription | `update_webhook_subscription(id, &spec)`, which replaces its options in place |
 
 Topics are accepted as `orders/create` or `ORDERS_CREATE`.

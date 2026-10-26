@@ -397,6 +397,10 @@ shopify.sync_webhook_subscriptions(&[
 ]).await?;
 ```
 
+Only JSON webhooks verify, and the subscriptions the crate creates or syncs
+are JSON: the client secret also signs launch queries, app proxy requests and
+session tokens, which an installer of the app can read and make look like XML.
+
 ## OAuth and embedded apps
 
 Feature `oauth`:

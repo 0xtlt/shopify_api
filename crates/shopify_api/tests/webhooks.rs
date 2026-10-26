@@ -105,6 +105,41 @@ async fn sync_keeps_updates_creates_then_deletes() {
     );
 }
 
+/// Only JSON webhooks verify: an XML subscription of a desired topic and
+/// address is updated to JSON, not kept.
+#[tokio::test]
+async fn sync_updates_an_xml_subscription_to_json() {
+    let mock = MockTransport::new();
+    let mut xml = subscription(1, "ORDERS_CREATE", "https://example.com/hooks");
+    xml["format"] = json!("XML");
+    mock.push_data(json!({ "webhookSubscriptions": {
+        "nodes": [xml],
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+    } }));
+    mock.push_data(json!({ "webhookSubscriptionUpdate": {
+        "webhookSubscription": subscription(1, "ORDERS_CREATE", "https://example.com/hooks"),
+        "userErrors": [],
+    } }));
+    let shopify = client(&mock);
+
+    let report = shopify
+        .sync_webhook_subscriptions(&[WebhookSubscriptionSpec::new(
+            "orders/create",
+            "https://example.com/hooks",
+        )])
+        .await
+        .unwrap();
+
+    assert!(report.kept.is_empty());
+    assert_eq!(report.updated[0].format, "JSON");
+    let sent = mock.graphql_requests();
+    assert_eq!(
+        sent[1].operation_name.as_deref(),
+        Some("WebhookSubscriptionUpdate")
+    );
+    assert_eq!(sent[1].variables["webhookSubscription"]["format"], "JSON");
+}
+
 #[tokio::test]
 async fn a_refused_subscription_returns_the_user_errors() {
     let mock = MockTransport::new();
@@ -161,7 +196,7 @@ mod verification {
 
         use super::*;
 
-        const NOT_A_WEBHOOK: &str = "verification failed: the body of the webhook is neither a JSON object nor an XML document";
+        const NOT_A_WEBHOOK: &str = "verification failed: the body of the webhook is not a JSON object: only JSON webhooks verify";
 
         #[test]
         fn the_hmac_of_a_launch_query_is_not_a_webhook_signature() {
@@ -204,15 +239,38 @@ mod verification {
             );
             assert_eq!(refusal(&signature, message.as_bytes()), NOT_A_WEBHOOK);
         }
+
+        /// `<` sorts before letters: a parameter named `<?xml version` comes
+        /// first in a signed query, which then reads as an XML document.
+        #[test]
+        fn a_signed_query_that_reads_as_xml_is_not_a_webhook() {
+            let app = ShopifyApp::new("client-id", SECRET);
+            let query = "%3C%3Fxml%20version=%221.0%22%3F%3E%3Corder%20a%3D%22\
+                         &path_prefix=%2Fapps%2Fx&shop=attacker.myshopify.com\
+                         &timestamp=1700000000&z=%22%2F%3E";
+            let message = "<?xml version=\"1.0\"?><order a=\"path_prefix=/apps/xshop=attacker.myshopify.comtimestamp=1700000000z=\"/>";
+            let signature = app.sign_app_proxy(query).unwrap();
+            let signature = STANDARD.encode(hex::decode(signature).unwrap());
+            assert_eq!(
+                sign(SECRET, message.as_bytes()),
+                signature,
+                "the message signed"
+            );
+            assert_eq!(refusal(&signature, message.as_bytes()), NOT_A_WEBHOOK);
+
+            // The same text as the sorted `key=value` pairs of a launch query.
+            let launch =
+                "<?xml version=\"1.0\"?><order/>=&shop=attacker.myshopify.com&timestamp=1700000000";
+            assert_eq!(
+                refusal(&sign(SECRET, launch.as_bytes()), launch.as_bytes()),
+                NOT_A_WEBHOOK
+            );
+        }
     }
 
     #[test]
-    fn only_json_objects_and_xml_verify() {
-        for body in [
-            &b"{\"id\":1}"[..],
-            b"\n  {}",
-            b"<?xml version=\"1.0\"?><order/>",
-        ] {
+    fn only_json_objects_verify() {
+        for body in [&b"{\"id\":1}"[..], b"\n  {}"] {
             assert!(
                 Webhook::verify(
                     headers(&sign(SECRET, body), "orders/create", "a"),
@@ -223,7 +281,15 @@ mod verification {
             );
             assert!(verify_hmac(SECRET, body, &sign(SECRET, body)));
         }
-        for body in [&b""[..], b"  ", b"[1]", b"a=1", b"eyJhbGciOiJIUzI1NiJ9.e30"] {
+        for body in [
+            &b""[..],
+            b"  ",
+            b"[1]",
+            b"a=1",
+            b"eyJhbGciOiJIUzI1NiJ9.e30",
+            b"<?xml version=\"1.0\"?><order/>",
+            b" <order/>",
+        ] {
             refusal(&sign(SECRET, body), body);
         }
     }
@@ -306,6 +372,6 @@ mod verification {
             r#"{"id":1,"domain":"shop.example.com","myshopify_domain":"a.myshopify.com"}"#;
         assert!(verified(uninstalled, "a").is_ok());
         assert!(verified(r#"{"id":1}"#, "a").is_err());
-        assert!(verified("<shop/>", "a").is_err());
+        assert!(verified("{not json", "a").is_err());
     }
 }

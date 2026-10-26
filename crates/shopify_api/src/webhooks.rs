@@ -55,9 +55,10 @@
 //!
 //! The client secret also signs the launch queries of Shopify admin, the app
 //! proxy requests and the session tokens, which an installer of the app can
-//! read. So that none of them passes for a webhook, only a body that starts
-//! with `{` (JSON) or `<` (XML) verifies: a form-encoded query, a JWT or a
-//! JSON array never does.
+//! read. So that none of them passes for a webhook, only JSON webhooks
+//! verify, a body that starts with `{`: a form-encoded query, a JWT or a JSON
+//! array never does, while a signed query can be made to read as XML.
+//! The subscriptions this crate creates or syncs are JSON.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -73,7 +74,7 @@ use shopify_api_macros::{__graphql_internal as graphql, __input_internal as inpu
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
 /// `body` with `secret`, the client secret of the app. Compares in constant time.
 ///
-/// `false` for a body that is not a JSON object or an XML document, as
+/// `false` for a body that is not a JSON object, as
 /// [`Webhook::verify`] refuses it: see [what the signature covers](self#what-the-signature-covers).
 pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     // Anyone can sign with an empty key: it verifies nothing.
@@ -90,14 +91,14 @@ pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
-/// Whether `body` starts as a webhook does, with `{` or `<`. The other texts
+/// Whether `body` starts as a JSON webhook does, with `{`. The other texts
 /// the client secret signs start otherwise: a query with a parameter name, a
 /// session token with `eyJ`, and an app proxy request with a name that sorts
-/// before `path_prefix`, never `{`, though `[` may.
+/// before `path_prefix`, never `{`, though `[` or `<` (XML) may.
 fn is_webhook_body(body: &[u8]) -> bool {
     matches!(
         body.iter().find(|byte| !byte.is_ascii_whitespace()),
-        Some(b'{' | b'<')
+        Some(b'{')
     )
 }
 
@@ -152,9 +153,9 @@ impl Webhook {
     /// `headers` are name and value pairs: an `http::HeaderMap` by
     /// reference, or pairs of strings. Names are read in any case, with or
     /// without their `X-` (`X-Shopify-Topic` or `shopify-topic`). Fails when
-    /// the signature is missing or does not match, when the body is neither
-    /// a JSON object nor an XML document, or when a header Shopify always
-    /// sends is missing.
+    /// the signature is missing or does not match, when the body is not a
+    /// JSON object (XML webhooks are refused), or when a header Shopify
+    /// always sends is missing.
     ///
     /// The headers are not signed: see [what the signature covers](self#what-the-signature-covers).
     pub fn verify<K, V>(
@@ -214,7 +215,8 @@ impl Webhook {
         }
         if !is_webhook_body(&body) {
             return Err(Error::Verification(
-                "the body of the webhook is neither a JSON object nor an XML document".to_string(),
+                "the body of the webhook is not a JSON object: only JSON webhooks verify"
+                    .to_string(),
             ));
         }
         if !secrets
@@ -343,7 +345,7 @@ fn subscription_input(
     let list = |values: &Vec<String>| (replace || !values.is_empty()).then(|| values.clone());
     input!(WebhookSubscriptionInput {
         uri: &spec.uri,
-        format: raw(spec.format.as_deref().unwrap_or("JSON")),
+        format: raw("JSON"),
         filter?: spec.filter.as_deref().or(replace.then_some("")),
         includeFields?: list(&spec.include_fields),
         metafieldNamespaces?: list(&spec.metafield_namespaces),
@@ -360,7 +362,8 @@ pub struct WebhookSubscription {
     pub topic: String,
     /// An HTTPS address, a `pubsub://` or an Amazon EventBridge `arn:`.
     pub uri: String,
-    /// `JSON` or `XML`.
+    /// `JSON` or `XML`. Only JSON webhooks verify: [`Shopify::sync_webhook_subscriptions`]
+    /// updates an XML one of a desired topic and address to JSON.
     pub format: String,
     pub filter: Option<String>,
     pub include_fields: Vec<String>,
@@ -419,7 +422,7 @@ fn refused(mutation: &'static str, errors: &impl Serialize) -> Result<()> {
     }
 }
 
-/// A webhook subscription to create.
+/// A webhook subscription to create, always JSON: only JSON webhooks verify.
 ///
 /// ```
 /// use shopify_api::webhooks::WebhookSubscriptionSpec;
@@ -433,7 +436,6 @@ fn refused(mutation: &'static str, errors: &impl Serialize) -> Result<()> {
 pub struct WebhookSubscriptionSpec {
     topic: String,
     uri: String,
-    format: Option<String>,
     filter: Option<String>,
     include_fields: Vec<String>,
     metafield_namespaces: Vec<String>,
@@ -447,18 +449,11 @@ impl WebhookSubscriptionSpec {
         Self {
             topic: topic_enum(topic.as_ref()),
             uri: uri.into(),
-            format: None,
             filter: None,
             include_fields: Vec::new(),
             metafield_namespaces: Vec::new(),
             name: None,
         }
-    }
-
-    /// `JSON` (the default) or `XML`.
-    pub fn format(mut self, format: impl AsRef<str>) -> Self {
-        self.format = Some(format.as_ref().to_ascii_uppercase());
-        self
     }
 
     /// Only the events that match this search.
@@ -496,7 +491,8 @@ impl WebhookSubscriptionSpec {
         &self.uri
     }
 
-    /// Whether `subscription` is this one: same topic, address and options.
+    /// Whether `subscription` is this one: same topic, address and options,
+    /// and JSON.
     pub fn matches(&self, subscription: &WebhookSubscription) -> bool {
         let sorted = |values: &[String]| {
             let mut values = values.to_vec();
@@ -505,7 +501,7 @@ impl WebhookSubscriptionSpec {
         };
         subscription.topic == self.topic
             && subscription.uri == self.uri
-            && subscription.format == self.format.as_deref().unwrap_or("JSON")
+            && subscription.format == "JSON"
             && subscription
                 .filter
                 .as_deref()
@@ -626,7 +622,9 @@ impl Shopify {
     /// Makes the shop's subscriptions exactly `desired`: those that match are
     /// kept, those of a desired topic and address are updated, the missing
     /// ones created, then the others deleted. Nothing is deleted before what
-    /// replaces it exists, so no event is missed in between.
+    /// replaces it exists, so no event is missed in between. An XML
+    /// subscription of a desired topic and address is updated to JSON: only
+    /// JSON webhooks verify.
     ///
     /// It deletes every subscription of the app on the shop that `desired`
     /// does not list, including those another part of the app created.
