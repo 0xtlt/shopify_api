@@ -54,6 +54,8 @@ A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATIO
 - `GraphqlResponse` is `RawResponse`; the `shopify_api::graphql` module is private (`graphql` is the macro); `parse_jsonl` takes bytes; the staged upload and connection types are internal.
 - The warp wrapper, the webhook payload structs, `utils` (`retry_async`, `read_json_tree`) and `graphql_at_path` are gone, as are `run_bulk_queries`, `run_bulk_mutations` and `BulkConcurrencyOptions`, and the features `debug`, `graphql-client`, `warp-wrapper`, `hmac`, `sha2`, `warp` and `graphql_client`.
 - One verb per meaning in the bulk API: `start_bulk_*` only starts, `bulk_query*` and `bulk_mutation` start, wait and read. 0.10's `run_bulk_query(query)`, which only started, is `start_bulk_query(query)`, which also takes a `graphql!(bulk(…))` query; `run_bulk_query_with_grouping(query, true)` is `start_bulk_query(GroupObjects(query))`; `run_bulk_mutation(mutation, path)` is `start_bulk_mutation_staged(mutation, path, None)`, and `start_bulk_mutation_text(mutation, &rows)` uploads the rows first.
+- Webhooks verify JSON bodies only: `webhooks::verify_hmac` and `Webhook::verify` refuse an XML body, which 0.10 verified. Move XML subscriptions to JSON before deploying (`sync_webhook_subscriptions`, `update_webhook_subscription`); see MIGRATION.md. `WebhookSubscription` is `#[non_exhaustive]`, with new required fields: a JSON stored by 0.10 no longer reads back.
+- `Error::InvalidApiVersion { version, minimum }` is `{ version, reason }`; `Error::Timeout(String)` is `Timeout { message, id }`.
 - Rust 1.88, edition 2024.
 
 ### Packaging

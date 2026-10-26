@@ -850,6 +850,13 @@ impl Shopify {
     }
 
     /// Polls a bulk operation until it completes, fails, is canceled or expires.
+    ///
+    /// It returns the operation as it ended: an operation that failed is
+    /// `Ok`, with `status` [`BulkOperationStatus::Failed`] and its
+    /// `error_code`, so check `status`. The calls that start, wait and read,
+    /// such as [`Shopify::bulk_query_rows`] or [`Shopify::bulk_query`], fail
+    /// with [`Error::Bulk`] instead. A wait longer than the timeout of
+    /// `options` is an [`Error::Timeout`]; the operation keeps running.
     pub async fn wait_for_bulk_operation(
         &self,
         id: &str,

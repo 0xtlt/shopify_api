@@ -42,7 +42,7 @@ let shopify = Shopify::new("my-shop", Auth::access_token(token))?;
 | `shopify.get_shop()`, `shop_domain()` | `shopify.shop()`, a `ShopDomain` |
 | `shopify.get_query_url()` | `shopify.graphql_url(version)` |
 | `shopify.token_url()` | Gone: the client asks for its tokens itself |
-| `shopify.request_client_credentials_token(id, secret)` | `Shopify::new(shop, Auth::client_credentials(id, secret))?`, then `shopify.access_token().await?` (the token, obtained if need be) or `shopify.token().await` (the whole `TokenData`) |
+| `shopify.request_client_credentials_token(id, secret)` | `Shopify::new(shop, Auth::client_credentials(id, secret))?`, then `shopify.access_token().await?` (the token, obtained if need be), then `shopify.token().await` (the whole `TokenData`, `None` until a first token is obtained) |
 | `shopify.refresh_token_with_credentials(id, secret, refresh)` | `Auth::expiring_token(id, secret, token)`: the client refreshes before expiry and on a `401`, and saves with its `TokenStore` |
 
 `replace_auth` swapped the token of a client in place. A client's
@@ -73,7 +73,8 @@ for a backoff after a `5xx` or a network failure. To keep 0.10's behaviour:
 Without a pinned version, an operation of `graphql!` goes to the version its
 schema was checked against (the `api-version` of your `Cargo.toml`, else the
 one of the schema file, else the latest on the first build), and an untyped
-call to 2026-10. 0.10 sent everything to 2026-04 by default: pin it with
+call to 2026-10: `ApiVersion::default()` and `ApiVersion::DEFAULT` move from
+2026-04 to 2026-10. 0.10 sent everything to 2026-04 by default: pin it with
 `.api_version(ApiVersion::V2026_04)` to keep that.
 
 ## Errors
@@ -91,6 +92,8 @@ call to 2026-10. 0.10 sent everything to 2026-04 by default: pin it with
 | A `Float` that is NaN or infinite, an `Int` beyond 32 bits, `null` for a non-null `JSON`, sent as they were | `InvalidValue { path, reason, detail }`, before anything is sent: `` invalid value at `$product.metafields[2].value`: not a finite Float `` |
 | `Authentication(text)` | `Auth { message, detail }`: what the token endpoint wrote is `error.sensitive_detail()` |
 | `MissingGraphqlData` | Gone: an answer without `data` (and without `errors`) gives `Value::Null` to `graphql`; `graphql_as` and `execute` then fail with `Decode` unless the type reads `null` |
+| `InvalidApiVersion { version, minimum }` | `InvalidApiVersion { version, reason }`: `reason` says why the text is not a version shopify_api calls |
+| `Timeout(String)` | `Timeout { message, id }`: `id` is the bulk operation waited for, which keeps running (cancel it with `cancel_bulk_operation`) |
 | `InvalidHeaderValue`, `Other` | Gone |
 
 `Error` no longer converts from `reqwest::Error` or `serde_json::Error`: a
@@ -180,10 +183,15 @@ its results as generated types, in place of a hand-written struct and
 `bulk_query_rows` or `bulk_query_grouped`.
 
 `object_count`, `root_object_count` and `file_size` are numbers, and
-`created_at` and `completed_at` are `chrono::DateTime<Utc>`. A failed operation
-is an `Error::Bulk` whose `operation` holds it, with its `error_code` and
-`partial_data_url`; a wait that ran out is an `Error::Timeout` whose `id` is
-the operation's, which keeps running.
+`created_at` and `completed_at` are `chrono::DateTime<Utc>`.
+`wait_for_bulk_operation` returns the operation once it ends, as 0.10's
+`wait_for_bulk` did: `Ok` with `status = Failed` (or `Canceled`) for one that
+did not complete, so keep checking `status`. The calls that start, wait and
+read (`bulk_query_rows`, `bulk_query_stream`, `bulk_query_grouped`, and the
+typed `bulk_query` and `bulk_mutation`) fail instead, with an `Error::Bulk`
+whose `operation` holds it, with its `error_code` and `partial_data_url`. A
+wait that ran out is an `Error::Timeout` whose `id` is the operation's,
+which keeps running.
 
 ## Webhooks
 
@@ -248,7 +256,8 @@ rule as `Webhook::verify`.
 
 | 0.10 | 1.0 |
 | --- | --- |
-| `shopify.verify_hmac(data, header)` | `webhooks::verify_hmac(secret, data, header)` |
+| `shopify.verify_hmac(data, header)` | `webhooks::verify_hmac(secret, data, header)`, **JSON only**: an XML body is refused |
+| `WebhookSubscription { id, topic, format, uri }` | `WebhookSubscription` is `#[non_exhaustive]`, with more fields (`filter`, `include_fields`, `metafield_namespaces`, `name`, `api_version`, `created_at`, `updated_at`), some required: it cannot be built with a literal, and a JSON stored by 0.10 no longer reads back as one |
 | `list_webhooks()` | `webhook_subscriptions()`, every page |
 | `add_webhook(address, topic, format)` | `create_webhook_subscription(&WebhookSubscriptionSpec::new(topic, address))`, always JSON |
 | `delete_webhook(id)` | `delete_webhook_subscription(id)` |
@@ -256,6 +265,22 @@ rule as `Webhook::verify`.
 | `delete_webhook(id)` then `add_webhook(…)`, to change a subscription | `update_webhook_subscription(id, &spec)`, which replaces its options in place |
 
 Topics are accepted as `orders/create` or `ORDERS_CREATE`.
+
+### If you subscribed in XML
+
+0.10 verified any body, and `add_webhook` and `webhook_auto_config` took a
+format: XML subscriptions were supported. 1.0 refuses every XML body, at run
+time: the code compiles, and each XML delivery fails verification once the
+1.0 handler is deployed. In this order:
+
+1. Move the subscriptions to JSON before you deploy a 1.0 handler, with
+   0.10 still running: `sync_webhook_subscriptions` (it updates an XML
+   subscription of a desired topic and address to JSON) or
+   `update_webhook_subscription(id, &spec)` for each one, both always JSON.
+   `webhook_subscriptions()` lists what is left in XML (`format`).
+2. Adapt the parsing of the payloads to JSON (`webhook.payload::<T>()`).
+3. Deploy. XML deliveries that Shopify still retries, sent before the
+   switch, will be refused: Shopify keeps retrying them, then gives up.
 
 ## OAuth and session tokens
 
