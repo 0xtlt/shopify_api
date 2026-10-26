@@ -107,6 +107,7 @@ pub use shopify_api_macros::input;
 /// What the code `graphql!` and `input!` generate refers to. Not a public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::bulk::__private as bulk;
     pub use crate::graphql::literal;
     pub use serde;
     pub use serde_json;

@@ -25,6 +25,10 @@ pub enum InvalidValueReason {
     NullJson,
     /// A value whose `Serialize` implementation failed.
     Unserializable,
+    /// An enum value or an input field name that is not a GraphQL name: a
+    /// bulk query writes its variables into its text, where it would not
+    /// read as written.
+    NotAGraphqlName,
 }
 
 impl std::fmt::Display for InvalidValueReason {
@@ -34,6 +38,9 @@ impl std::fmt::Display for InvalidValueReason {
             Self::IntOutOfRange => "Int out of 32-bit range",
             Self::NullJson => "null for a non-null JSON field",
             Self::Unserializable => "could not serialize",
+            Self::NotAGraphqlName => {
+                "not a GraphQL name, as an enum value or a field written into a bulk query must be"
+            }
         })
     }
 }

@@ -56,8 +56,19 @@ use crate::{Error, Page, Result, Shopify, UserError};
 use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
 
 mod rows;
+mod typed;
 
 pub use rows::{BulkGroups, BulkRows, DEFAULT_MAX_LINE_LENGTH};
+pub use typed::{BulkItem, BulkItems, BulkMutation, BulkMutationResult, BulkQuery};
+
+/// What the code `graphql!(bulk(…))` generates refers to. Not a public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use super::typed::{
+        BulkArgument, BulkConnection, BulkItem, BulkPart, BulkTemplate, BulkType, BulkValue,
+        BulkVariable, push, unplaced,
+    };
+}
 
 /// How long a download waits for the answer, then for each chunk of it; a
 /// transport that does not stream gives it the whole download.
@@ -598,6 +609,23 @@ impl Shopify {
         I: IntoIterator,
         I::Item: Serialize,
     {
+        self.stage_jsonl(|body| {
+            for item in variables {
+                serde_json::to_writer(&mut *body, &item)
+                    .map_err(|error| Error::variables(None, &error))?;
+                body.push(b'\n');
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Reserves an upload target, then uploads the JSONL file `write_file`
+    /// writes to it. Returns its staged upload path.
+    async fn stage_jsonl(
+        &self,
+        write_file: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<String> {
         let data = self
             .execute_own(staged_uploads::Variables {
                 input: vec![input!(StagedUploadInput {
@@ -643,14 +671,7 @@ impl Shopify {
         // The storage server wants the length of the body up front: the
         // file is built in memory, once, in the body itself.
         let (content_type, body) =
-            multipart(&parameters, "bulk_op_vars.jsonl", "text/jsonl", |body| {
-                for item in variables {
-                    serde_json::to_writer(&mut *body, &item)
-                        .map_err(|error| Error::variables(None, &error))?;
-                    body.push(b'\n');
-                }
-                Ok(())
-            })?;
+            multipart(&parameters, "bulk_op_vars.jsonl", "text/jsonl", write_file)?;
         let request = HttpRequest::new(Method::Post, &url)
             .with_header("Content-Type", content_type)
             .with_body(body)

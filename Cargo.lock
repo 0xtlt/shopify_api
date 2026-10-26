@@ -1437,6 +1437,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-core",
+ "graphql-parser",
  "hex",
  "hmac",
  "reqwest",

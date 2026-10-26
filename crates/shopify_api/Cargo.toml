@@ -57,6 +57,7 @@ clap = { workspace = true, optional = true }
 shopify_api_graphql = { workspace = true, optional = true }
 
 [dev-dependencies]
+graphql-parser.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "net", "io-util"] }
 trybuild.workspace = true
 

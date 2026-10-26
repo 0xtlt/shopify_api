@@ -291,6 +291,22 @@ impl<D> Operation<D> {
         self.own
     }
 
+    /// Sends the operation as one checked against `version`, not as one of
+    /// this crate's: a bulk operation runs the operation of the caller.
+    pub(crate) fn checked_as(mut self, version: Option<&'static str>) -> Self {
+        self.checked_against = version;
+        self.own = false;
+        self
+    }
+
+    /// The variables set, each as the JSON it is sent as; an error when one
+    /// was refused.
+    pub(crate) fn variable_values(&self) -> Result<&[(String, Box<RawValue>)]> {
+        self.variables
+            .as_deref()
+            .map_err(|failure| failure.to_error())
+    }
+
     /// The Admin API version the operation is sent to when the client pins
     /// none: the one it was checked against, else [`ApiVersion::DEFAULT`].
     pub fn api_version(&self) -> Result<ApiVersion> {

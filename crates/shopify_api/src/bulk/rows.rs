@@ -1,6 +1,6 @@
 //! The results of a bulk operation, read line by line as they download.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -11,6 +11,7 @@ use futures_core::{FusedStream, Stream};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use super::typed::BulkItem;
 use crate::transport::BodyStream;
 use crate::{Error, Result};
 
@@ -285,6 +286,20 @@ struct Keys {
     id: Option<String>,
     #[serde(rename = "__parentId")]
     parent_id: Option<String>,
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+}
+
+/// The error of a line whose `__parentId` matches no object it may be a child of.
+fn misplaced(number: usize, missing_id: bool, grouped: bool) -> Error {
+    let message = if missing_id {
+        "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections"
+    } else if grouped {
+        "is a child of neither the top-level object before it nor one of its children, though the query ran with `groupObjects`"
+    } else {
+        "is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
+    };
+    super::bulk_error(format!("line {number} of the results {message}"))
 }
 
 struct Group<P, C> {
@@ -380,14 +395,8 @@ impl<P, C> BulkGroups<P, C> {
     }
 
     fn misplaced(&self, number: usize) -> Error {
-        let message = if self.group.as_ref().is_some_and(|group| group.missing_id) {
-            "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections"
-        } else if self.grouped {
-            "is a child of neither the top-level object before it nor one of its children, though the query ran with `groupObjects`"
-        } else {
-            "is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
-        };
-        super::bulk_error(format!("line {number} of the results {message}"))
+        let missing_id = self.group.as_ref().is_some_and(|group| group.missing_id);
+        misplaced(number, missing_id, self.grouped)
     }
 
     /// [`BulkRows::max_line_length`].
@@ -476,6 +485,215 @@ impl<P: DeserializeOwned, C: DeserializeOwned> Stream for BulkGroups<P, C> {
 }
 
 impl<P: DeserializeOwned, C: DeserializeOwned> FusedStream for BulkGroups<P, C> {
+    fn is_terminated(&self) -> bool {
+        self.lines.done && self.group.is_none()
+    }
+}
+
+struct ItemGroup<I> {
+    item: I,
+    /// The `id` of the item.
+    id: Option<String>,
+    /// The children of the item that have connections, by `id`: their
+    /// connection and their index in it.
+    children: HashMap<String, (usize, usize)>,
+    /// An object of the group that has connections has no `id`.
+    missing_id: bool,
+}
+
+/// The results of a bulk query declared with `graphql!(bulk(…))`, one
+/// top-level object at a time, read as its generated `Item` with the
+/// objects of its nested connections in their lists.
+/// [`Shopify::bulk_query`](crate::Shopify::bulk_query) and
+/// [`Shopify::download_bulk_items`](crate::Shopify::download_bulk_items)
+/// return it.
+///
+/// It reads the lines as [`BulkGroups`] does, in the order `groupObjects`
+/// writes: an item is complete when the next top-level object, or the end
+/// of the file, arrives. One item is held at a time, with every nested
+/// object read so far: its memory follows the largest item, as well as the
+/// line being read.
+///
+/// A nested line goes to its parent by its `__parentId`, and, when its
+/// parent has several connections, to the connection that returns its
+/// `__typename`, which [`BulkQuery::text`](crate::bulk::BulkQuery::text)
+/// selects for that.
+///
+/// # Errors
+///
+/// Any error ends the stream: a line that does not read as its type, a
+/// nested line out of place, the errors of [`BulkRows`] and those of
+/// [`BulkGroups`].
+#[must_use = "a stream does nothing until it is read"]
+pub struct BulkItems<I> {
+    lines: Lines,
+    group: Option<ItemGroup<I>>,
+    grouped: bool,
+}
+
+impl<I> Unpin for BulkItems<I> {}
+
+impl<I> fmt::Debug for BulkItems<I> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BulkItems")
+            .field("lines", &self.lines)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<I> BulkItems<I> {
+    pub(crate) fn new(body: Option<BodyStream>, url: &str) -> Self {
+        Self {
+            lines: Lines::new(body, url),
+            group: None,
+            grouped: false,
+        }
+    }
+
+    pub(crate) fn grouped(mut self) -> Self {
+        self.grouped = true;
+        self
+    }
+
+    /// [`BulkRows::max_line_length`].
+    pub fn max_line_length(mut self, bytes: usize) -> Self {
+        self.lines.max = bytes;
+        self
+    }
+
+    /// The number of the last line read, from 1, blank lines included.
+    pub fn line(&self) -> usize {
+        self.lines.line
+    }
+
+    fn fail(&mut self, error: Error) -> Poll<Option<Result<I>>> {
+        self.lines.finish();
+        self.group = None;
+        Poll::Ready(Some(Err(error)))
+    }
+}
+
+impl<I: BulkItem> BulkItems<I> {
+    /// The next item, `None` at the end of the file.
+    pub async fn next_item(&mut self) -> Option<Result<I>> {
+        std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
+    }
+
+    /// Every item, up to the first error.
+    pub async fn collect(mut self) -> Result<Vec<I>> {
+        let mut items = Vec::new();
+        while let Some(item) = self.next_item().await {
+            items.push(item?);
+        }
+        Ok(items)
+    }
+
+    /// Places the nested line `number` in the item of `group`.
+    fn attach(
+        group: Option<&mut ItemGroup<I>>,
+        grouped: bool,
+        keys: Keys,
+        parent_id: &str,
+        line: &[u8],
+        number: usize,
+    ) -> Result<()> {
+        let Some(group) = group else {
+            return Err(misplaced(number, false, grouped));
+        };
+        let (parent, connections) = if group.id.as_deref() == Some(parent_id) {
+            (None, I::CONNECTIONS)
+        } else if let Some(&(slot, index)) = group.children.get(parent_id) {
+            (Some((slot, index)), I::CONNECTIONS[slot].connections)
+        } else {
+            return Err(misplaced(number, group.missing_id, grouped));
+        };
+        let slot = match connections {
+            [] => return Err(misplaced(number, group.missing_id, grouped)),
+            [_] => 0,
+            _ => {
+                let typename = keys.typename.as_deref().ok_or_else(|| {
+                    super::bulk_error(format!(
+                        "line {number} of the results has no `__typename`, which tells which connection of its parent it belongs to"
+                    ))
+                })?;
+                connections
+                    .iter()
+                    .position(|connection| connection.types.contains(&typename))
+                    .ok_or_else(|| {
+                        super::bulk_error(format!(
+                            "line {number} of the results has a `__typename` that no connection of its parent returns"
+                        ))
+                    })?
+            }
+        };
+        let index = group.item.__attach(parent, slot, line, number)?;
+        if parent.is_none() && !I::CONNECTIONS[slot].connections.is_empty() {
+            match keys.id {
+                Some(id) => {
+                    group.children.insert(id, (slot, index));
+                }
+                None => group.missing_id = true,
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<I: BulkItem> Stream for BulkItems<I> {
+    type Item = Result<I>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            let (number, range) = match this.lines.poll_line(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    return Poll::Ready(this.group.take().map(|group| Ok(group.item)));
+                }
+                Poll::Ready(Some(Err(error))) => return this.fail(error),
+                Poll::Ready(Some(Ok(line))) => line,
+            };
+            let line = &this.lines.buffer[range];
+            let keys = match crate::decode::from_jsonl_line::<Keys>(line, number) {
+                Ok(keys) => keys,
+                Err(error) => return this.fail(error),
+            };
+            match keys.parent_id.clone() {
+                None => {
+                    let item = match crate::decode::from_jsonl_line::<I>(line, number) {
+                        Ok(item) => item,
+                        Err(error) => return this.fail(error),
+                    };
+                    let next = ItemGroup {
+                        item,
+                        missing_id: keys.id.is_none() && !I::CONNECTIONS.is_empty(),
+                        id: keys.id,
+                        children: HashMap::new(),
+                    };
+                    if let Some(done) = this.group.replace(next) {
+                        return Poll::Ready(Some(Ok(done.item)));
+                    }
+                }
+                Some(parent_id) => {
+                    let attached = Self::attach(
+                        this.group.as_mut(),
+                        this.grouped,
+                        keys,
+                        &parent_id,
+                        line,
+                        number,
+                    );
+                    if let Err(error) = attached {
+                        return this.fail(error);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<I: BulkItem> FusedStream for BulkItems<I> {
     fn is_terminated(&self) -> bool {
         self.lines.done && self.group.is_none()
     }
