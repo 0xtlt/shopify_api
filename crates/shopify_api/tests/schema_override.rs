@@ -20,8 +20,10 @@ fn schema(version: &str) -> String {
 }
 
 /// A workspace of `app`, which prints the API version of `library`, a path
-/// dependency whose default schema file is 2026-04, and `override.json`, of
-/// 2026-07, which the `schema` key of `library` may name.
+/// dependency whose default schema file is 2026-04, and
+/// `schemas/override.json` in it, of 2026-07, which the `schema` key of
+/// `library` may name. An `override.json` outside the library, of 2026-07
+/// too, is one it may not name.
 struct Workspace {
     root: PathBuf,
     target: PathBuf,
@@ -66,6 +68,7 @@ impl Workspace {
             "shopify_api::graphql! { pub mod probe = \"{ f }\"; }\n",
         );
         write("library/graphql/admin.schema.json", &schema("2026-04"));
+        write("library/schemas/override.json", &schema("2026-07"));
         write("override.json", &schema("2026-07"));
         // Shared by the tests: later runs build only the probes again.
         let target = tmp.join("schema_override_target");
@@ -91,7 +94,7 @@ impl Workspace {
     }
 
     fn with_override(&self) {
-        self.library_metadata("schema = \"../override.json\"\n");
+        self.library_metadata("schema = \"schemas/override.json\"\n");
     }
 
     fn cargo(&self, args: &[&str]) -> Output {
@@ -161,9 +164,9 @@ fn the_key_chooses_the_schema_whatever_cargo_built_first() {
 
     // `api-version` is followed too: a pin the file does not hold is an
     // error for a library built as a dependency, which never downloads.
-    workspace.library_metadata("api-version = \"2026-07\"\nschema = \"../override.json\"\n");
+    workspace.library_metadata("api-version = \"2026-07\"\nschema = \"schemas/override.json\"\n");
     assert_eq!(workspace.app_version(), "2026-07");
-    workspace.library_metadata("api-version = \"2026-10\"\nschema = \"../override.json\"\n");
+    workspace.library_metadata("api-version = \"2026-10\"\nschema = \"schemas/override.json\"\n");
     let stderr = workspace.fail(&["run", "-p", "probe_app"]);
     assert!(
         stderr.contains("override.json` holds the Admin API 2026-07"),
@@ -204,8 +207,33 @@ fn a_packaged_library_takes_its_key_and_never_downloads() {
     workspace.succeed(&["build", "-p", "probe_library"]);
     assert_eq!(workspace.app_version(), "2026-07");
 
-    std::fs::remove_file(workspace.root.join("override.json")).unwrap();
+    std::fs::remove_file(library.join("schemas/override.json")).unwrap();
     let stderr = workspace.fail(&["build", "-p", "probe_library"]);
     assert!(stderr.contains("override.json` is missing"), "{stderr}");
     assert!(!stderr.contains("cannot download"), "{stderr}");
+}
+
+/// A file outside the package is refused, though it exists: `cargo package`
+/// would not ship it, and the packaged crate would look for it elsewhere.
+#[test]
+fn a_schema_outside_the_package_is_a_compile_error() {
+    let workspace = Workspace::new("outside");
+    let absolute = workspace.root.join("override.json");
+    // A literal string, as `library_metadata` writes the path of shopify_api.
+    let absolute = format!("'{}'", absolute.display());
+    for path in [
+        "\"../override.json\"",
+        "\"schemas/../../override.json\"",
+        &absolute,
+    ] {
+        workspace.library_metadata(&format!("schema = {path}\n"));
+        let stderr = workspace.fail(&["build", "-p", "probe_library"]);
+        assert!(
+            stderr.contains("must name a file inside the package"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("`cargo package` ships"), "{stderr}");
+    }
+    workspace.library_metadata("schema = \"schemas/../schemas/override.json\"\n");
+    assert_eq!(workspace.app_version(), "2026-07");
 }

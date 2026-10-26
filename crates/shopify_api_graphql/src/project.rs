@@ -8,7 +8,9 @@
 //! schema = "schemas/admin-2026-07.json"
 //! ```
 //!
-//! Without `schema`, the file is [`PROJECT_SCHEMA_PATH`]. Without
+//! `schema` must name a file inside the package, which `cargo package`
+//! ships: see [`inside_package`]. Without it, the file is
+//! [`PROJECT_SCHEMA_PATH`]. Without
 //! `api-version`, the version is the one of that file, and the latest stable
 //! one when there is no file yet. `graphql!` checks the crate's operations
 //! against that schema: see [`schema_plan`] for when it is downloaded.
@@ -41,7 +43,8 @@ pub const METADATA_TABLE: &str = "shopify_api";
 pub const API_VERSION_KEY: &str = "api-version";
 
 /// The key of the schema file in [`METADATA_TABLE`], relative to the
-/// package's `Cargo.toml`; [`PROJECT_SCHEMA_PATH`] without it.
+/// package's `Cargo.toml` and inside the package ([`inside_package`]);
+/// [`PROJECT_SCHEMA_PATH`] without it.
 pub const SCHEMA_KEY: &str = "schema";
 
 /// The lines to add to a `Cargo.toml` to select `version`.
@@ -95,7 +98,8 @@ fn year_and_month(days: u64) -> (u64, u64) {
 pub struct PackageConfig {
     /// [`API_VERSION_KEY`].
     pub api_version: Option<String>,
-    /// [`SCHEMA_KEY`], as written: relative to the `Cargo.toml`.
+    /// [`SCHEMA_KEY`], relative to the `Cargo.toml`, normalized by
+    /// [`inside_package`].
     pub schema: Option<PathBuf>,
 }
 
@@ -151,12 +155,52 @@ fn schema_in(value: Option<&toml::Value>) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     };
     match value.as_str() {
-        Some(path) if !path.is_empty() => Ok(Some(PathBuf::from(path))),
+        Some(path) if !path.is_empty() => inside_package(Path::new(path)).map(Some),
         _ => Err(format!(
             "`{SCHEMA_KEY}` in [package.metadata.{METADATA_TABLE}] must be the path of a schema file, \
              relative to Cargo.toml, such as \"graphql/admin.schema.json\""
         )),
     }
+}
+
+/// `path`, relative to a package's `Cargo.toml`, normalized, when it names a
+/// file inside the package: `cargo package` ships only the package's files,
+/// so a packaged crate would look for any other file at another place, and
+/// fail, or find another schema there.
+///
+/// The check is lexical: `.` and `a/..` are removed, and the path must not
+/// be absolute, have a root or a drive, nor climb above the package. A
+/// symbolic link inside the package that points outside it is accepted, on
+/// purpose: `cargo package` ships the content of a linked file. The path is
+/// returned normalized, so that the file opened is the one checked, even
+/// when `a` in `a/..` is a link to a directory.
+pub fn inside_package(path: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let outside = || {
+        format!(
+            "`{SCHEMA_KEY} = \"{}\"` in [package.metadata.{METADATA_TABLE}] must name a file inside the package, \
+             relative to its Cargo.toml, such as \"graphql/admin.schema.json\": \
+             `cargo package` ships only the package's files",
+            path.display()
+        )
+    };
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => return Err(outside()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normal.pop() {
+                    return Err(outside());
+                }
+            }
+            Component::Normal(name) => normal.push(name),
+        }
+    }
+    if normal.as_os_str().is_empty() {
+        return Err(outside());
+    }
+    Ok(normal)
 }
 
 /// The API version [`API_VERSION_KEY`] declares, if any.
@@ -843,6 +887,72 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn the_schema_file_must_be_inside_the_package() {
+        let schema = |path: &str| {
+            config_in(&format!(
+                "[package.metadata.shopify_api]\nschema = {}",
+                toml::Value::from(path)
+            ))
+            .map(|config| config.schema)
+        };
+        let absolute = std::env::temp_dir().join("admin.schema.json");
+        for outside in [
+            absolute.to_str().unwrap(),
+            "/admin.schema.json",
+            "../x.json",
+            "a/../../x.json",
+            "./..",
+            ".",
+            "a/..",
+        ] {
+            let error = schema(outside).unwrap_err();
+            assert!(
+                error.contains("must name a file inside the package"),
+                "{error}"
+            );
+            assert!(error.contains("`cargo package` ships"), "{error}");
+        }
+        #[cfg(windows)]
+        for outside in [
+            "C:\\x.json",
+            "C:x.json",
+            "\\\\server\\share\\x.json",
+            "\\x.json",
+        ] {
+            assert!(schema(outside).is_err(), "{outside}");
+        }
+        for (inside, normal) in [
+            ("a/../x.json", "x.json"),
+            ("./graphql/x.json", "graphql/x.json"),
+            ("schemas/../schemas/admin.json", "schemas/admin.json"),
+        ] {
+            assert_eq!(schema(inside), Ok(Some(PathBuf::from(normal))), "{inside}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_package_may_point_outside_it() {
+        let project = Project::new("link");
+        let outside = Project::new("link-target");
+        let target = outside.write("admin.schema.json", "{}");
+        std::fs::create_dir_all(project.0.join("schemas")).unwrap();
+        std::os::unix::fs::symlink(&target, project.0.join("schemas/admin.json")).unwrap();
+        project.write(
+            "Cargo.toml",
+            "[package]\nname = \"app\"\n\n[package.metadata.shopify_api]\nschema = \"schemas/admin.json\"\n",
+        );
+        assert_eq!(
+            schema_source(Some(&project.0), None),
+            Ok(SchemaSource::Project {
+                dir: project.0.clone(),
+                path: project.0.join("schemas/admin.json"),
+                pinned: None,
+            })
+        );
     }
 
     #[test]
