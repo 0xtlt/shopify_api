@@ -1362,13 +1362,13 @@ mod tests {
             SchemaPlan::Read
         );
         let message = refusal(&usable("2026-07"), Some("2026-10"));
-        assert!(
-            message.starts_with(
-                "`/registry/deplib-1.0.0/graphql/admin.schema.json` holds the Admin API 2026-07, \
-                 but `/registry/deplib-1.0.0/Cargo.toml` declares 2026-10."
-            ),
-            "{message}"
+        // Paths as the platform writes them: `\` before `graphql` on Windows.
+        let expected = format!(
+            "`{}` holds the Admin API 2026-07, but `{}` declares 2026-10.",
+            path(dir).display(),
+            dir.join("Cargo.toml").display()
         );
+        assert!(message.starts_with(&expected), "{message}");
         for pinned in [None, Some("2026-10")] {
             let message = refusal(&SchemaFile::Missing, pinned);
             assert!(
