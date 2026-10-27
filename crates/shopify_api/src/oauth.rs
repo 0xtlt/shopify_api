@@ -546,6 +546,12 @@ impl ShopifyApp {
 
     /// Verifies the `signature` of an app proxy request. Its `timestamp`
     /// must be within 90 seconds of now.
+    ///
+    /// The message signed is the one Shopify computes: for each parameter but
+    /// `signature`, the string `name=value` (decoded, the values of a repeated
+    /// one joined with commas), these strings sorted and joined with nothing.
+    /// The whole strings are sorted, not the names: `page2=x` comes before
+    /// `page=1`.
     pub fn verify_app_proxy(&self, query: &str) -> Result<SignedQuery> {
         self.verify_app_proxy_at(query, Utc::now())
     }
@@ -807,8 +813,8 @@ fn check_timestamp(params: &[(String, String)], now: DateTime<Utc>) -> Result<()
 }
 
 /// The parameters signed: every one but the signature, the values of a
-/// repeated one joined with commas, in the order of the names.
-fn signed_params(params: &[(String, String)]) -> Vec<(String, String)> {
+/// repeated one joined with commas, in the order they first appear.
+fn grouped_params(params: &[(String, String)]) -> Vec<(String, String)> {
     let mut grouped: Vec<(String, String)> = Vec::new();
     for (name, value) in params {
         if name == "hmac" || name == "signature" {
@@ -822,24 +828,31 @@ fn signed_params(params: &[(String, String)]) -> Vec<(String, String)> {
             None => grouped.push((name.clone(), value.clone())),
         }
     }
-    grouped.sort_by(|left, right| left.0.cmp(&right.0));
     grouped
 }
 
-/// What Shopify admin signs: `name=value` pairs, form-encoded with `%20`
-/// for spaces, joined with `&`.
+/// What Shopify admin signs: `name=value` pairs sorted by name,
+/// form-encoded with `%20` for spaces, joined with `&`.
 fn admin_message(params: &[(String, String)]) -> String {
-    serde_urlencoded::to_string(signed_params(params))
+    let mut grouped = grouped_params(params);
+    grouped.sort_by(|left, right| left.0.cmp(&right.0));
+    serde_urlencoded::to_string(grouped)
         .unwrap_or_default()
         .replace('+', "%20")
 }
 
-/// What an app proxy signs: `name=value` pairs, as received, joined with nothing.
+/// What an app proxy signs: the `name=value` strings, as received, sorted
+/// as whole strings and joined with nothing.
+///
+/// Not sorted by name: Shopify sorts the strings, so `page2=x` comes before
+/// `page=1` (`2` sorts before `=`), where a sort by name puts `page` first.
 fn proxy_message(params: &[(String, String)]) -> String {
-    signed_params(params)
+    let mut pairs: Vec<String> = grouped_params(params)
         .into_iter()
         .map(|(name, value)| format!("{name}={value}"))
-        .collect()
+        .collect();
+    pairs.sort_unstable();
+    pairs.concat()
 }
 
 fn signed(params: Vec<(String, String)>) -> SignedQuery {
@@ -980,6 +993,35 @@ mod tests {
                     "{query}&signature={signature}&shop=b.myshopify.com"
                 ))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn app_proxy_signs_the_sorted_name_value_strings() {
+        // Shopify sorts `name=value` whole: `page2=x` before `page=1`
+        // ('2' < '='), `filter.v.price.gte=10` before `filter=red` ('.' < '=').
+        // The signature below is HMAC-SHA256("hush", message), computed
+        // outside the crate (`openssl dgst -sha256 -hmac hush`).
+        let query = "page=1&page2=x&filter=red&filter.v.price.gte=10\
+                     &shop=a.myshopify.com&path_prefix=%2Fapps%2Fx&timestamp=1700000000";
+        let message = "filter.v.price.gte=10filter=redpage2=xpage=1\
+                       path_prefix=/apps/xshop=a.myshopify.comtimestamp=1700000000";
+        let signature = "e640778c56c80f8a92904d2b740665f8dd3b3d2d0f30095aa325bf576074f0f9";
+        assert_eq!(proxy_message(&parse_query(query).unwrap()), message);
+        assert_eq!(app().sign_app_proxy(query).unwrap(), signature);
+        let verified = app()
+            .verify_app_proxy_at(&format!("{query}&signature={signature}"), at(1_700_000_000))
+            .unwrap();
+        assert_eq!(verified.get("page2"), Some("x"));
+
+        // `-` sorts before `=` as well.
+        assert_eq!(
+            proxy_message(&parse_query("filter=red&filter-x=1").unwrap()),
+            "filter-x=1filter=red"
+        );
+        assert_eq!(
+            app().sign_app_proxy("filter=red&filter-x=1").unwrap(),
+            "31d2d42ad3281aaaf8ca1a9b40f2b21387aee62103e43c3b1564938817b26205"
         );
     }
 

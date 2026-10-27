@@ -9,6 +9,10 @@ takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
 
 A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
 
+### Since 1.0.0-rc.1
+
+- Fixed: `verify_app_proxy` and `sign_app_proxy` sort the `name=value` strings, as Shopify does, not the names. A request with a parameter whose name extends another one by a byte that sorts before `=` (`page` and `page2`, `filter` and `filter.v.price.gte`) was refused though Shopify signed it.
+
 ### Added
 
 - `graphql!`, which checks a query or mutation against Shopify's Admin schema while the crate compiles and generates the types of its variables and result. Inline (`graphql!("…", first = 10)`), named (`graphql! { pub mod name = "…"; }`) or read from a file (`file("…graphql")`).
