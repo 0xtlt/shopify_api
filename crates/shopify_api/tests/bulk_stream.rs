@@ -8,37 +8,19 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use shopify_api::bulk::{BulkWaitOptions, parse_jsonl};
+use shopify_api::bulk::parse_jsonl;
 use shopify_api::testing::{MockTransport, client};
 use shopify_api::transport::{
     BoxFuture, HttpRequest, HttpResponse, StreamingResponse, Transport, TransportError,
 };
 use shopify_api::{Error, Shopify};
 
+#[path = "support/bulk.rs"]
+mod support;
+use support::{UPLOAD_URL, fast, operation};
+
 const RESULTS_URL: &str =
     "https://storage.googleapis.com/bulk-operation-outputs/1.jsonl?X-Goog-Signature=SECRET";
-const UPLOAD_URL: &str = "https://shopify-staged-uploads.storage.googleapis.com/";
-
-fn operation(status: &str, url: Option<&str>) -> Value {
-    json!({
-        "id": "gid://shopify/BulkOperation/1",
-        "type": "QUERY",
-        "status": status,
-        "errorCode": null,
-        "createdAt": "2026-10-22T10:00:00Z",
-        "completedAt": null,
-        "objectCount": "3",
-        "rootObjectCount": "2",
-        "fileSize": null,
-        "url": url,
-        "partialDataUrl": null,
-        "query": "{ products { edges { node { id title } } } }",
-    })
-}
-
-fn fast() -> BulkWaitOptions {
-    BulkWaitOptions::new().poll_interval(Duration::from_millis(1))
-}
 
 fn push_run_and_completed(mock: &MockTransport, url: Option<&str>) {
     mock.push_data(json!({ "bulkOperationRunQuery": { "bulkOperation": operation("CREATED", None), "userErrors": [] } }));
@@ -202,77 +184,6 @@ async fn the_vec_methods_stop_at_the_first_error_as_before() {
     );
 }
 
-#[tokio::test]
-async fn a_grouped_bulk_query_asks_for_grouping_and_yields_each_parent_with_its_children() {
-    let mock = MockTransport::new();
-    mock.push_data(json!({ "bulkOperationRunQuery": { "bulkOperation": operation("CREATED", None), "userErrors": [] } }));
-    mock.push_data(json!({ "bulkOperation": operation("COMPLETED", Some(RESULTS_URL)) }));
-    mock.push_chunks(
-        200,
-        [
-            &b"{\"id\":\"P1\",\"title\":\"Shirt\"}\n{\"sku\":\"S\",\"__par"[..],
-            b"entId\":\"P1\"}\n{\"sku\":\"M\",\"__parentId\":\"P1\"}\n{\"id\":\"P2\",\"title\":\"Hat\"}\n",
-        ],
-    );
-    let shopify = client(&mock);
-
-    #[derive(Debug, Deserialize)]
-    struct Variant {
-        sku: String,
-    }
-    let mut groups = shopify
-        .bulk_query_grouped::<Product, Variant>(
-            "{ products { edges { node { id title variants { edges { node { sku } } } } } } }",
-            fast(),
-        )
-        .await
-        .unwrap();
-    let (shirt, variants) = groups.next_group().await.unwrap().unwrap();
-    assert_eq!(shirt.title, "Shirt");
-    assert_eq!(
-        variants.iter().map(|v| v.sku.as_str()).collect::<Vec<_>>(),
-        ["S", "M"]
-    );
-    let (hat, variants) = groups.next_group().await.unwrap().unwrap();
-    assert_eq!(hat.title, "Hat");
-    assert!(variants.is_empty());
-    assert!(groups.next_group().await.is_none());
-
-    assert_eq!(mock.graphql_requests()[0].variables["groupObjects"], true);
-}
-
-#[tokio::test]
-async fn a_child_out_of_place_only_asks_for_grouping_when_it_may_be_off() {
-    let body = &b"{\"id\":\"P1\",\"title\":\"A\"}\n{\"id\":\"P2\",\"title\":\"B\"}\n{\"__parentId\":\"P1\"}\n"[..];
-    let mock = MockTransport::new();
-    push_run_and_completed(&mock, Some(RESULTS_URL));
-    mock.push_chunks(200, [body]);
-    mock.push_chunks(200, [body]);
-    let shopify = client(&mock);
-
-    let mut groups = shopify
-        .bulk_query_grouped::<Product, Value>("{ products { edges { node { id } } } }", fast())
-        .await
-        .unwrap();
-    groups.next_group().await.unwrap().unwrap();
-    let error = groups.next_group().await.unwrap().unwrap_err().to_string();
-    assert!(
-        error.ends_with("though the query ran with `groupObjects`"),
-        "{error}"
-    );
-
-    let mut groups = shopify
-        .download_bulk_results_grouped::<Product, Value>(RESULTS_URL)
-        .await
-        .unwrap();
-    groups.next_group().await.unwrap().unwrap();
-    let error = groups.next_group().await.unwrap().unwrap_err().to_string();
-    assert!(
-        error.ends_with("run the query with `groupObjects`"),
-        "{error}"
-    );
-}
-
 fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
     let mock = MockTransport::new();
     let uploads = Arc::new(Mutex::new(Vec::new()));
@@ -287,7 +198,6 @@ fn upload_mock() -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
             "StagedUploadsCreate" => json!({ "stagedUploadsCreate": {
                 "stagedTargets": [{
                     "url": UPLOAD_URL,
-                    "resourceUrl": null,
                     "parameters": [{ "name": "key", "value": "tmp/1/bulk/vars.jsonl" }],
                 }],
                 "userErrors": [],
@@ -373,10 +283,7 @@ async fn an_item_that_does_not_serialize_stops_the_upload() {
     let (mock, uploads) = upload_mock();
     let shopify = client(&mock);
 
-    let error = shopify
-        .stage_bulk_variables_iter([Leaky])
-        .await
-        .unwrap_err();
+    let error = shopify.stage_bulk_variables([Leaky]).await.unwrap_err();
     assert!(matches!(error, Error::Variables { .. }), "{error:?}");
     assert!(!format!("{error}{error:?}").contains("SECRET"));
     assert!(uploads.lock().unwrap().is_empty(), "nothing uploaded");

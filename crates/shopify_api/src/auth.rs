@@ -378,15 +378,22 @@ pub(crate) async fn request_token(
             ),
             None => format!("the token endpoint of {shop} answered {}", response.status),
         };
-        return Err(Error::auth_refused(message, detail, response.status, code));
+        return Err(Error::auth_detailed(
+            message,
+            detail,
+            Some(response.status),
+            code,
+        ));
     }
     let parsed: TokenResponse = crate::decode::from_slice(&response.body).map_err(|failure| {
-        Error::auth_with_detail(
+        Error::auth_detailed(
             format!(
                 "the token endpoint of {shop} answered an invalid token: {} at `{}`",
                 failure.message, failure.path
             ),
             failure.detail,
+            None,
+            None,
         )
     })?;
     Ok(parsed.into_token())
@@ -575,14 +582,7 @@ impl Tokens {
         mut state: OwnedMutexGuard<State>,
         endpoint: &Arc<Endpoint>,
     ) -> Result<String> {
-        if matches!(*self.kind, Kind::Static) {
-            // A static client always starts with its token.
-            return state
-                .token
-                .as_ref()
-                .map(|token| token.access_token.clone())
-                .ok_or_else(|| Error::auth("no access token"));
-        }
+        // Never a static token: `get` and `renew` return before.
         let kind = self.kind.clone();
         let endpoint = endpoint.clone();
         let store = self.store.clone();

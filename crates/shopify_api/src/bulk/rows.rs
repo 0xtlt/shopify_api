@@ -1,6 +1,6 @@
 //! The results of a bulk operation, read line by line as they download.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -15,7 +15,7 @@ use super::typed::BulkItem;
 use crate::transport::BodyStream;
 use crate::{Error, Result};
 
-/// The longest line [`BulkRows`] and [`BulkGroups`] read by default: 64 MiB.
+/// The longest line [`BulkRows`] and [`BulkItems`] read by default: 64 MiB.
 pub const DEFAULT_MAX_LINE_LENGTH: usize = 64 * 1024 * 1024;
 
 /// What the buffer may keep, whatever it holds: a buffer more than four
@@ -28,8 +28,6 @@ const KEPT_LINES: usize = 16;
 
 /// A line: its number, from 1, and where it is in the buffer.
 type Line = (usize, Range<usize>);
-
-type Grouped<P, C> = Result<(P, Vec<C>)>;
 
 /// The lines of a JSONL body, split as its chunks arrive. It holds the
 /// line being read and the rest of the chunk it ends in, never the file.
@@ -303,66 +301,10 @@ struct Keys {
 fn string_or_none<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<String>, D::Error> {
-    struct Visitor;
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = Option<String>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("any value")
-        }
-
-        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E> {
-            Ok(Some(value.to_string()))
-        }
-
-        fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
-            Ok(Some(value))
-        }
-
-        fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> std::result::Result<Self::Value, A::Error> {
-            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
-            Ok(None)
-        }
-
-        fn visit_map<A: serde::de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> std::result::Result<Self::Value, A::Error> {
-            while map
-                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
-                .is_some()
-            {}
-            Ok(None)
-        }
-    }
-    deserializer.deserialize_any(Visitor)
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(text) => Some(text),
+        _ => None,
+    })
 }
 
 /// The error of a line whose `__parentId` matches no object it may be a child of.
@@ -375,194 +317,6 @@ fn misplaced(number: usize, missing_id: bool, grouped: bool) -> Error {
         "is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
     };
     super::bulk_error(format!("line {number} of the results {message}"))
-}
-
-struct Group<P, C> {
-    parent: P,
-    children: Vec<C>,
-    /// The IDs of the objects of the group, the children of the next lines
-    /// belong to.
-    ids: HashSet<String>,
-    /// An object of the group has no `id`: a child of it cannot be placed.
-    missing_id: bool,
-}
-
-/// The results of a grouped bulk query, each top-level object with the
-/// objects of its nested connections, as the file downloads.
-/// [`Shopify::bulk_query_grouped`](crate::Shopify::bulk_query_grouped) and
-/// [`Shopify::download_bulk_results_grouped`](crate::Shopify::download_bulk_results_grouped)
-/// return it.
-///
-/// A line without `__parentId` is a top-level object, read as `P`; a line
-/// with one is a child, read as `C`. Each item is a top-level object and
-/// its children, in the order of the file: the item is complete when the
-/// next top-level object, or the end of the file, arrives. One group is
-/// held at a time, with every child read so far: its memory follows the
-/// largest group, as well as the line being read.
-///
-/// # Nested connections two levels deep
-///
-/// Shopify allows connections two levels deep: the objects of the second
-/// level carry the `__parentId` of an object of the first, not of the
-/// top-level one. They are in the same list as the first level, in the
-/// order of the file: read `__parentId` in `C` to put them back in place.
-///
-/// # The order it needs
-///
-/// It needs each child after its parent, before the next top-level object:
-/// the order Shopify writes with `groupObjects`, which
-/// [`Shopify::bulk_query_grouped`](crate::Shopify::bulk_query_grouped) asks
-/// for. Without it, Shopify only promises a child after its parent,
-/// anywhere further in the file. A child whose parent is neither the
-/// current top-level object nor one of its children is an [`Error::Bulk`]
-/// rather than a child put in the wrong group.
-///
-/// # The `id` it needs
-///
-/// A child is placed by matching its `__parentId` with the `id` of an
-/// object before it: every object that has a nested connection must select
-/// `id`, without an alias. Shopify refuses a bulk query that does not, so
-/// this only matters for a file from elsewhere; a child of an object
-/// without `id` is an [`Error::Bulk`] that says so.
-///
-/// # Errors
-///
-/// Any error ends the stream, a line that does not read as `P` or `C`
-/// included: the lines after it could not be placed for sure. The errors
-/// are those of [`BulkRows`], and the child out of place or without a
-/// matching `id` above.
-#[must_use = "a stream does nothing until it is read"]
-pub struct BulkGroups<P, C> {
-    lines: Lines,
-    group: Option<Group<P, C>>,
-    /// The operation is known to have run with `groupObjects`.
-    grouped: bool,
-}
-
-// The group is never pinned: it is only reached through `&mut`.
-impl<P, C> Unpin for BulkGroups<P, C> {}
-
-impl<P, C> fmt::Debug for BulkGroups<P, C> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BulkGroups")
-            .field("lines", &self.lines)
-            .field(
-                "children",
-                &self.group.as_ref().map(|group| group.children.len()),
-            )
-            .finish()
-    }
-}
-
-impl<P, C> BulkGroups<P, C> {
-    pub(crate) fn new(body: Option<BodyStream>, url: &str) -> Self {
-        Self {
-            lines: Lines::new(body, url),
-            group: None,
-            grouped: false,
-        }
-    }
-
-    pub(crate) fn grouped(mut self) -> Self {
-        self.grouped = true;
-        self
-    }
-
-    fn misplaced(&self, number: usize) -> Error {
-        let missing_id = self.group.as_ref().is_some_and(|group| group.missing_id);
-        misplaced(number, missing_id, self.grouped)
-    }
-
-    /// [`BulkRows::max_line_length`].
-    pub fn max_line_length(mut self, bytes: usize) -> Self {
-        self.lines.max = bytes;
-        self
-    }
-
-    /// The number of the last line read, from 1, blank lines included.
-    pub fn line(&self) -> usize {
-        self.lines.line
-    }
-
-    fn fail(&mut self, error: Error) -> Poll<Option<Grouped<P, C>>> {
-        self.lines.finish();
-        self.group = None;
-        Poll::Ready(Some(Err(error)))
-    }
-}
-
-impl<P: DeserializeOwned, C: DeserializeOwned> BulkGroups<P, C> {
-    /// The next top-level object and its children, `None` at the end of the file.
-    pub async fn next_group(&mut self) -> Option<Grouped<P, C>> {
-        std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
-    }
-}
-
-impl<P: DeserializeOwned, C: DeserializeOwned> Stream for BulkGroups<P, C> {
-    type Item = Grouped<P, C>;
-
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        loop {
-            let (number, range) = match this.lines.poll_line(context) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => {
-                    let group = this.group.take();
-                    return Poll::Ready(group.map(|group| Ok((group.parent, group.children))));
-                }
-                Poll::Ready(Some(Err(error))) => return this.fail(error),
-                Poll::Ready(Some(Ok(line))) => line,
-            };
-            let line = &this.lines.buffer[range];
-            let keys = match crate::decode::from_jsonl_line::<Keys>(line, number) {
-                Ok(keys) => keys,
-                Err(error) => return this.fail(error),
-            };
-            match keys.parent_id {
-                None => {
-                    let parent = match crate::decode::from_jsonl_line::<P>(line, number) {
-                        Ok(parent) => parent,
-                        Err(error) => return this.fail(error),
-                    };
-                    let next = Group {
-                        parent,
-                        children: Vec::new(),
-                        missing_id: keys.id.is_none(),
-                        ids: keys.id.into_iter().collect(),
-                    };
-                    if let Some(done) = this.group.replace(next) {
-                        return Poll::Ready(Some(Ok((done.parent, done.children))));
-                    }
-                }
-                Some(parent_id) => {
-                    if !this
-                        .group
-                        .as_ref()
-                        .is_some_and(|group| group.ids.contains(&parent_id))
-                    {
-                        let error = this.misplaced(number);
-                        return this.fail(error);
-                    }
-                    let child = match crate::decode::from_jsonl_line::<C>(line, number) {
-                        Ok(child) => child,
-                        Err(error) => return this.fail(error),
-                    };
-                    if let Some(group) = this.group.as_mut() {
-                        group.missing_id |= keys.id.is_none();
-                        group.ids.extend(keys.id);
-                        group.children.push(child);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<P: DeserializeOwned, C: DeserializeOwned> FusedStream for BulkGroups<P, C> {
-    fn is_terminated(&self) -> bool {
-        self.lines.done && self.group.is_none()
-    }
 }
 
 struct ItemGroup<I> {
@@ -583,11 +337,13 @@ struct ItemGroup<I> {
 /// [`Shopify::download_bulk_items`](crate::Shopify::download_bulk_items)
 /// return it.
 ///
-/// It reads the lines as [`BulkGroups`] does, in the order `groupObjects`
-/// writes: an item is complete when the next top-level object, or the end
-/// of the file, arrives. One item is held at a time, with every nested
-/// object read so far: its memory follows the largest item, as well as the
-/// line being read.
+/// It reads the lines in the order `groupObjects` writes, each nested
+/// object after its parent, before the next top-level object, which
+/// [`Shopify::bulk_query`](crate::Shopify::bulk_query) asks for when the
+/// query has nested connections: an item is complete when the next
+/// top-level object, or the end of the file, arrives. One item is held at a
+/// time, with every nested object read so far: its memory follows the
+/// largest item, as well as the line being read.
 ///
 /// A nested line goes to its parent by its `__parentId`, and, when its
 /// parent has several connections, to the connection that returns its
@@ -598,8 +354,9 @@ struct ItemGroup<I> {
 /// # Errors
 ///
 /// Any error ends the stream: a line that does not read as its type, a
-/// nested line out of place, the errors of [`BulkRows`] and those of
-/// [`BulkGroups`].
+/// nested line whose parent is neither the current top-level object nor one
+/// of its objects, or whose parent has no `id` to match its `__parentId`,
+/// and the errors of [`BulkRows`].
 #[must_use = "a stream does nothing until it is read"]
 pub struct BulkItems<I> {
     lines: Lines,
@@ -1088,173 +845,17 @@ mod tests {
         }
     }
 
-    fn groups_of<P, C>(body: &str) -> BulkGroups<P, C> {
-        BulkGroups::new(
-            Some(chunks(
-                body.as_bytes()
-                    .chunks(5)
-                    .map(|part| Ok(part.to_vec()))
-                    .collect::<Vec<_>>(),
-            )),
-            "https://storage.test/r.jsonl",
-        )
-    }
-
-    async fn all_groups(
-        mut groups: BulkGroups<serde_json::Value, serde_json::Value>,
-    ) -> Vec<Result<(serde_json::Value, Vec<serde_json::Value>)>> {
-        let mut out = Vec::new();
-        while let Some(group) = groups.next_group().await {
-            out.push(group);
-        }
-        out
-    }
-
-    fn ids(values: &[serde_json::Value]) -> Vec<&str> {
-        values
-            .iter()
-            .map(|value| value["id"].as_str().unwrap())
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn groups_hold_each_top_level_object_with_its_children() {
-        let body = r#"{"id":"P1"}
-{"id":"V1","__parentId":"P1"}
-{"id":"V2","__parentId":"P1"}
-
-{"id":"P2"}
-{"id":"P3"}
-{"id":"V3","__parentId":"P3"}"#;
-        let groups = all_groups(groups_of(body)).await;
-        let groups: Vec<_> = groups.into_iter().map(Result::unwrap).collect();
-        assert_eq!(groups.len(), 3);
-        assert_eq!(groups[0].0["id"], "P1");
-        assert_eq!(ids(&groups[0].1), ["V1", "V2"]);
-        assert_eq!(groups[1].0["id"], "P2");
-        assert!(groups[1].1.is_empty());
-        assert_eq!(ids(&groups[2].1), ["V3"]);
-    }
-
-    #[tokio::test]
-    async fn the_second_level_joins_the_group_of_its_top_level_object() {
-        let body = r#"{"id":"P1"}
-{"id":"V1","__parentId":"P1"}
-{"id":"L1","__parentId":"V1"}
-{"id":"L2","__parentId":"V1"}
-{"id":"V2","__parentId":"P1"}
-{"id":"L3","__parentId":"V2"}
-{"id":"M1","__parentId":"P1"}
-{"id":"P2"}
-{"id":"V3","__parentId":"P2"}
-{"id":"L4","__parentId":"V3"}
-"#;
-        let groups: Vec<_> = all_groups(groups_of(body))
-            .await
-            .into_iter()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(ids(&groups[0].1), ["V1", "L1", "L2", "V2", "L3", "M1"]);
-        assert_eq!(groups[0].1[2]["__parentId"], "V1");
-        assert_eq!(ids(&groups[1].1), ["V3", "L4"]);
-    }
-
-    #[tokio::test]
-    async fn a_child_out_of_its_group_is_an_error_that_ends_the_stream() {
-        // V3's parent came before P2: the order without `groupObjects`.
-        let body = r#"{"id":"P1"}
-{"id":"V1","__parentId":"P1"}
-{"id":"P2"}
-{"id":"V3","__parentId":"P1"}
-{"id":"P3"}
-"#;
-        let groups = all_groups(groups_of(body)).await;
-        assert_eq!(groups.len(), 2);
-        let (parent, children) = groups[0].as_ref().unwrap();
-        assert_eq!(parent["id"], "P1");
-        assert_eq!(ids(children), ["V1"]);
-        let error = groups[1].as_ref().unwrap_err();
+    #[test]
+    fn a_line_out_of_place_says_why() {
+        let message = |missing_id, grouped| misplaced(4, missing_id, grouped).to_string();
         assert_eq!(
-            error.to_string(),
+            message(true, false),
+            "bulk operation: line 4 of the results has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections"
+        );
+        assert_eq!(
+            message(false, false),
             "bulk operation: line 4 of the results is a child of neither the top-level object before it nor one of its children: run the query with `groupObjects`"
         );
-
-        for body in [
-            "{\"id\":\"V1\",\"__parentId\":\"P1\"}\n{\"id\":\"P1\"}\n",
-            "{\"id\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P9\"}\n",
-        ] {
-            let groups = all_groups(groups_of(body)).await;
-            assert_eq!(groups.len(), 1, "{body}");
-            assert!(matches!(groups[0], Err(Error::Bulk { .. })), "{body}");
-        }
-    }
-
-    #[tokio::test]
-    async fn a_parent_without_id_is_named_as_the_cause() {
-        const MISSING: &str = "has a `__parentId` that no `id` before it matches, and an object before it has no `id`: select `id`, without an alias, on every object that has nested connections";
-        for (body, line) in [
-            (
-                "{\"title\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
-                2,
-            ),
-            (
-                "{\"id\":\"P1\"}\n{\"sku\":\"V1\",\"__parentId\":\"P1\"}\n{\"id\":\"L1\",\"__parentId\":\"V1\"}\n",
-                3,
-            ),
-            (
-                "{\"productId\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n",
-                2,
-            ),
-        ] {
-            for groups in [groups_of(body), groups_of(body).grouped()] {
-                let groups = all_groups(groups).await;
-                let error = groups.last().unwrap().as_ref().unwrap_err();
-                assert_eq!(
-                    error.to_string(),
-                    format!("bulk operation: line {line} of the results {MISSING}"),
-                    "{body}"
-                );
-            }
-        }
-
-        // A child without `id` has no child of its own to place: fine.
-        let body = "{\"id\":\"P1\"}\n{\"sku\":\"V1\",\"__parentId\":\"P1\"}\n";
-        let groups = all_groups(groups_of(body)).await;
-        assert_eq!(groups[0].as_ref().unwrap().1.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_child_out_of_place_does_not_ask_for_group_objects_when_it_is_on() {
-        let body = "{\"id\":\"P1\"}\n{\"id\":\"P2\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\"}\n";
-        let groups = all_groups(groups_of(body).grouped()).await;
-        let error = groups.last().unwrap().as_ref().unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "bulk operation: line 3 of the results is a child of neither the top-level object before it nor one of its children, though the query ran with `groupObjects`"
-        );
-    }
-
-    #[tokio::test]
-    async fn groups_read_typed_parents_and_children_and_hide_bad_values() {
-        #[derive(Debug, Deserialize)]
-        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
-        struct Product {
-            id: String,
-        }
-        #[derive(Debug, Deserialize)]
-        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
-        struct Variant {
-            id: String,
-            price: u64,
-        }
-        let body = "{\"id\":\"P1\"}\n{\"id\":\"V1\",\"__parentId\":\"P1\",\"price\":\"shpat_SECRET\"}\n{\"id\":\"P2\"}\n";
-        let mut groups = groups_of::<Product, Variant>(body);
-        let error = groups.next_group().await.unwrap().unwrap_err();
-        let shown = format!("{error}\n{error:?}");
-        assert!(!shown.contains("SECRET"), "{shown}");
-        assert!(shown.contains("line 2"), "{shown}");
-        assert!(groups.next_group().await.is_none());
-        assert!(groups.is_terminated());
+        assert!(message(false, true).ends_with("though the query ran with `groupObjects`"));
     }
 }

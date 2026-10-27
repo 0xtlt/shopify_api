@@ -1,6 +1,5 @@
 mutation WebhookSubscriptionDelete($id: ID!) {
   webhookSubscriptionDelete(id: $id) {
-    deletedWebhookSubscriptionId
     userErrors { field message }
   }
 }

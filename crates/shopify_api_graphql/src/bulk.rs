@@ -34,7 +34,10 @@ use graphql_parser::query as ast;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::analyze::{Error, FieldBase, Operation, OperationKind, SelectedField, Selection};
+use crate::analyze::{
+    Error, FieldBase, Operation, OperationKind, SelectedField, Selection, arguments_text, error,
+    error_at, value_text,
+};
 use crate::codegen::{field_idents, item_types};
 use crate::schema::{Field, Schema, TypeDef, TypeRef};
 
@@ -58,20 +61,6 @@ pub const TYPENAME_KEY: &str = "_shopifyApiTypename";
 
 /// Arguments Shopify ignores in a bulk query: it reads every object.
 const PAGINATION: [&str; 4] = ["first", "last", "after", "before"];
-
-fn error_at<T>(position: Pos, message: impl Into<String>) -> Result<T, Error> {
-    Err(Error {
-        message: message.into(),
-        position: Some((position.line, position.column)),
-    })
-}
-
-fn error<T>(message: impl Into<String>) -> Result<T, Error> {
-    Err(Error {
-        message: message.into(),
-        position: None,
-    })
-}
 
 /// A checked bulk query.
 #[derive(Debug, Clone)]
@@ -142,13 +131,6 @@ fn concrete_types(schema: &Schema, name: &str) -> Vec<String> {
     types
 }
 
-fn fields_of<'s>(schema: &'s Schema, name: &str) -> Option<&'s BTreeMap<String, Field>> {
-    match schema.get(name) {
-        Some(TypeDef::Object { fields, .. } | TypeDef::Interface { fields, .. }) => Some(fields),
-        _ => None,
-    }
-}
-
 /// The node type of a connection type: an object with `edges { node }`
 /// and `pageInfo`, as Shopify's connections are.
 pub fn connection_node<'s>(schema: &'s Schema, name: &str) -> Option<&'s str> {
@@ -172,11 +154,6 @@ fn implements_node(schema: &Schema, name: &str) -> bool {
         && types.iter().all(|ty| {
             matches!(schema.get(ty), Some(TypeDef::Object { interfaces, .. }) if interfaces.iter().any(|interface| interface == "Node"))
         })
-}
-
-fn parse(source: &str) -> Result<Document<'_>, Error> {
-    // `analyze` read it first: a failure here is not expected.
-    crate::analyze::parse(source)
 }
 
 /// The operation and the fragments of a document `analyze` accepted.
@@ -208,10 +185,6 @@ fn selection_set<'a>(operation: &'a ast::OperationDefinition<'a, String>) -> &'a
     }
 }
 
-fn set_position(set: &SelectionSet<'_>) -> Pos {
-    set.span.0
-}
-
 fn item_position(item: &ast::Selection<'_, String>) -> Pos {
     match item {
         ast::Selection::Field(field) => field.position,
@@ -236,7 +209,7 @@ fn top_level_field<'a>(
             format!("A bulk {what} selects one top-level field, not a fragment"),
         ),
         [] => error_at(
-            set_position(set),
+            set.span.0,
             format!("A bulk {what} selects one top-level field"),
         ),
     }
@@ -253,7 +226,7 @@ pub fn analyze_bulk_query(
         return error("A bulk query is a query");
     }
     strings::check(source)?;
-    let document = parse(source)?;
+    let document = crate::analyze::parse(source)?;
     let (definition, fragments) = parts_of(&document);
     let mut checker = Checker {
         schema,
@@ -274,7 +247,8 @@ pub fn analyze_bulk_query(
             ),
         );
     }
-    let ty = fields_of(schema, &schema.query)
+    let ty = schema
+        .fields(&schema.query)
         .and_then(|fields| fields.get(&top.name))
         .map(|field| field.ty.clone())
         .ok_or_else(|| Error {
@@ -315,7 +289,7 @@ pub fn analyze_bulk_query(
     if let ast::OperationDefinition::Query(query) = definition {
         for variable in &query.variable_definitions {
             if let Some(default) = &variable.default_value {
-                defaults.insert(variable.name.clone(), constant_text(default));
+                defaults.insert(variable.name.clone(), value_text(default));
             }
         }
     }
@@ -338,7 +312,7 @@ pub fn check_bulk_mutation(
     if operation.kind != OperationKind::Mutation {
         return error("A bulk mutation is a mutation");
     }
-    let document = parse(source)?;
+    let document = crate::analyze::parse(source)?;
     let (definition, fragments) = parts_of(&document);
     let top = top_level_field(selection_set(definition), "mutation")?;
     if matches!(
@@ -351,7 +325,8 @@ pub fn check_bulk_mutation(
         );
     }
     let root = schema.mutation.as_deref().unwrap_or_default();
-    let ty = fields_of(schema, root)
+    let ty = schema
+        .fields(root)
         .and_then(|fields| fields.get(&top.name))
         .map(|field| field.ty.name().to_string())
         .unwrap_or_default();
@@ -385,7 +360,8 @@ fn find_connections<'a>(
     for item in &set.items {
         match item {
             ast::Selection::Field(field) => {
-                let Some(ty) = fields_of(schema, parent)
+                let Some(ty) = schema
+                    .fields(parent)
                     .and_then(|fields| fields.get(&field.name))
                     .map(|field| field.ty.name().to_string())
                 else {
@@ -451,9 +427,8 @@ impl<'a> Checker<'a, '_> {
             return Ok(());
         };
         for variable in &query.variable_definitions {
-            let mut seen = BTreeSet::new();
-            let name = base_name(&variable.var_type);
-            if reaches_json(self.schema, name, &mut seen) {
+            let name = crate::restrict::named(&variable.var_type);
+            if reaches(self.schema, name, is_json, &mut BTreeSet::new()) {
                 return error_at(
                     variable.position,
                     format!(
@@ -592,13 +567,16 @@ impl<'a> Checker<'a, '_> {
 
     /// The type name of `field` on `parent`.
     fn field_type(&self, parent: &str, field: &ast::Field<'_, String>) -> Option<String> {
-        fields_of(self.schema, parent)
+        self.schema
+            .fields(parent)
             .and_then(|fields| fields.get(&field.name))
             .map(|definition| definition.ty.name().to_string())
     }
 
     fn field_definition(&self, parent: &str, field: &ast::Field<'_, String>) -> Option<&Field> {
-        fields_of(self.schema, parent).and_then(|fields| fields.get(&field.name))
+        self.schema
+            .fields(parent)
+            .and_then(|fields| fields.get(&field.name))
     }
 
     /// A field other than `id` aliased `id` in `set` or its fragments.
@@ -796,7 +774,7 @@ fn only_field<'a>(
                 format!("{shape}: {} is refused beside `{name}`", item_name(other)),
             )
         }
-        [] => error_at(set_position(set), shape.to_string()),
+        [] => error_at(set.span.0, shape.to_string()),
     }
 }
 
@@ -810,24 +788,31 @@ fn item_name(item: &ast::Selection<'_, String>) -> String {
     }
 }
 
-fn base_name<'t>(ty: &'t ast::Type<'_, String>) -> &'t str {
+/// A value of input type `name` may hold a value of a type `found` accepts.
+fn reaches<'s>(
+    schema: &'s Schema,
+    name: &'s str,
+    found: fn(&str, Option<&TypeDef>) -> bool,
+    seen: &mut BTreeSet<&'s str>,
+) -> bool {
+    let ty = schema.get(name);
+    if found(name, ty) {
+        return true;
+    }
     match ty {
-        ast::Type::NamedType(name) => name,
-        ast::Type::ListType(inner) | ast::Type::NonNullType(inner) => base_name(inner),
+        Some(TypeDef::Input { fields, .. }) if seen.insert(name) => fields
+            .values()
+            .any(|field| reaches(schema, field.ty.name(), found, seen)),
+        _ => false,
     }
 }
 
-/// A value of input type `name` may hold a `JSON` value.
-fn reaches_json<'s>(schema: &'s Schema, name: &'s str, seen: &mut BTreeSet<&'s str>) -> bool {
-    if name == "JSON" {
-        return true;
-    }
-    match schema.get(name) {
-        Some(TypeDef::Input { fields, .. }) if seen.insert(name) => fields
-            .values()
-            .any(|field| reaches_json(schema, field.ty.name(), seen)),
-        _ => false,
-    }
+fn is_json(name: &str, _: Option<&TypeDef>) -> bool {
+    name == "JSON"
+}
+
+fn is_enum(_: &str, ty: Option<&TypeDef>) -> bool {
+    matches!(ty, Some(TypeDef::Enum { .. }))
 }
 
 /// The selection on the nodes of a connection field of the analyzed operation.
@@ -861,36 +846,6 @@ fn item_selection(schema: &Schema, selection: &Selection) -> Selection {
     item
 }
 
-/// A constant value as GraphQL text.
-fn constant_text(value: &Value<'_>) -> String {
-    match value {
-        ast::Value::Variable(name) => format!("${name}"),
-        ast::Value::Int(number) => number.as_i64().unwrap_or_default().to_string(),
-        // `Debug` keeps a `.` or an exponent: `1.0`, `1e300`.
-        ast::Value::Float(number) => format!("{number:?}"),
-        ast::Value::String(text) => string_literal(text),
-        ast::Value::Boolean(value) => value.to_string(),
-        ast::Value::Null => "null".to_string(),
-        ast::Value::Enum(name) => name.clone(),
-        ast::Value::List(items) => {
-            let items: Vec<String> = items.iter().map(constant_text).collect();
-            format!("[{}]", items.join(", "))
-        }
-        ast::Value::Object(fields) => {
-            let fields: Vec<String> = fields
-                .iter()
-                .map(|(name, value)| format!("{name}: {}", constant_text(value)))
-                .collect();
-            format!("{{{}}}", fields.join(", "))
-        }
-    }
-}
-
-/// A string as a GraphQL string literal: JSON's escapes are GraphQL's.
-pub fn string_literal(text: &str) -> String {
-    serde_json::to_string(text).expect("a string serializes")
-}
-
 fn has_variable(value: &Value<'_>) -> bool {
     match value {
         ast::Value::Variable(_) => true,
@@ -915,7 +870,7 @@ fn value_part(value: &Value<'_>) -> ValuePart {
                 })
                 .collect(),
         ),
-        constant => ValuePart::Text(constant_text(constant)),
+        constant => ValuePart::Text(value_text(constant)),
     }
 }
 
@@ -1048,12 +1003,8 @@ impl Printer<'_> {
             ));
             return;
         }
-        let written: Vec<String> = arguments
-            .iter()
-            .map(|(name, value)| format!("{name}: {}", constant_text(value)))
-            .collect();
         self.text.push('(');
-        self.text.push_str(&written.join(", "));
+        self.text.push_str(&arguments_text(arguments));
         self.text.push(')');
     }
 }
@@ -1296,14 +1247,14 @@ fn type_tokens(
         TypeRef::Named(name) => match schema.get(name) {
             Some(TypeDef::Enum { .. }) => quote!(#private::BulkType::Enum),
             Some(TypeDef::Input { fields, .. })
-                if reaches_enum(schema, name, &mut BTreeSet::new()) =>
+                if reaches(schema, name, is_enum, &mut BTreeSet::new()) =>
             {
                 if !inputs.contains_key(name) {
                     inputs.insert(name.clone(), None);
                     let written = fields
                         .iter()
                         .filter(|(_, field)| {
-                            reaches_enum(schema, field.ty.name(), &mut BTreeSet::new())
+                            reaches(schema, field.ty.name(), is_enum, &mut BTreeSet::new())
                         })
                         .map(|(field, input)| {
                             (
@@ -1319,16 +1270,5 @@ fn type_tokens(
             }
             _ => quote!(#private::BulkType::Plain),
         },
-    }
-}
-
-/// A value of input type `name` may hold an enum value.
-fn reaches_enum<'s>(schema: &'s Schema, name: &'s str, seen: &mut BTreeSet<&'s str>) -> bool {
-    match schema.get(name) {
-        Some(TypeDef::Enum { .. }) => true,
-        Some(TypeDef::Input { fields, .. }) if seen.insert(name) => fields
-            .values()
-            .any(|field| reaches_enum(schema, field.ty.name(), seen)),
-        _ => false,
     }
 }

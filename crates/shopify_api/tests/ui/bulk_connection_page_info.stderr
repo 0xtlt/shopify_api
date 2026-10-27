@@ -1,6 +1,0 @@
-error: A connection of a bulk query selects `edges { node { … } }` and nothing else, as Shopify documents it (`products`): `pageInfo` is refused beside `edges` (line 1, column 36)
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/bulk_connection_page_info.rs:2:40
-  |
-2 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id } } pageInfo { hasNextPage } } }"));
-  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

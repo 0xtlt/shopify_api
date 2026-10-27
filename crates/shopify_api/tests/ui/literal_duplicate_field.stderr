@@ -1,6 +1,0 @@
-error: The field `title` of `ProductUpdateInput` is given twice
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/literal_duplicate_field.rs:2:101
-  |
-2 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", title: "Shirt", title: "Hat" });
-  |                                                                                                     ^^^^^

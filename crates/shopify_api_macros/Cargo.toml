@@ -17,11 +17,15 @@ include = ["src/**", "Cargo.toml", "README.md", "LICENSE.txt"]
 proc-macro = true
 
 [dependencies]
-shopify_api_graphql = { workspace = true, features = ["download"] }
+shopify_api_graphql.workspace = true
 
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+
+[features]
+## `graphql!` downloads a missing or outdated schema file while compiling.
+download = ["shopify_api_graphql/download"]
 
 [lints]
 workspace = true

@@ -58,191 +58,61 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Rust 1.88 or newer, and a Tokio runtime: the default transport and the token
-renewals run on Tokio. The first build downloads the Admin schema of the latest
-stable version into `graphql/admin.schema.json`, next to your `Cargo.toml`:
-commit it. Later builds keep that version until you change it.
+renewals run on Tokio. `graphql!` checks operations against the Admin schema
+in `graphql/admin.schema.json`, next to your `Cargo.toml`: write it once with
+`shopify-api schema download` (`cargo install shopify_api --features cli`),
+and commit it. Later builds keep that version until you change it. With the
+`schema-download` feature, the first build downloads it instead.
 
 ## Operations
 
-### Inline
-
-`graphql!("…", name = value, …)` is an operation whose types are inferred:
-
-```rust,ignore
-let data = shopify
-    .execute(graphql!(
-        "query($id: ID!) { order(id: $id) { name displayFinancialStatus totalPriceSet { shopMoney { amount currencyCode } } } }",
-        id = "gid://shopify/Order/1",
-    ))
-    .await?;
-
-let order = data.order.expect("an order");
-println!("{} {:?} {}", order.name, order.display_financial_status, order.total_price_set.shop_money.amount);
-```
-
-Values are converted to the variable's type: any integer for an `Int`, `&str`
-or `String` for an `ID`, a bare value or an `Option` for a nullable variable,
-a slice or an array for a list. A value of the wrong type does not compile.
-An enum value is written bare, `sortKey = TITLE`, and checked.
-
-### Input objects
-
-An input object is written as an object literal, checked against the schema
-field by field while the crate compiles:
+`graphql!("…", name = value, …)` is an operation whose types are inferred.
+Values are converted to the variable's type, and an input object is written
+as an object literal, checked field by field while the crate compiles:
 
 ```rust,ignore
 shopify.execute(graphql!(
     "mutation($product: ProductUpdateInput!) { productUpdate(product: $product) { userErrors { field message } } }",
     product = {
         id: product_id,                   // any Rust expression
-        title: format!("{name} (promo)"),
         status: ACTIVE,                   // an enum value, checked
         descriptionHtml: null,            // sends null
         vendor?: new_vendor,              // an Option: None leaves the field out
         seo: { title: seo_title },        // a nested object
-        metafields: [for m in &rows if !m.value.is_empty() => {
-            namespace: "custom", key: &m.key, value: &m.value, type: "single_line_text_field",
-        }],
     },
 )).await?;
 ```
 
-A field is written one of four ways:
-
-| Field | Sends |
-| --- | --- |
-| `title: value` | The value |
-| `title: null` | `null`: Shopify clears the field |
-| `title?: option` | The value of `Some`; nothing for `None`, so Shopify keeps what it has |
-| `title?: maybe` | A `shopify_api::Maybe`: `Value`, `Null`, or nothing for `Absent` |
-
-`title: option` does not compile: sending `null` for `None` would clear the
-field, so the error points to `title?:` or `title: null`. An unknown field, a
-field given twice, a missing required field, `null` for a non-null field, an
-unknown enum value and `?:` on a required field are compile errors at the
-token. For an enum value known only at run time, `raw(value)` sends the
-string unchecked: `status: raw(row.status)`.
-
-`input!` builds an input object ahead of the call, in a loop for instance.
-Every `input!` of one GraphQL type gives the same Rust type, so the values of
-two call sites go in one `Vec`:
-
-```rust,ignore
-use shopify_api::input;
-
-let mut metafields = Vec::new();
-for row in &rows {
-    if row.color.is_empty() { continue; }
-    metafields.push(input!(MetafieldsSetInput {
-        ownerId: &row.product_id, namespace: "custom", key: "color", value: &row.color,
-        type: "single_line_text_field", compareDigest?: row.digest.as_deref(),
-    }));
-}
-shopify.execute(graphql!(
-    "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
-    metafields = metafields,
-)).await?;
-```
-
-A value of another input type is refused, the message naming the place and
-the GraphQL type it expects: `` an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })` ``.
-The type given may show only as `InputObject<N>`, `N` a hash of its name.
-
-### Values Shopify would not read as written
-
-A value is checked when it is built, in a literal, an `input!`, a module's
-`Variables` or `Operation::variable`: an `Int` must fit in 32 bits, a `Float`
-must be finite (JSON has no NaN or infinity, and `null` would clear the
-field), and a non-null `JSON` must not be `null` at its top (`null` inside it
-is fine). An integer literal out of range, alone, negated, in parentheses or
-in a list `[…]`, is a compile error at the literal; `Some(…)`, `vec![…]` and
-any other form are checked at run time. A value known at run time makes `execute` fail before anything is sent, with
-`Error::InvalidValue`, which says where and why, never the value:
-`` invalid value at `$input.lineItems[2].quantity`: Int out of 32-bit range ``.
-
-### Named
-
-`graphql! { pub mod name = "…"; … }` names the types, for functions and
-sharing. One block holds several modules. `Variables` runs as it is, and each
-input object the variables hold is a type of the module:
-
-```rust,ignore
-graphql! {
-    pub mod metafields_set = "mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) { metafields { id key } userErrors { field message code } }
-    }";
-    pub mod shop_name = "query ShopName { shop { name } }";
-}
-
-fn color_metafields(rows: &[Row]) -> Vec<metafields_set::MetafieldsSetInput> {
-    rows.iter()
-        .map(|row| input!(MetafieldsSetInput { ownerId: &row.product_id, key: "color", value: &row.color }))
-        .collect()
-}
-
-let data = shopify.execute(metafields_set::Variables { metafields: color_metafields(&rows) }).await?;
-let shop = shopify.execute(shop_name::operation()).await?;
-```
-
-### From a file
-
-```rust,ignore
-graphql! {
-    pub mod order = file("graphql/order.graphql");
-}
-```
-
-### Through a framework
-
-A crate that reaches `shopify_api` through a crate re-exporting it, and does
-not list it in its own `Cargo.toml`, gives the path with `crate =`; the schema
-is still that crate's `graphql/admin.schema.json`:
-
-```rust,ignore
-let op = my_framework::graphql!(crate = ::my_framework::shopify_api, "{ shop { name } }");
-my_framework::graphql! { crate = ::my_framework::shopify_api; pub mod shop = "{ shop { name } }"; }
-let m = my_framework::input!(crate = ::my_framework::shopify_api, SEOInput { title: title });
-```
-
-### Untyped
-
+`graphql! { pub mod name = "…"; }` names the types, for functions and
+sharing; `file("graphql/order.graphql")` reads an operation from a file;
+`input!(MetafieldsSetInput { … })` builds an input object ahead of the call.
 For an operation built at run time, `shopify.graphql(query, variables)`
-returns `data` as a `serde_json::Value`, `graphql_as::<T>` reads it as your
-type, and `graphql_raw` returns the whole answer, `errors` included.
+returns `data` as a `serde_json::Value`.
 
-### Limits
-
-- A literal and an `input!` are checked against the schema of the crate
-  where they are written; values of `input!` from another crate have the same
-  type for the same GraphQL name.
-- There is no `if`/`else` value form: a Rust expression returning an `Option`,
-  a `Maybe` or a value of `input!` covers it.
-- rustc's own errors, outside those of the macros, show an input object as
-  `InputObject<N>`, `N` a hash of its name.
-- Enum fields of a module's `Variables` and `raw(…)` are strings nothing checks.
-- Under `#![no_implicit_prelude]`, a literal or an `input!` that holds a
-  Rust expression does not compile: its messages need `#[diagnostic::…]`,
-  which that attribute hides. Constants, modules and variables of scalars do.
-
-The full reference of `graphql!`, with the mapping of every GraphQL type and
-the rules of literals, is
-[on docs.rs](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html).
+The full reference of `graphql!` is
+[on docs.rs](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html):
+the mapping of every GraphQL type, the forms of a field, the values checked
+at compile time and at run time, `crate =` for a framework that re-exports
+`shopify_api`, and the limits.
 
 ## API versions
 
 Every operation is checked against a schema, and **sent to the version of that
-schema**. No schema ships with the crate: the first build downloads the one of
-the latest stable version into `graphql/admin.schema.json`, and later builds
-keep it, whatever Shopify releases since: a build gives the same result
-whatever the date. Commit the file, so that builds without network access
-have it. A library that uses `graphql!` must ship it: as a dependency, a
+schema**. No schema ships with the crate: `shopify-api schema download`
+writes the one of the latest stable version into `graphql/admin.schema.json`,
+and builds keep it, whatever Shopify releases since: a build gives the same
+result whatever the date. A file of the version the crate asks for is always
+used as it is. Builds never use the network, unless the `schema-download`
+feature lets `graphql!` download a missing or outdated file itself. Commit
+the file. A library that uses `graphql!` must ship it: as a dependency, a
 crate never downloads its schema, and `cargo package` fails without it.
 `schema = "…"` in `[package.metadata.shopify_api]` names another schema file
 for that package, relative to its `Cargo.toml`: a relative path with `/` and portable names (no `:`, `\`, `<>"|?*` or control character, no name ending in `.` or a space, no device name such as `CON`). The details are in the
 [`graphql!` docs](https://docs.rs/shopify_api/latest/shopify_api/macro.graphql.html#schema-and-api-version).
 
-To choose the version, pin it in your `Cargo.toml` (`graphql!` downloads its
-schema when the file holds another one):
+To choose the version, pin it in your `Cargo.toml`, then run
+`shopify-api schema download` again (with `schema-download`, the next build
+does it):
 
 ```toml
 [package.metadata.shopify_api]
@@ -381,8 +251,7 @@ let operation = shopify.start_bulk_mutation_text(
 
 One verb per meaning: `start_bulk_*` only starts an operation and returns
 it; `bulk_query*` and `bulk_mutation` start, wait and read. `start_bulk_query`
-takes a text (`GroupObjects(text)` for `groupObjects`) or a
-`graphql!(bulk(…))` query; `start_bulk_mutation` takes typed lines, and
+takes a text or a `graphql!(bulk(…))` query; `start_bulk_mutation` takes typed lines, and
 `start_bulk_mutation_text` a text and its variables. With
 `wait_for_bulk_operation`, `bulk_operations`, `cancel_bulk_operation` and
 `download_bulk_results`, each step is on its own.
@@ -408,26 +277,11 @@ the type is an error and the stream goes on; a download that fails, or a
 line longer than `max_line_length` (64 MiB by default), ends it.
 
 Nested connections write their objects on lines of their own, after their
-parent. `bulk_query_grouped::<Product, Variant>` runs the query with
-`groupObjects` and yields each product with its variants, one product in
-memory at a time. Every object that has a nested connection must select
-`id`, without an alias: Shopify refuses the query otherwise.
+parent: declare the query with `graphql!(bulk(…))` to get each product with
+its variants, one product in memory at a time.
 
-
-```rust,ignore
-let mut products = shopify
-    .bulk_query_grouped::<MyProduct, MyVariant>(
-        "{ products { edges { node { id title variants { edges { node { id sku } } } } } } }",
-        BulkWaitOptions::default(),
-    )
-    .await?;
-while let Some(group) = products.next_group().await {
-    let (product, variants) = group?;
-}
-```
-
-`download_bulk_results_stream` and `download_bulk_results_grouped` read the
-results of an operation you ran yourself. For a bulk mutation over more
+`download_bulk_results_stream` and `download_bulk_items` read the results of
+an operation you ran yourself. For a bulk mutation over more
 items than you want in memory, `start_bulk_mutation_text` takes an iterator:
 each item is serialized as it is taken.
 
@@ -532,7 +386,8 @@ assert_eq!(mock.graphql_requests()[0].operation_name.as_deref(), Some("Shop"));
 | `oauth` | Install links, callbacks, token exchange, session tokens, app proxies. |
 | `testing` | `MockTransport`, and the signing helpers of tests. |
 | `cli` | The `shopify-api` command. |
-| `full` | Every feature but `native-tls`: `webhooks`, `oauth`, `testing`, `cli`, over rustls. |
+| `schema-download` | `graphql!` downloads a missing or outdated schema file while compiling. |
+| `full` | Every feature but `native-tls`: `webhooks`, `oauth`, `testing`, `cli`, `schema-download`, over rustls. |
 
 Without `rustls` or `native-tls`, give the client your own `Transport`.
 

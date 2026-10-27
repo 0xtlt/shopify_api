@@ -322,9 +322,10 @@ pub struct ShopifyBuilder {
     shop: String,
     auth: Option<Auth>,
     api_version: Option<ApiVersion>,
-    transport: Option<Arc<dyn Transport>>,
+    /// Set by `ShopifyApp::builder` too, with the app's.
+    pub(crate) transport: Option<Arc<dyn Transport>>,
     retry: RetryPolicy,
-    token_store: Option<Arc<dyn TokenStore>>,
+    pub(crate) token_store: Option<Arc<dyn TokenStore>>,
     refresh_leeway: Duration,
     user_agent: String,
 }
@@ -375,12 +376,6 @@ impl ShopifyBuilder {
         self
     }
 
-    /// [`ShopifyBuilder::transport`], for a transport already shared.
-    pub fn shared_transport(mut self, transport: Arc<dyn Transport>) -> Self {
-        self.transport = Some(transport);
-        self
-    }
-
     pub fn retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
@@ -390,12 +385,6 @@ impl ShopifyBuilder {
     /// is saved, the client sends nothing: see [`TokenStore`].
     pub fn token_store(mut self, store: impl TokenStore) -> Self {
         self.token_store = Some(Arc::new(store));
-        self
-    }
-
-    /// [`ShopifyBuilder::token_store`], for a store already shared.
-    pub fn shared_token_store(mut self, store: Arc<dyn TokenStore>) -> Self {
-        self.token_store = Some(store);
         self
     }
 

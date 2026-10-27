@@ -88,11 +88,8 @@ impl Used {
                     if field.name.starts_with("__") {
                         continue;
                     }
-                    let fields = match schema.get(parent) {
-                        Some(
-                            TypeDef::Object { fields, .. } | TypeDef::Interface { fields, .. },
-                        ) => fields,
-                        _ => continue,
+                    let Some(fields) = schema.fields(parent) else {
+                        continue;
                     };
                     let Some(definition) = fields.get(&field.name) else {
                         continue;
@@ -216,7 +213,7 @@ impl Used {
 }
 
 /// The type a variable type names, without lists and non-null.
-fn named<'a>(ty: &'a ast::Type<'a, String>) -> &'a str {
+pub(crate) fn named<'t>(ty: &'t ast::Type<'_, String>) -> &'t str {
     match ty {
         ast::Type::NamedType(name) => name,
         ast::Type::ListType(inner) | ast::Type::NonNullType(inner) => named(inner),

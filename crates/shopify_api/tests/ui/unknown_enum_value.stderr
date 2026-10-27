@@ -1,6 +1,0 @@
-error: `CREATED` is not a value of the enum `OrderSortKeys` (did you mean `CREATED_AT`?) (in argument `sortKey` of `QueryRoot.orders`) (line 1, column 3)
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/unknown_enum_value.rs:2:35
-  |
-2 |     let _ = shopify_api::graphql!("{ orders(first: 1, sortKey: CREATED) { nodes { id } } }");
-  |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

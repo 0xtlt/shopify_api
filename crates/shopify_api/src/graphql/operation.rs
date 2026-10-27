@@ -8,7 +8,7 @@ use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 use super::check::{Invalid, VariableType};
-use crate::{ApiVersion, Error, Result};
+use crate::{Error, Result};
 
 /// A query or a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,18 +151,9 @@ impl<'a> Lexer<'a> {
                 self.position += 1;
                 Token::Punctuator(first)
             }
-            b'0'..=b'9' | b'-' => {
-                let length = rest
-                    .iter()
-                    .position(|byte| {
-                        !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'+' | b'-'))
-                    })
-                    .unwrap_or(rest.len());
-                self.position += length;
-                Token::Other
-            }
             _ => {
-                // Any other punctuator, or a character GraphQL doesn't allow here.
+                // A number, one character at a time, any other punctuator, or
+                // a character GraphQL doesn't allow here.
                 let length = self.text[start..].chars().next().map_or(1, char::len_utf8);
                 self.position += length;
                 Token::Other
@@ -305,15 +296,6 @@ impl<D> Operation<D> {
         self.variables
             .as_deref()
             .map_err(|failure| failure.to_error())
-    }
-
-    /// The Admin API version the operation is sent to when the client pins
-    /// none: the one it was checked against, else [`ApiVersion::DEFAULT`].
-    pub fn api_version(&self) -> Result<ApiVersion> {
-        match self.checked_against {
-            Some(version) => ApiVersion::new(version),
-            None => Ok(ApiVersion::DEFAULT),
-        }
     }
 
     fn set(
@@ -978,17 +960,10 @@ mod tests {
             operation.body().unwrap(),
             r#"{"query":"query Shop { shop { id } }","operationName":"Shop"}"#
         );
-        assert_eq!(operation.api_version().unwrap(), ApiVersion::V2026_07);
         let operation = operation.variable::<i64, _>("first", 1);
         assert_eq!(
             operation.body().unwrap(),
             r#"{"query":"query Shop { shop { id } }","variables":{"first":1},"operationName":"Shop"}"#
-        );
-        assert_eq!(
-            Operation::<()>::new("{ shop { id } }")
-                .api_version()
-                .unwrap(),
-            ApiVersion::DEFAULT
         );
     }
 }

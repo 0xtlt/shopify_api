@@ -8,40 +8,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use shopify_api::bulk::{BulkOperationStatus, BulkOperationsFilter, BulkWaitOptions};
 use shopify_api::testing::{MockTransport, client};
-use shopify_api::transport::{HttpRequest, HttpResponse, Method};
+use shopify_api::transport::{HttpResponse, Method};
 use shopify_api::{Error, Shopify};
 
+#[path = "support/bulk.rs"]
+mod support;
+use support::{UPLOAD_URL, fast, operation, operation_name};
+
 const RESULTS_URL: &str = "https://storage.googleapis.com/shopify-tiers-assets-prod-us-east1/bulk-operation-outputs/1.jsonl";
-const UPLOAD_URL: &str = "https://shopify-staged-uploads.storage.googleapis.com/";
-
-fn operation(status: &str, url: Option<&str>) -> Value {
-    json!({
-        "id": "gid://shopify/BulkOperation/1",
-        "type": "QUERY",
-        "status": status,
-        "errorCode": null,
-        "createdAt": "2026-10-22T10:00:00Z",
-        "completedAt": if status == "COMPLETED" { json!("2026-10-22T10:01:00Z") } else { Value::Null },
-        "objectCount": "2",
-        "rootObjectCount": "2",
-        "fileSize": url.map(|_| "120"),
-        "url": url,
-        "partialDataUrl": null,
-        "query": "{ products { edges { node { id title } } } }",
-    })
-}
-
-fn operation_name(request: &HttpRequest) -> Option<String> {
-    request
-        .json()?
-        .get("operationName")?
-        .as_str()
-        .map(str::to_string)
-}
-
-fn fast() -> BulkWaitOptions {
-    BulkWaitOptions::new().poll_interval(Duration::from_millis(1))
-}
 
 #[tokio::test]
 async fn a_bulk_query_runs_to_its_end_and_its_rows_are_read() {
@@ -99,11 +73,9 @@ async fn a_bulk_query_runs_to_its_end_and_its_rows_are_read() {
 }
 
 #[tokio::test]
-async fn a_text_bulk_query_groups_objects_only_when_asked() {
-    use shopify_api::bulk::GroupObjects;
-
+async fn a_text_bulk_query_runs_without_group_objects() {
     let mock = MockTransport::new();
-    for _ in 0..5 {
+    for _ in 0..3 {
         mock.push_data(json!({ "bulkOperationRunQuery": {
             "bulkOperation": operation("CREATED", None),
             "userErrors": [],
@@ -116,27 +88,15 @@ async fn a_text_bulk_query_groups_objects_only_when_asked() {
     assert_eq!(started.status, BulkOperationStatus::Created);
     shopify.start_bulk_query(query.to_string()).await.unwrap();
     shopify.start_bulk_query(&query.to_string()).await.unwrap();
-    shopify.start_bulk_query(GroupObjects(query)).await.unwrap();
-    shopify
-        .start_bulk_query(GroupObjects(query.to_string()))
-        .await
-        .unwrap();
 
     let sent: Vec<Value> = mock
         .graphql_requests()
         .iter()
         .map(|request| request.variables.clone())
         .collect();
-    let expected = |grouped: bool| json!({ "query": query, "groupObjects": grouped });
     assert_eq!(
         sent,
-        [
-            expected(false),
-            expected(false),
-            expected(false),
-            expected(true),
-            expected(true)
-        ]
+        vec![json!({ "query": query, "groupObjects": false }); 3]
     );
 }
 
@@ -208,7 +168,6 @@ async fn a_bulk_mutation_uploads_its_variables_then_runs() {
             Some("StagedUploadsCreate") => json!({ "stagedUploadsCreate": {
                 "stagedTargets": [{
                     "url": UPLOAD_URL,
-                    "resourceUrl": null,
                     "parameters": [
                         { "name": "key", "value": "tmp/1/bulk/vars.jsonl" },
                         { "name": "policy", "value": "abc" },

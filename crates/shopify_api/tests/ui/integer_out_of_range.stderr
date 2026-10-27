@@ -1,6 +1,0 @@
-error: The integer is outside the range of `Int`, a 32-bit integer, given for argument `first` of `QueryRoot.products` (line 1, column 3)
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/integer_out_of_range.rs:2:35
-  |
-2 |     let _ = shopify_api::graphql!("{ products(first: 3000000000) { nodes { title } } }");
-  |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

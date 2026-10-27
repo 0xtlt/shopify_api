@@ -15,7 +15,10 @@ pub(super) fn duplicate_field(source: &str) -> Option<(&str, Pos)> {
     let mut lexer = Lexer::new(source);
     let mut frames: Vec<Frame<'_>> = Vec::new();
     let mut previous: Option<Token<'_>> = None;
-    while let Some((token, start)) = lexer.next() {
+    loop {
+        // Where the parser places the token, tabs and all.
+        let at = lexer.pos;
+        let token = lexer.next()?;
         match token {
             Token::Punctuator(b'{') => {
                 // A value follows `:` (an argument or a field of an input
@@ -40,14 +43,13 @@ pub(super) fn duplicate_field(source: &str) -> Option<(&str, Pos)> {
                     && !matches!(previous, Some(Token::Punctuator(b':' | b'$')))
                     && !fields.insert(name)
                 {
-                    return Some((name, position_of(source, start)));
+                    return Some((name, at));
                 }
             }
             _ => {}
         }
         previous = Some(token);
     }
-    None
 }
 
 /// The order of the input fields of each argument of the field at `field`
@@ -66,7 +68,7 @@ pub(super) fn argument_orders<'a>(
     // The field starts with its alias or its name.
     let first = loop {
         let at = lexer.pos;
-        let (token, _) = lexer.next()?;
+        let token = lexer.next()?;
         if at == field {
             break token;
         }
@@ -80,8 +82,8 @@ pub(super) fn argument_orders<'a>(
     let mut after = lexer.next();
     // `alias: name`, the alias spelled like the name or not: the colon says
     // which it is.
-    if after.map(|(token, _)| token) == Some(Token::Punctuator(b':')) {
-        if lexer.next().map(|(token, _)| token) != Some(Token::Name(name)) {
+    if after == Some(Token::Punctuator(b':')) {
+        if lexer.next() != Some(Token::Name(name)) {
             return None;
         }
         after = lexer.next();
@@ -89,13 +91,13 @@ pub(super) fn argument_orders<'a>(
         return None;
     }
     let mut arguments = Vec::new();
-    if after.map(|(token, _)| token) != Some(Token::Punctuator(b'(')) {
+    if after != Some(Token::Punctuator(b'(')) {
         return Some(arguments);
     }
     // The arguments: `Other`; in their values, objects and lists.
     let mut frames: Vec<Frame<'_>> = vec![Frame::Other];
     let mut previous: Option<Token<'_>> = None;
-    while let Some((token, _)) = lexer.next() {
+    while let Some(token) = lexer.next() {
         let order = match token {
             Token::Punctuator(b'{') => {
                 frames.push(Frame::Object(HashSet::new()));
@@ -169,8 +171,8 @@ impl<'a> Lexer<'a> {
         lexer
     }
 
-    /// The next token and where it starts, `None` at the end.
-    fn next(&mut self) -> Option<(Token<'a>, usize)> {
+    /// The next token, `None` at the end.
+    fn next(&mut self) -> Option<Token<'a>> {
         let rest = &self.text.as_bytes()[self.position..];
         let &first = rest.first()?;
         let start = self.position;
@@ -242,7 +244,7 @@ impl<'a> Lexer<'a> {
         }
         self.position += length;
         self.skip_ignored();
-        Some((token, start))
+        Some(token)
     }
 
     /// Skips white space, line terminators, commas, comments and byte order
@@ -283,18 +285,6 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// The line and column of the byte `offset` of `source`, both from 1.
-fn position_of(source: &str, offset: usize) -> Pos {
-    let before = &source[..offset];
-    let line_start = before.rfind(['\n', '\r']).map_or(0, |index| index + 1);
-    Pos {
-        line: before.matches('\n').count() + before.matches('\r').count()
-            - before.matches("\r\n").count()
-            + 1,
-        column: before[line_start..].chars().count() + 1,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::duplicate_field;
@@ -320,6 +310,8 @@ mod tests {
             Some(("a", 2, 2))
         );
         assert_eq!(duplicate("{ a @d(x: {k: 1, k: 1}) }"), Some(("k", 1, 18)));
+        // Columns as the parser counts them, as in every other error: a tab is 8.
+        assert_eq!(duplicate("{\ta(x: {k: 1, k: 1}) }"), Some(("k", 1, 22)));
     }
 
     #[test]

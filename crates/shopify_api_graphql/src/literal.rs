@@ -1284,14 +1284,8 @@ fn number(text: &str) -> Option<Number<'_>> {
     if !text.starts_with(|first: char| first.is_ascii_digit()) {
         return None;
     }
-    if integer(text).is_some() {
-        let suffix = INT_TYPES
-            .iter()
-            .chain(&["i128", "u128"])
-            .find(|suffix| text.ends_with(*suffix))
-            .copied()
-            .unwrap_or("");
-        return Some(Number::Int(suffix));
+    if let Some((_, suffix)) = integer_parts(text) {
+        return Some(Number::Int(suffix.unwrap_or("")));
     }
     let (digits, suffix) = ["f32", "f64"]
         .iter()

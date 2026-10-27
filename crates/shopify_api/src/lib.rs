@@ -51,11 +51,11 @@
 //! | `oauth` | [`oauth`]: install links, callbacks, token exchange, session tokens, app proxies. |
 //! | `testing` | [`testing::MockTransport`], and the signing helpers of tests. |
 //! | `cli` | The `shopify-api` command. |
-//! | `full` | Every feature but `native-tls`: `webhooks`, `oauth`, `testing`, `cli`, over rustls. |
+//! | `schema-download` | [`graphql!`] downloads a missing or outdated schema file while compiling. |
+//! | `full` | Every feature but `native-tls`: `webhooks`, `oauth`, `testing`, `cli`, `schema-download`, over rustls. |
 //!
 //! The client runs on Tokio: the default transport, and the token renewals,
 //! which run in tasks of their own, need a Tokio runtime.
-#![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // The operations of this crate use `graphql!`, whose code refers to `::shopify_api`.

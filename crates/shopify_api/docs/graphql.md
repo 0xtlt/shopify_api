@@ -563,19 +563,25 @@ or is a compile error. Editing either key compiles the crate again.
 
 Without a pin, the version is the one of the schema file: it does not change
 when Shopify releases a new one, and a build gives the same result whatever
-the date. With no file either, the first build takes the latest stable
+the date. With no file either, `shopify-api schema download` (or the first
+build, with `schema-download`) takes the latest stable
 version (the one before, on the first day of a quarter when Shopify has not
 published it yet). `shopify-api schema download` moves an unpinned crate to
 the latest version; pinning one is clearer.
 
-Which file a crate is checked against depends on its `Cargo.toml` only. What
-happens when that file is missing, holds another version than the pinned
-one, or is in a format an older `shopify_api` wrote, depends on two more
-things:
+Which file a crate is checked against depends on its `Cargo.toml` only. A
+file of the version the crate asks for is read as it is. When that file is
+missing, holds another version than the pinned one, or is in a format an
+older `shopify_api` wrote, `graphql!` downloads it only when all of these
+hold:
 
-- whether cargo was asked to build the package: one of the workspace you
+- the `schema-download` feature of `shopify_api` is on. It is off by
+  default: the macro then has no HTTP client, and a build never uses the
+  network;
+- `CARGO_NET_OFFLINE` is not `true`;
+- cargo was asked to build the package: one of the workspace you
   build, test or run, rather than a dependency of it;
-- whether the package is your own source (the packages of the workspace, and
+- the package is your own source (the packages of the workspace, and
   path dependencies inside it or outside), rather than a copy of a
   dependency: a crate from crates.io or another registry, a git dependency,
   a vendored crate, or the copy `cargo package` verifies. `graphql!` takes a
@@ -586,7 +592,7 @@ things:
   registry source and git checkout), or when it is under `$CARGO_HOME`
   (`~/.cargo` by default), with or without symbolic links resolved.
 
-When both hold, `graphql!` downloads the file from Shopify's public endpoint.
+When all hold, `graphql!` downloads the file from Shopify's public endpoint.
 It tries once per build: without network access, every operation fails at
 once with the reason, and `graphql!` never checks against another version
 than the one the operations go to.
@@ -606,12 +612,12 @@ downloads the file on demand, where `schema` says: `shopify-api schema
 download`, or `shopify-api schema download --shop my-shop` for the schema a
 shop's token sees.
 
-| The schema file of a crate (`schema`, else `graphql/admin.schema.json`) | Your own package, cargo was asked to build it | Your own package, built as a dependency | Packaged, vendored or checked out |
-| --- | --- | --- | --- |
-| Present, no pin | The file, never downloaded again. | The file. | The file. |
-| Present, of the pinned version | The file. | The file. | The file. |
-| Present, of another version or an older format | Downloaded again. | Compile error. | Compile error. |
-| Missing | Downloaded: the pinned version, else the latest. | Compile error. | Compile error. |
+| The schema file of a crate (`schema`, else `graphql/admin.schema.json`) | `schema-download`, your own package, cargo was asked to build it | Otherwise |
+| --- | --- | --- |
+| Present, no pin | The file, never downloaded again. | The file. |
+| Present, of the pinned version | The file. | The file. |
+| Present, of another version or an older format | Downloaded again. | Compile error. |
+| Missing | Downloaded: the pinned version, else the latest. | Compile error. |
 
 An operation goes to the version of the schema it was checked against: a
 crate whose schema is 2026-07 calls the 2026-07 endpoint, with nothing to
@@ -686,7 +692,8 @@ it depends on `shopify_api` itself.
   value of `input!` covers it.
 - Enum values are checked where they are written; the `String` fields of
   `Variables` and `raw(…)` are not.
-- The generated code refers to `::shopify_api`: the dependency cannot be renamed.
+- The generated code refers to `::shopify_api`: a renamed dependency, or one
+  reached through another crate, is named with `crate =`.
 - Names that start with `__shopify_api_` or `__SHOPIFY_API_` are reserved
   to the generated code. Its bindings are hygienic, but a constant of such a
   name in scope makes a pattern of the generated code refer to it: the code

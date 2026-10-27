@@ -43,10 +43,7 @@ async fn sync_keeps_updates_creates_then_deletes() {
         "webhookSubscription": subscription(4, "APP_UNINSTALLED", "https://example.com/hooks"),
         "userErrors": [],
     } }));
-    mock.push_data(json!({ "webhookSubscriptionDelete": {
-        "deletedWebhookSubscriptionId": "gid://shopify/WebhookSubscription/2",
-        "userErrors": [],
-    } }));
+    mock.push_data(json!({ "webhookSubscriptionDelete": { "userErrors": [] } }));
     let shopify = client(&mock);
 
     let report = shopify

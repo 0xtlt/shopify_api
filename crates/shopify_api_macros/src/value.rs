@@ -57,7 +57,7 @@ pub(crate) fn parse_value(input: ParseStream) -> syn::Result<Value> {
     {
         let content;
         let braces = syn::braced!(content in input);
-        return parse_object(&content, braces.span.join());
+        return parse_object(&content, braces.span.join()).map(Value::Object);
     }
     if cursor.group(Delimiter::Bracket).is_some() && ends_after(input, 1) {
         let Some(TokenTree::Group(group)) = input.parse::<Option<TokenTree>>()? else {
@@ -70,7 +70,7 @@ pub(crate) fn parse_value(input: ParseStream) -> syn::Result<Value> {
 }
 
 /// `{ name: value, name?: value, … }`, its braces read.
-pub(crate) fn parse_object(content: ParseStream, span: Span) -> syn::Result<Value> {
+pub(crate) fn parse_object(content: ParseStream, span: Span) -> syn::Result<Object> {
     let mut fields = Vec::new();
     while !content.is_empty() {
         let name = content
@@ -100,7 +100,7 @@ pub(crate) fn parse_object(content: ParseStream, span: Span) -> syn::Result<Valu
             .parse::<Token![,]>()
             .map_err(|error| syn::Error::new(error.span(), "expected `,` between two fields"))?;
     }
-    Ok(Value::Object(Object { span, fields }))
+    Ok(Object { span, fields })
 }
 
 fn parse_brackets(group: proc_macro2::Group) -> syn::Result<Value> {

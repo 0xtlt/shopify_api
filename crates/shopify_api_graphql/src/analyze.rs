@@ -50,16 +50,16 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
-fn error_at<T>(position: Pos, message: impl Into<String>) -> Result<T> {
+pub(crate) fn error_at<T>(position: Pos, message: impl Into<String>) -> Result<T> {
     Err(Error {
         message: message.into(),
         position: Some((position.line, position.column)),
     })
 }
 
-fn error<T>(message: impl Into<String>) -> Result<T> {
+pub(crate) fn error<T>(message: impl Into<String>) -> Result<T> {
     Err(Error {
         message: message.into(),
         position: None,
@@ -525,8 +525,8 @@ fn has_ordered_object(value: &Value<'_>) -> bool {
     }
 }
 
-/// The arguments of a field for a message, each value written with its kind.
-fn arguments_text(arguments: &[(String, Value<'_>)]) -> String {
+/// The arguments of a field as GraphQL text, each value written with its kind.
+pub(crate) fn arguments_text(arguments: &[(String, Value<'_>)]) -> String {
     let written: Vec<String> = arguments
         .iter()
         .map(|(name, value)| format!("{name}: {}", value_text(value)))
@@ -534,12 +534,15 @@ fn arguments_text(arguments: &[(String, Value<'_>)]) -> String {
     written.join(", ")
 }
 
-fn value_text(value: &Value<'_>) -> String {
+/// A value as GraphQL text.
+pub(crate) fn value_text(value: &Value<'_>) -> String {
     match value {
         ast::Value::Variable(name) => format!("${name}"),
         ast::Value::Int(number) => number.as_i64().unwrap_or_default().to_string(),
+        // `Debug` keeps a `.` or an exponent: `1.0`, `1e300`.
         ast::Value::Float(number) => format!("{number:?}"),
-        ast::Value::String(text) => format!("{text:?}"),
+        // JSON's escapes are GraphQL's.
+        ast::Value::String(text) => serde_json::to_string(text).expect("a string serializes"),
         ast::Value::Boolean(value) => value.to_string(),
         ast::Value::Null => "null".to_string(),
         ast::Value::Enum(name) => name.clone(),

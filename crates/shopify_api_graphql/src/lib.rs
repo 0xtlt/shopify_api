@@ -18,7 +18,6 @@
 //! internal to this repository's tests, not part of the API: a schema file
 //! `graphql!` then uses for `shopify_api` and the projects `trybuild`
 //! compiles for it (`project::TEST_SCHEMA_PACKAGES`), and no other package.
-#![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[doc(hidden)]

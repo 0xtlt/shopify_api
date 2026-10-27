@@ -388,6 +388,16 @@ struct Wrap<'a, 'b, D> {
 }
 
 macro_rules! forward {
+    // The methods that name the type they read, kept for the messages.
+    (named $($method:ident($($arg:ident: $type:ty),*);)*) => {$(
+        fn $method<V: Visitor<'de>>(self, name: &'static str, $($arg: $type,)* visitor: V) -> Result<V::Value, D::Error> {
+            self.track.type_name(name);
+            let (chain, track) = (self.chain, self.track);
+            self.inner
+                .$method(name, $($arg,)* WrapVisitor { inner: visitor, chain, track, names: None })
+                .map_err(|error| track.trigger(chain, error))
+        }
+    )*};
     ($($method:ident($($arg:ident: $type:ty),*);)*) => {$(
         fn $method<V: Visitor<'de>>(self, $($arg: $type,)* visitor: V) -> Result<V::Value, D::Error> {
             let (chain, track) = (self.chain, self.track);
@@ -430,41 +440,11 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for Wrap<'_, '_, D> {
         deserialize_ignored_any();
     }
 
-    fn deserialize_unit_struct<V: Visitor<'de>>(
-        self,
-        name: &'static str,
-        visitor: V,
-    ) -> Result<V::Value, D::Error> {
-        self.track.type_name(name);
-        let (chain, track) = (self.chain, self.track);
-        self.inner
-            .deserialize_unit_struct(name, WrapVisitor::new(visitor, chain, track, None))
-            .map_err(|error| track.trigger(chain, error))
-    }
-
-    fn deserialize_newtype_struct<V: Visitor<'de>>(
-        self,
-        name: &'static str,
-        visitor: V,
-    ) -> Result<V::Value, D::Error> {
-        self.track.type_name(name);
-        let (chain, track) = (self.chain, self.track);
-        self.inner
-            .deserialize_newtype_struct(name, WrapVisitor::new(visitor, chain, track, None))
-            .map_err(|error| track.trigger(chain, error))
-    }
-
-    fn deserialize_tuple_struct<V: Visitor<'de>>(
-        self,
-        name: &'static str,
-        len: usize,
-        visitor: V,
-    ) -> Result<V::Value, D::Error> {
-        self.track.type_name(name);
-        let (chain, track) = (self.chain, self.track);
-        self.inner
-            .deserialize_tuple_struct(name, len, WrapVisitor::new(visitor, chain, track, None))
-            .map_err(|error| track.trigger(chain, error))
+    forward! {
+        named
+        deserialize_unit_struct();
+        deserialize_newtype_struct();
+        deserialize_tuple_struct(len: usize);
     }
 
     fn deserialize_struct<V: Visitor<'de>>(

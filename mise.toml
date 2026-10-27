@@ -1,7 +1,6 @@
 # Toolchain and tasks. Run `mise install` once, then `mise run <task>` (`mise tasks` lists them).
 [tools]
 rust = { version = "1.99.1", profile = "minimal", components = "clippy,rustfmt" }
-"cargo:cargo-audit" = "0.22.2"
 cargo-deny = "0.20.2"
 
 [env]
@@ -71,4 +70,4 @@ run = "cargo test -p shopify_api --all-features --locked --test live -- --ignore
 
 [tasks.audit]
 description = "Known vulnerabilities, licenses and sources of the dependencies (needs the network)"
-run = ["cargo audit", "cargo deny check"]
+run = "cargo deny check"

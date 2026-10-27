@@ -71,7 +71,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::{Error, Result, ShopDomain, Shopify, UserError};
+use crate::{Error, Result, ShopDomain, Shopify};
 use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
 
 /// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
@@ -120,7 +120,6 @@ pub fn sign(secret: &str, body: &[u8]) -> String {
 /// `Debug` shows the length of the body, not the body: it holds the data of
 /// customers.
 #[derive(Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Webhook {
     topic: String,
     shop: ShopDomain,
@@ -416,13 +415,9 @@ fn subscription_of(selection: &impl Serialize) -> Result<WebhookSubscription> {
     })
 }
 
-fn refused(mutation: &'static str, errors: &impl Serialize) -> Result<()> {
-    let errors: Vec<UserError> = crate::decode::reserialize(errors)?;
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::UserErrors { mutation, errors })
-    }
+/// What Shopify left out of the answer to a mutation, at `path`.
+fn missing(path: &str, what: &str) -> Error {
+    Error::decode(path, format!("Shopify returned {what}"), None)
 }
 
 /// A webhook subscription to create, always JSON: only JSON webhooks verify.
@@ -559,19 +554,14 @@ impl Shopify {
                 webhook_subscription: subscription_input(spec, false),
             })
             .await?;
-        let payload = data.webhook_subscription_create.ok_or_else(|| {
-            Error::decode(
-                "webhookSubscriptionCreate".to_string(),
-                "Shopify returned nothing".to_string(),
-                None,
-            )
-        })?;
-        refused("webhookSubscriptionCreate", &payload.user_errors)?;
+        let payload = data
+            .webhook_subscription_create
+            .ok_or_else(|| missing("webhookSubscriptionCreate", "nothing"))?;
+        crate::error::refused("webhookSubscriptionCreate", &payload.user_errors)?;
         let subscription = payload.webhook_subscription.ok_or_else(|| {
-            Error::decode(
-                "webhookSubscriptionCreate.webhookSubscription".to_string(),
-                "Shopify returned no subscription".to_string(),
-                None,
+            missing(
+                "webhookSubscriptionCreate.webhookSubscription",
+                "no subscription",
             )
         })?;
         subscription_of(&subscription)
@@ -581,14 +571,10 @@ impl Shopify {
         let data = self
             .execute_own(delete::Variables { id: id.to_string() })
             .await?;
-        let payload = data.webhook_subscription_delete.ok_or_else(|| {
-            Error::decode(
-                "webhookSubscriptionDelete".to_string(),
-                "Shopify returned nothing".to_string(),
-                None,
-            )
-        })?;
-        refused("webhookSubscriptionDelete", &payload.user_errors)
+        let payload = data
+            .webhook_subscription_delete
+            .ok_or_else(|| missing("webhookSubscriptionDelete", "nothing"))?;
+        crate::error::refused("webhookSubscriptionDelete", &payload.user_errors)
     }
 
     /// Replaces the options of a subscription with those of `spec`; its
@@ -604,19 +590,14 @@ impl Shopify {
                 webhook_subscription: subscription_input(spec, true),
             })
             .await?;
-        let payload = data.webhook_subscription_update.ok_or_else(|| {
-            Error::decode(
-                "webhookSubscriptionUpdate".to_string(),
-                "Shopify returned nothing".to_string(),
-                None,
-            )
-        })?;
-        refused("webhookSubscriptionUpdate", &payload.user_errors)?;
+        let payload = data
+            .webhook_subscription_update
+            .ok_or_else(|| missing("webhookSubscriptionUpdate", "nothing"))?;
+        crate::error::refused("webhookSubscriptionUpdate", &payload.user_errors)?;
         let subscription = payload.webhook_subscription.ok_or_else(|| {
-            Error::decode(
-                "webhookSubscriptionUpdate.webhookSubscription".to_string(),
-                "Shopify returned no subscription".to_string(),
-                None,
+            missing(
+                "webhookSubscriptionUpdate.webhookSubscription",
+                "no subscription",
             )
         })?;
         subscription_of(&subscription)

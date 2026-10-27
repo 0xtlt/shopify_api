@@ -1,5 +1,5 @@
-# Policy of `mise run audit`. cargo-deny checks what the workspace depends on;
-# `cargo audit` reads the same RustSec database from Cargo.lock alone.
+# Policy of `mise run audit`: RustSec advisories, licenses and sources of
+# what the workspace depends on.
 
 [graph]
 all-features = true

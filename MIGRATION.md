@@ -157,7 +157,7 @@ shopify.execute(graphql!(
 | 0.10 | 1.0 |
 | --- | --- |
 | `run_bulk_query(query)` → `BulkOperationPayload` | `start_bulk_query(query)` → `BulkOperation`; user errors are `Error::UserErrors` |
-| `run_bulk_query_with_grouping(query, true)` | `start_bulk_query(GroupObjects(query))` (`bulk::GroupObjects`); with `false`, `start_bulk_query(query)` |
+| `run_bulk_query_with_grouping(query, true)` | Declare the query with `graphql!(bulk(…))` and run it with `start_bulk_query` or `bulk_query`: it runs with `groupObjects` when it has nested connections, and reads each object with its children; with `false`, `start_bulk_query(query)` |
 | `run_bulk_mutation(mutation, staged_upload_path)` | `start_bulk_mutation_staged(mutation, path, None)`, or `start_bulk_mutation_text(mutation, &rows)`, which uploads the rows |
 | `stage_upload_jsonl(&rows)` | `stage_bulk_variables(&rows)` |
 | `get_bulk_operation(id)` | `bulk_operation(id)` |
@@ -180,14 +180,14 @@ only started. `start_bulk_query` takes a text or a typed query.
 New in 1.0: a query or a mutation declared with `graphql!(bulk("…"))` is
 checked when the crate compiles, and `bulk_query` and `bulk_mutation` read
 its results as generated types, in place of a hand-written struct and
-`bulk_query_rows` or `bulk_query_grouped`.
+`bulk_query_rows`.
 
 `object_count`, `root_object_count` and `file_size` are numbers, and
 `created_at` and `completed_at` are `chrono::DateTime<Utc>`.
 `wait_for_bulk_operation` returns the operation once it ends, as 0.10's
 `wait_for_bulk` did: `Ok` with `status = Failed` (or `Canceled`) for one that
 did not complete, so keep checking `status`. The calls that start, wait and
-read (`bulk_query_rows`, `bulk_query_stream`, `bulk_query_grouped`, and the
+read (`bulk_query_rows`, `bulk_query_stream`, and the
 typed `bulk_query` and `bulk_mutation`) fail instead, with an `Error::Bulk`
 whose `operation` holds it, with its `error_code` and `partial_data_url`. A
 wait that ran out is an `Error::Timeout` whose `id` is the operation's,
@@ -296,12 +296,12 @@ gets, verifies with `verify_extension_session_token`, as an
 
 | 0.10 | 1.0 |
 | --- | --- |
-| `download_public_admin_schema("2026-04")` | `schema::download_public_admin_schema(ApiVersion::V2026_04)` |
+| `download_public_admin_schema("2026-04")` | `shopify-api schema download --introspection` (`cargo install shopify_api --features cli`), for the version of the nearest `Cargo.toml` |
 | `shopify.download_admin_schema()` | The same |
-| `SHOPIFY_DEV_ADMIN_SCHEMA_PROXY` | `schema::PUBLIC_ADMIN_SCHEMA_ENDPOINT` |
+| `SHOPIFY_DEV_ADMIN_SCHEMA_PROXY` | Gone: `shopify-api schema download` calls it |
 | `ADMIN_SCHEMA_INTROSPECTION_QUERY` | `schema::INTROSPECTION_QUERY` |
-| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `graphql!` downloads it when cargo is asked to build the package, never for a dependency, or a packaged crate. `shopify-api schema download` refreshes it, `--introspection` for the raw result. `schema = "file"` next to `api-version` names another file than `graphql/admin.schema.json` |
-| `shopify-api schema download --api-version 2026-07` | No flag: the command reads the version of the nearest `Cargo.toml`. For another version, or outside a package: `schema::download_public_admin_schema(ApiVersion::new("2026-07")?)` |
+| `shopify-api schema download --public --out file` | `api-version` in `[package.metadata.shopify_api]` of `Cargo.toml`: `shopify-api schema download` writes it; with the `schema-download` feature, `graphql!` also downloads it when cargo is asked to build the package, never for a dependency, or a packaged crate, `--introspection` for the raw result. `schema = "file"` next to `api-version` names another file than `graphql/admin.schema.json` |
+| `shopify-api schema download --api-version 2026-07` | No flag: the command reads the version of the nearest `Cargo.toml`: pin another one there |
 
 `graphql!` reads the compact form it downloads, in `graphql/admin.schema.json`,
 or in the file `schema = "…"` names in `[package.metadata.shopify_api]`.

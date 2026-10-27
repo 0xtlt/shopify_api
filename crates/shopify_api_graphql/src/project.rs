@@ -154,11 +154,6 @@ pub fn package_config(manifest_dir: &Path) -> Result<PackageConfig, String> {
     config_in(&text).map_err(|error| format!("`{}`: {error}", manifest.display()))
 }
 
-/// The Admin API version the `Cargo.toml` in `manifest_dir` declares, if any.
-pub fn configured_api_version(manifest_dir: &Path) -> Result<Option<String>, String> {
-    package_config(manifest_dir).map(|config| config.api_version)
-}
-
 /// What a `Cargo.toml` declares.
 fn config_in(manifest: &str) -> Result<PackageConfig, String> {
     let table: toml::Table = manifest.parse().map_err(|error| format!("{error}"))?;
@@ -471,7 +466,7 @@ pub enum SchemaPlan {
 /// the latest version at `now`.
 ///
 /// Only a package that [`may_download`] downloads: a local one cargo was
-/// asked to build. Any other uses the file it ships, and
+/// asked to build, with the `download` feature. Any other uses the file it ships, and
 /// refuses to build when it has none or when it is not the version its
 /// `Cargo.toml` pins: its author tested its operations against that file,
 /// and a registry, vendored or packaged copy is not to be written.
@@ -486,7 +481,8 @@ pub fn schema_plan(
     let fix = || {
         format!(
             "Run `shopify-api schema download` in `{}` (`cargo install shopify_api --features cli`), \
-             and commit the file. A crate downloads its schema only as a local package cargo was asked to build: \
+             and commit the file. `graphql!` downloads a schema by itself only with the `schema-download` feature \
+             of shopify_api, and only for a local package cargo was asked to build: \
              as a dependency, packaged, vendored, under $CARGO_HOME or below a `.cargo-ok`, it uses the one it ships.",
             dir.display()
         )
@@ -536,8 +532,6 @@ pub fn schema_plan(
 pub const PUBLIC_ADMIN_SCHEMA_ENDPOINT: &str = "https://shopify.dev/admin-graphql-direct-proxy";
 
 /// Why the schema of a version could not be had.
-#[cfg(feature = "download")]
-#[cfg_attr(docsrs, doc(cfg(feature = "download")))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadError {
     /// Shopify has no Admin API of this version: it is not out yet, or its
@@ -553,7 +547,6 @@ pub enum DownloadError {
     Failed(String),
 }
 
-#[cfg(feature = "download")]
 impl std::fmt::Display for DownloadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -565,7 +558,6 @@ impl std::fmt::Display for DownloadError {
     }
 }
 
-#[cfg(feature = "download")]
 impl std::error::Error for DownloadError {}
 
 /// The introspection result in Shopify's answer to `url`, or why there is none.
@@ -599,13 +591,18 @@ fn introspection_in(
     if !(200..300).contains(&status) {
         return Err(failed(&format!("HTTP {status}")));
     }
-    value.ok_or_else(|| failed(&"the answer is not JSON"))
+    let value = value.ok_or_else(|| failed(&"the answer is not JSON"))?;
+    match value.pointer("/data/__schema/types") {
+        Some(_) => Ok(value),
+        None => Err(failed(&"the answer is not an introspection result")),
+    }
 }
 
-/// Downloads the Admin schema of `version` from Shopify's public endpoint.
+/// Downloads the introspection result of the Admin schema of `version` from
+/// Shopify's public endpoint.
 #[cfg(feature = "download")]
 #[cfg_attr(docsrs, doc(cfg(feature = "download")))]
-pub fn download_public_schema(version: &str) -> Result<crate::Schema, DownloadError> {
+pub fn download_introspection(version: &str) -> Result<serde_json::Value, DownloadError> {
     use std::time::Duration;
 
     let url = format!("{PUBLIC_ADMIN_SCHEMA_ENDPOINT}/{version}");
@@ -638,20 +635,28 @@ pub fn download_public_schema(version: &str) -> Result<crate::Schema, DownloadEr
         .limit(256 * 1024 * 1024)
         .read_to_string()
         .map_err(|error| failed(&error))?;
-    let value = introspection_in(version, &url, response.status().as_u16(), &text)?;
-    crate::Schema::from_introspection(&value, version).map_err(|error| failed(&error))
+    introspection_in(version, &url, response.status().as_u16(), &text)
 }
 
-/// Downloads the Admin schema of `version` into `path`, and returns it.
+/// Downloads the Admin schema of `version` from Shopify's public endpoint.
+#[cfg(feature = "download")]
+fn download_public_schema(version: &str) -> Result<crate::Schema, DownloadError> {
+    let value = download_introspection(version)?;
+    crate::Schema::from_introspection(&value, version).map_err(|error| {
+        DownloadError::Failed(format!(
+            "cannot read the Admin schema {version} from {PUBLIC_ADMIN_SCHEMA_ENDPOINT}: {error}"
+        ))
+    })
+}
+
+/// Downloads the Admin schema of `version` into `path`.
 ///
 /// The file is replaced in one step: a build that reads it meanwhile sees
 /// the old schema or the new one, never part of one.
 #[cfg(feature = "download")]
-#[cfg_attr(docsrs, doc(cfg(feature = "download")))]
-pub fn download_schema_file(path: &Path, version: &str) -> Result<crate::Schema, DownloadError> {
+fn download_schema_file(path: &Path, version: &str) -> Result<(), DownloadError> {
     let schema = download_public_schema(version)?;
-    write_atomically(path, &schema.to_json()).map_err(DownloadError::Failed)?;
-    Ok(schema)
+    write_atomically(path, &schema.to_json()).map_err(DownloadError::Failed)
 }
 
 /// Writes `contents` to `path` through a temporary file in the same directory.
@@ -680,10 +685,11 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
 /// is called with the file and the version before each download, to show
 /// progress.
 ///
+/// Without the `download` feature, nothing is downloaded: a file of the
+/// version the crate asks for is read, anything else is refused.
+///
 /// A download is tried once per file and version in a process: when it
 /// fails, the next operations of the build fail at once with the same error.
-#[cfg(feature = "download")]
-#[cfg_attr(docsrs, doc(cfg(feature = "download")))]
 pub fn project_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
     path: &Path,
@@ -693,22 +699,30 @@ pub fn project_schema<S: AsRef<crate::Schema>>(
     read: impl Fn(&Path) -> Result<S, String>,
     on_download: impl Fn(&Path, &str),
 ) -> Result<S, String> {
+    #[cfg(feature = "download")]
+    let download = download_schema_file;
+    // Never called: `may_download` is false without the feature.
+    #[cfg(not(feature = "download"))]
+    let download = |_: &Path, _: &str| -> Result<(), DownloadError> {
+        Err(DownloadError::Failed(
+            "built without the `download` feature".to_string(),
+        ))
+    };
     obtain_schema(
         dir,
         path,
         pinned,
-        may_download,
+        may_download && cfg!(feature = "download"),
         now,
         read,
         |path, version| {
             on_download(path, version);
-            download_schema_file(path, version).map(drop)
+            download(path, version)
         },
     )
 }
 
 /// [`project_schema`], downloading with `download`.
-#[cfg(feature = "download")]
 fn obtain_schema<S: AsRef<crate::Schema>>(
     dir: &Path,
     path: &Path,
@@ -754,7 +768,6 @@ fn obtain_schema<S: AsRef<crate::Schema>>(
 }
 
 /// The `apiVersion` a schema file names, whatever its format.
-#[cfg(feature = "download")]
 fn stored_api_version(path: &Path) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Header {
@@ -771,7 +784,6 @@ fn stored_api_version(path: &Path) -> Option<String> {
 ///
 /// For the `latest` version, an [`DownloadError::UnknownVersion`] tries the
 /// version before: a new version may not be out on its first day.
-#[cfg(feature = "download")]
 fn download_once(
     path: &Path,
     version: &str,
@@ -803,7 +815,6 @@ fn download_once(
 
 /// What to tell when the schema of `version`, described by `which`, cannot
 /// be downloaded into `path` at `now`.
-#[cfg(feature = "download")]
 fn download_failure(
     error: &DownloadError,
     path: &Path,
@@ -1509,7 +1520,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "download")]
     mod obtaining {
         use std::cell::RefCell;
         use std::sync::Arc;
@@ -1791,7 +1801,11 @@ mod tests {
         assert_eq!(answer(200, "<html>"), failed("the answer is not JSON"));
         assert_eq!(
             answer(200, r#"{"data":{}}"#),
-            Ok(serde_json::json!({ "data": {} }))
+            failed("the answer is not an introspection result")
+        );
+        assert_eq!(
+            answer(200, r#"{"data":{"__schema":{"types":[]}}}"#),
+            Ok(serde_json::json!({ "data": { "__schema": { "types": [] } } }))
         );
     }
 }

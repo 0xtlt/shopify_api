@@ -9,7 +9,6 @@ use serde_json::value::RawValue;
 
 use super::{
     BulkOperation, BulkRows, BulkWaitOptions, StartBulkQuery, bulk_error, run_mutation, sealed,
-    started,
 };
 use crate::error::is_graphql_name;
 use crate::graphql::check::Invalid;
@@ -153,6 +152,50 @@ pub struct BulkQuery<I> {
     template: &'static BulkTemplate,
 }
 
+/// The methods [`BulkQuery`] and [`BulkMutation`] take from their operation.
+macro_rules! operation_methods {
+    ($what:literal) => {
+        /// What the `Variables` of a `graphql!` module set a variable with.
+        #[doc(hidden)]
+        pub fn __variable<T: VariableType>(mut self, name: &str, value: T) -> Self {
+            self.operation = self.operation.__variable(name, value);
+            self
+        }
+
+        /// What `graphql!` sets a variable written as a Rust expression with.
+        #[doc(hidden)]
+        pub fn __converted_variable<T: VariableType, V: IntoVariable<T>>(
+            mut self,
+            name: &str,
+            value: V,
+        ) -> Self {
+            self.operation = self.operation.variable(name, value);
+            self
+        }
+
+        /// What `graphql!` sets a variable written as a literal to.
+        #[doc(hidden)]
+        pub fn __literal_variable(
+            mut self,
+            name: &str,
+            value: std::result::Result<Box<RawValue>, Invalid>,
+        ) -> Self {
+            self.operation = self.operation.__literal_variable(name, value);
+            self
+        }
+
+        #[doc = concat!("The text of the ", $what, " as written, with its variables.")]
+        pub fn query(&self) -> &str {
+            self.operation.query()
+        }
+
+        #[doc = concat!("The Admin API version the ", $what, " was checked against.")]
+        pub fn checked_against(&self) -> Option<&'static str> {
+            self.operation.checked_against()
+        }
+    };
+}
+
 impl<I> BulkQuery<I> {
     /// What `graphql!` builds.
     #[doc(hidden)]
@@ -168,44 +211,7 @@ impl<I> BulkQuery<I> {
         }
     }
 
-    /// What the `Variables` of a `graphql!` module set a variable with.
-    #[doc(hidden)]
-    pub fn __variable<T: VariableType>(mut self, name: &str, value: T) -> Self {
-        self.operation = self.operation.__variable(name, value);
-        self
-    }
-
-    /// What `graphql!` sets a variable written as a Rust expression with.
-    #[doc(hidden)]
-    pub fn __converted_variable<T: VariableType, V: IntoVariable<T>>(
-        mut self,
-        name: &str,
-        value: V,
-    ) -> Self {
-        self.operation = self.operation.variable(name, value);
-        self
-    }
-
-    /// What `graphql!` sets a variable written as a literal to.
-    #[doc(hidden)]
-    pub fn __literal_variable(
-        mut self,
-        name: &str,
-        value: std::result::Result<Box<RawValue>, Invalid>,
-    ) -> Self {
-        self.operation = self.operation.__literal_variable(name, value);
-        self
-    }
-
-    /// The text of the query as written, with its variables.
-    pub fn query(&self) -> &str {
-        self.operation.query()
-    }
-
-    /// The Admin API version the query was checked against.
-    pub fn checked_against(&self) -> Option<&'static str> {
-        self.operation.checked_against()
-    }
+    operation_methods!("query");
 
     /// The text Shopify runs: without variable definitions, each variable
     /// written in as a GraphQL literal (an enum value bare, an input object
@@ -503,44 +509,7 @@ impl<D> BulkMutation<D> {
         }
     }
 
-    /// What the `Variables` of a `graphql!` module set a variable with.
-    #[doc(hidden)]
-    pub fn __variable<T: VariableType>(mut self, name: &str, value: T) -> Self {
-        self.operation = self.operation.__variable(name, value);
-        self
-    }
-
-    /// What `graphql!` sets a variable written as a Rust expression with.
-    #[doc(hidden)]
-    pub fn __converted_variable<T: VariableType, V: IntoVariable<T>>(
-        mut self,
-        name: &str,
-        value: V,
-    ) -> Self {
-        self.operation = self.operation.variable(name, value);
-        self
-    }
-
-    /// What `graphql!` sets a variable written as a literal to.
-    #[doc(hidden)]
-    pub fn __literal_variable(
-        mut self,
-        name: &str,
-        value: std::result::Result<Box<RawValue>, Invalid>,
-    ) -> Self {
-        self.operation = self.operation.__literal_variable(name, value);
-        self
-    }
-
-    /// The text of the mutation.
-    pub fn query(&self) -> &str {
-        self.operation.query()
-    }
-
-    /// The Admin API version the mutation was checked against.
-    pub fn checked_against(&self) -> Option<&'static str> {
-        self.operation.checked_against()
-    }
+    operation_methods!("mutation");
 
     /// The line of the JSONL file of variables: the variables as one JSON
     /// object. Fails as [`Shopify::execute`] would for a value refused.
@@ -586,7 +555,6 @@ impl<D> fmt::Debug for BulkMutation<D> {
 #[non_exhaustive]
 pub struct BulkMutationResult<D> {
     /// The `data` of the mutation; its `userErrors` are in it.
-    #[serde(default = "none")]
     pub data: Option<D>,
     /// The errors of the run: a variable Shopify refused, a missing scope.
     #[serde(default)]
@@ -595,10 +563,6 @@ pub struct BulkMutationResult<D> {
     /// Shopify's documentation does not show it on every line of errors.
     #[serde(rename = "__lineNumber", default)]
     pub index: Option<u64>,
-}
-
-fn none<D>() -> Option<D> {
-    None
 }
 
 /// The lines of a bulk mutation, checked and written as its JSONL file.
@@ -791,21 +755,13 @@ impl Shopify {
                 Ok(())
             })
             .await?;
-        let operation = Operation::from(run_mutation::Variables {
+        let variables = run_mutation::Variables {
             mutation: lines.mutation,
             staged_upload_path: path,
             client_identifier: None,
-        })
-        .checked_as(lines.checked_against);
-        let data = self.execute(operation).await?;
-        let payload = data
-            .bulk_operation_run_mutation
-            .ok_or_else(|| bulk_error("bulkOperationRunMutation returned nothing"))?;
-        started(
-            "bulkOperationRunMutation",
-            payload.bulk_operation,
-            &payload.user_errors,
-        )
+        };
+        self.run_bulk_mutation(variables, Some(lines.checked_against))
+            .await
     }
 }
 

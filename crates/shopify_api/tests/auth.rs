@@ -187,24 +187,9 @@ async fn a_static_token_that_is_refused_is_the_answer() {
     assert!(token_requests(&mock).is_empty());
 }
 
-#[derive(Default, Clone)]
-struct Saved(Arc<Mutex<Vec<(String, TokenData)>>>);
-
-impl TokenStore for Saved {
-    fn save<'a>(
-        &'a self,
-        shop: &'a ShopDomain,
-        token: &'a TokenData,
-    ) -> BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>> {
-        Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap()
-                .push((shop.to_string(), token.clone()));
-            Ok(())
-        })
-    }
-}
+#[path = "support/saved.rs"]
+mod saved;
+use saved::Saved;
 
 #[tokio::test]
 async fn an_expiring_token_is_refreshed_and_saved() {

@@ -1,6 +1,0 @@
-error: `raw(…)` is only for a value of an enum: `title` of `ProductUpdateInput` expects a `String`
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/literal_raw_outside_enum.rs:2:92
-  |
-2 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", title: raw("Shirt") });
-  |                                                                                            ^^^

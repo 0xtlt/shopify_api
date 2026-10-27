@@ -7,13 +7,13 @@ error[E0277]: `lineItems` of `InventoryTransferCreateInput` is non-null (`[Inven
   |             |                                                 an `Option`: `None` leaves the field out
   |             required by a bound introduced by this call
   |
-  = help: the trait `__ShopifyApiNoNull4_c2392f79` is not implemented for `Vec<InputObject<12797409305445540075>>`
+  = help: the trait `__ShopifyApiNoNull4_c24beb97` is not implemented for `Vec<InputObject<12797409305445540075>>`
 help: this trait has no implementations, consider adding one
  --> tests/ui/literal_maybe_non_null_with_default.rs:6:13
   |
 6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `Maybe<Vec<InputObject<12797409305445540075>>>` to implement `__ShopifyApiOptional4_c2392f79`
+note: required for `Maybe<Vec<InputObject<12797409305445540075>>>` to implement `__ShopifyApiOptional4_c24beb97`
  --> tests/ui/literal_maybe_non_null_with_default.rs:6:13
   |
 6 |     let _ = input!(InventoryTransferCreateInput { lineItems?: line_items });

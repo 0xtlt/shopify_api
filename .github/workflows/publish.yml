@@ -12,7 +12,6 @@ permissions:
 jobs:
   call-ci:
     uses: ./.github/workflows/ci.yml
-    secrets: inherit
 
   publish:
     name: Publish
@@ -20,10 +19,16 @@ jobs:
     needs:
       - call-ci
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
-      # The three crates at once, in dependency order: when one fails to
-      # build, none is published.
-      - run: cargo publish --workspace --locked
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: rust
+      # The three crates at once, in dependency order. `--no-verify`: nothing
+      # is compiled while the token is in the environment, since a build
+      # script or a proc macro could read it. The `package` job of CI built
+      # the same packages from the same commit.
+      - run: cargo publish --workspace --locked --no-verify
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}

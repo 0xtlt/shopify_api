@@ -2,16 +2,18 @@
 #![cfg(feature = "testing")]
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde_json::{Value, json};
-use shopify_api::bulk::{BulkMutation, BulkMutationResult, BulkWaitOptions};
+use shopify_api::bulk::{BulkMutation, BulkMutationResult};
 use shopify_api::testing::{MockTransport, client};
 use shopify_api::transport::{HttpRequest, HttpResponse};
 use shopify_api::{Error, InvalidValueReason, graphql};
 
+#[path = "support/bulk.rs"]
+mod support;
+use support::{UPLOAD_URL, fast, operation_name};
+
 const RESULTS_URL: &str = "https://storage.googleapis.com/shopify-tiers-assets-prod-us-east1/bulk-operation-outputs/1.jsonl";
-const UPLOAD_URL: &str = "https://shopify-staged-uploads.storage.googleapis.com/";
 
 graphql! {
     /// Products, their variants with their metafields, and their images.
@@ -32,35 +34,6 @@ graphql! {
     }");
 }
 
-fn operation(kind: &str, status: &str, url: Option<&str>) -> Value {
-    json!({
-        "id": "gid://shopify/BulkOperation/1",
-        "type": kind,
-        "status": status,
-        "errorCode": null,
-        "createdAt": "2026-10-22T10:00:00Z",
-        "completedAt": if status == "COMPLETED" { json!("2026-10-22T10:01:00Z") } else { Value::Null },
-        "objectCount": "2",
-        "rootObjectCount": "2",
-        "fileSize": url.map(|_| "120"),
-        "url": url,
-        "partialDataUrl": null,
-        "query": "{ products { edges { node { id } } } }",
-    })
-}
-
-fn operation_name(request: &HttpRequest) -> Option<String> {
-    request
-        .json()?
-        .get("operationName")?
-        .as_str()
-        .map(str::to_string)
-}
-
-fn fast() -> BulkWaitOptions {
-    BulkWaitOptions::new().poll_interval(Duration::from_millis(1))
-}
-
 /// A Shopify that runs any bulk operation at once, its results `jsonl`;
 /// the uploads it receives go to `uploads`.
 fn shopify_with(jsonl: &'static str) -> (MockTransport, Arc<Mutex<Vec<HttpRequest>>>) {
@@ -77,21 +50,20 @@ fn shopify_with(jsonl: &'static str) -> (MockTransport, Arc<Mutex<Vec<HttpReques
         }
         let data = match operation_name(request).as_deref() {
             Some("BulkOperationRunQuery") => json!({ "bulkOperationRunQuery": {
-                "bulkOperation": operation("QUERY", "CREATED", None), "userErrors": [],
+                "bulkOperation": support::operation_of("QUERY", "CREATED", None), "userErrors": [],
             } }),
             Some("BulkOperationRunMutation") => json!({ "bulkOperationRunMutation": {
-                "bulkOperation": operation("MUTATION", "CREATED", None), "userErrors": [],
+                "bulkOperation": support::operation_of("MUTATION", "CREATED", None), "userErrors": [],
             } }),
             Some("StagedUploadsCreate") => json!({ "stagedUploadsCreate": {
                 "stagedTargets": [{
                     "url": UPLOAD_URL,
-                    "resourceUrl": null,
                     "parameters": [{ "name": "key", "value": "tmp/1/bulk/vars.jsonl" }],
                 }],
                 "userErrors": [],
             } }),
             Some("BulkOperation") => {
-                json!({ "bulkOperation": operation("QUERY", "COMPLETED", Some(RESULTS_URL)) })
+                json!({ "bulkOperation": support::operation_of("QUERY", "COMPLETED", Some(RESULTS_URL)) })
             }
             other => panic!("unexpected operation {other:?}"),
         };
@@ -364,7 +336,7 @@ async fn a_typed_bulk_query_groups_objects_only_with_nested_connections() {
     let mock = MockTransport::new();
     for _ in 0..3 {
         mock.push_data(json!({ "bulkOperationRunQuery": {
-            "bulkOperation": operation("QUERY", "CREATED", None),
+            "bulkOperation": support::operation_of("QUERY", "CREATED", None),
             "userErrors": [],
         } }));
     }

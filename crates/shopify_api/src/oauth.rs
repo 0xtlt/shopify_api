@@ -328,10 +328,7 @@ struct Verified {
 
 impl Verified {
     fn text(&self, name: &str) -> Option<String> {
-        self.claims
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        self.claim(name).map(str::to_string)
     }
 
     fn claim(&self, name: &str) -> Option<&str> {
@@ -415,12 +412,8 @@ impl ShopifyApp {
     /// token store.
     pub fn builder(&self, shop: &ShopDomain) -> ShopifyBuilder {
         let mut builder = Shopify::builder(shop).user_agent(&self.user_agent);
-        if let Some(transport) = &self.transport {
-            builder = builder.shared_transport(transport.clone());
-        }
-        if let Some(store) = &self.token_store {
-            builder = builder.shared_token_store(store.clone());
-        }
+        builder.transport.clone_from(&self.transport);
+        builder.token_store.clone_from(&self.token_store);
         builder
     }
 
@@ -434,14 +427,6 @@ impl ShopifyApp {
             Auth::token(token)
         };
         self.builder(shop).auth(auth).build()
-    }
-
-    /// A client of `shop` that gets its tokens with the client credentials
-    /// grant: for a shop of the organization that owns the app.
-    pub fn client_credentials_client(&self, shop: &ShopDomain) -> Result<Shopify> {
-        self.builder(shop)
-            .client_credentials(&self.client_id, &self.client_secret)
-            .build()
     }
 
     // ─── Install link and callback ───────────────────────────────────
@@ -521,27 +506,46 @@ impl ShopifyApp {
 
     fn verify_query_at(&self, query: &str, now: DateTime<Utc>) -> Result<SignedQuery> {
         let params = parse_query(query)?;
+        self.verify_signed(params, "hmac", admin_message, "query", now)
+    }
+
+    /// Verifies the hexadecimal HMAC in the parameter `key` of the message
+    /// `message` makes of `params`, then their `timestamp`.
+    fn verify_signed(
+        &self,
+        params: Vec<(String, String)>,
+        key: &str,
+        message: fn(&[(String, String)]) -> String,
+        what: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SignedQuery> {
         let signature =
-            single(&params, "hmac")?.ok_or_else(|| invalid("the query has no `hmac`"))?;
+            single(&params, key)?.ok_or_else(|| invalid(format!("the query has no `{key}`")))?;
         let expected = hex::decode(signature)
-            .map_err(|_| invalid("the `hmac` of the query is not hexadecimal"))?;
+            .map_err(|_| invalid(format!("the `{key}` of the query is not hexadecimal")))?;
         let mut mac = mac(self.secret()?);
-        mac.update(admin_message(&params).as_bytes());
+        mac.update(message(&params).as_bytes());
         mac.verify_slice(&expected)
-            .map_err(|_| invalid("the signature of the query does not match"))?;
+            .map_err(|_| invalid(format!("the signature of the {what} does not match")))?;
         // Only once the signature holds: nothing unsigned reaches the clock.
         check_timestamp(&params, now)?;
         Ok(signed(params))
+    }
+
+    /// The hexadecimal HMAC of the message `message` makes of `query`.
+    #[cfg(any(test, feature = "testing"))]
+    fn sign(&self, query: &str, message: fn(&[(String, String)]) -> String) -> Result<String> {
+        let params = parse_query(query)?;
+        let mut mac = mac(&self.client_secret);
+        mac.update(message(&params).as_bytes());
+        Ok(hex::encode(mac.finalize().into_bytes()))
     }
 
     /// The `hmac` Shopify signs a query of Shopify admin with: for tests.
     #[cfg(any(test, feature = "testing"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn sign_query(&self, query: &str) -> Result<String> {
-        let params = parse_query(query)?;
-        let mut mac = mac(&self.client_secret);
-        mac.update(admin_message(&params).as_bytes());
-        Ok(hex::encode(mac.finalize().into_bytes()))
+        self.sign(query, admin_message)
     }
 
     /// Verifies the `signature` of an app proxy request. Its `timestamp`
@@ -561,27 +565,14 @@ impl ShopifyApp {
         for name in PROXY_SINGLE_VALUES {
             single(&params, name)?;
         }
-        let signature =
-            single(&params, "signature")?.ok_or_else(|| invalid("the query has no `signature`"))?;
-        let expected = hex::decode(signature)
-            .map_err(|_| invalid("the `signature` of the query is not hexadecimal"))?;
-        let mut mac = mac(self.secret()?);
-        mac.update(proxy_message(&params).as_bytes());
-        mac.verify_slice(&expected)
-            .map_err(|_| invalid("the signature of the app proxy request does not match"))?;
-        // Only once the signature holds: nothing unsigned reaches the clock.
-        check_timestamp(&params, now)?;
-        Ok(signed(params))
+        self.verify_signed(params, "signature", proxy_message, "app proxy request", now)
     }
 
     /// The `signature` Shopify signs an app proxy request with: for tests.
     #[cfg(any(test, feature = "testing"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn sign_app_proxy(&self, query: &str) -> Result<String> {
-        let params = parse_query(query)?;
-        let mut mac = mac(&self.client_secret);
-        mac.update(proxy_message(&params).as_bytes());
-        Ok(hex::encode(mac.finalize().into_bytes()))
+        self.sign(query, proxy_message)
     }
 
     // ─── Session tokens ──────────────────────────────────────────────

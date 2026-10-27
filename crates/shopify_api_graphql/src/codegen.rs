@@ -292,29 +292,10 @@ fn reachable_inputs<'a>(schema: &'a Schema, name: &'a str, found: &mut BTreeSet<
 /// operation, and a type alias, named as in the schema, for each input object
 /// the variables may hold.
 ///
-/// `constructor` builds the operation without its variables; `krate` is the
-/// path of the `shopify_api` crate in the generated code.
+/// `constructor` builds the operation without its variables, of type
+/// `target`, which `runner` runs; `krate` is the path of the `shopify_api`
+/// crate in the generated code.
 pub fn variables_types(
-    schema: &Schema,
-    operation: &Operation,
-    krate: &TokenStream,
-    constructor: &TokenStream,
-) -> TokenStream {
-    let data = Ident::new(DATA_TYPE, Span::call_site());
-    let target = quote!(#krate::__private::Operation<#data>);
-    variables_types_for(
-        schema,
-        operation,
-        krate,
-        constructor,
-        &target,
-        "`Shopify::execute`",
-    )
-}
-
-/// [`variables_types`] for an operation of type `target`, which `runner`
-/// runs: a bulk query or a bulk mutation.
-pub fn variables_types_for(
     schema: &Schema,
     operation: &Operation,
     krate: &TokenStream,

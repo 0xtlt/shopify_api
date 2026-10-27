@@ -1,6 +1,5 @@
 //! The `graphql!` and `input!` macros of `shopify_api`. Use them through
 //! `shopify_api`, which re-exports and documents them.
-#![forbid(unsafe_code)]
 
 mod value;
 
@@ -14,9 +13,7 @@ use quote::{format_ident, quote, quote_spanned};
 use shopify_api_graphql::bulk::{
     BulkQuery, ITEM_TYPE, analyze_bulk_query, check_bulk_mutation, query_items, template_ident,
 };
-use shopify_api_graphql::codegen::{
-    DATA_TYPE, data_types, deprecation_warning, variables_types, variables_types_for,
-};
+use shopify_api_graphql::codegen::{DATA_TYPE, data_types, deprecation_warning, variables_types};
 use shopify_api_graphql::literal::{self, Literals, Value, VariableValue};
 use shopify_api_graphql::project::{cargo_home, may_download, metadata_snippet, project_schema};
 use shopify_api_graphql::{
@@ -76,14 +73,6 @@ impl Source {
             .parse()
             .map(Self::Literal)
             .map_err(|error| syn::Error::new(error.span(), expected))
-    }
-
-    /// The text, and whether it is a bulk operation.
-    fn text(&self) -> (&Self, bool) {
-        match self {
-            Self::Bulk(source) => (source, true),
-            other => (other, false),
-        }
     }
 }
 
@@ -254,7 +243,7 @@ impl Parse for Input {
 struct InputObject {
     krate: TokenStream,
     name: Ident,
-    object: Value,
+    object: literal::Object,
 }
 
 impl Parse for InputObject {
@@ -369,7 +358,11 @@ impl LoadedSchema {
                 }
                 SchemaSource::Project { dir, path, pinned } => {
                     let primary = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
-                    let may_download = may_download(&dir, cargo_home().as_deref(), primary);
+                    // `CARGO_NET_OFFLINE=true` keeps it offline, as it does cargo.
+                    let online =
+                        std::env::var_os("CARGO_NET_OFFLINE").is_none_or(|value| value != "true");
+                    let may_download =
+                        online && may_download(&dir, cargo_home().as_deref(), primary);
                     let read = |path: &Path| {
                         read_schema(path).map_err(|error| format!("`{}`: {error}", path.display()))
                     };
@@ -404,10 +397,6 @@ impl LoadedSchema {
         let schema =
             read_schema(&path).map_err(|error| format!("`{}`: {error}", path.display()))?;
         Ok(Self { schema, path })
-    }
-
-    fn schema(&self) -> &Schema {
-        &self.schema
     }
 
     /// Makes the compiler rebuild the crate when what the expansion depends on changes.
@@ -453,15 +442,14 @@ impl LoadedSchema {
             error.span,
             format!(
                 "{}\n(checked against the Shopify Admin API {})",
-                error.message,
-                self.schema().api_version
+                error.message, self.schema.api_version
             ),
         )
     }
 
     /// Checks an operation, pointing a refusal at its text.
     fn check(&self, text: &Text) -> syn::Result<Operation> {
-        analyze(self.schema(), &text.query.value()).map_err(|error| self.text_error(text, error))
+        analyze(&self.schema, &text.query.value()).map_err(|error| self.text_error(text, error))
     }
 
     /// A refusal of an operation, at its text.
@@ -478,7 +466,7 @@ impl LoadedSchema {
             text.span(),
             format!(
                 "{error}{file}\n(checked against the Shopify Admin API {})",
-                self.schema().api_version
+                self.schema.api_version
             ),
         )
     }
@@ -489,11 +477,11 @@ impl LoadedSchema {
         let source = text.query.value();
         let bulk = match operation.kind {
             OperationKind::Query => Some(
-                analyze_bulk_query(self.schema(), &source, &operation)
+                analyze_bulk_query(&self.schema, &source, &operation)
                     .map_err(|error| self.text_error(text, error))?,
             ),
             OperationKind::Mutation => {
-                check_bulk_mutation(self.schema(), &source, &operation)
+                check_bulk_mutation(&self.schema, &source, &operation)
                     .map_err(|error| self.text_error(text, error))?;
                 None
             }
@@ -540,6 +528,14 @@ fn deprecation_warnings(schema: &Schema, operation: &Operation, text: &Text) -> 
     quote!(#(#warnings)*)
 }
 
+/// The name of an operation as an `Option<&str>` expression.
+fn operation_name(operation: &Operation) -> TokenStream {
+    match &operation.name {
+        Some(name) => quote!(::core::option::Option::Some(#name)),
+        None => quote!(::core::option::Option::None),
+    }
+}
+
 fn kind(operation: &Operation, krate: &TokenStream) -> TokenStream {
     match operation.kind {
         OperationKind::Query => quote!(#krate::__private::OperationKind::Query),
@@ -559,7 +555,7 @@ enum Flavor {
 
 impl Flavor {
     fn of(schema: &LoadedSchema, source: &Source, text: &Text) -> syn::Result<(Operation, Self)> {
-        if !source.text().1 {
+        if !matches!(source, Source::Bulk(_)) {
             return Ok((schema.check(text)?, Self::Plain));
         }
         let (operation, bulk) = schema.check_bulk(text)?;
@@ -609,10 +605,7 @@ impl Flavor {
         let data = format_ident!("{}", DATA_TYPE);
         let item = format_ident!("{}", ITEM_TYPE);
         let api_version = &schema.api_version;
-        let name = match &operation.name {
-            Some(name) => quote!(::core::option::Option::Some(#name)),
-            None => quote!(::core::option::Option::None),
-        };
+        let name = operation_name(operation);
         match self {
             Self::Plain => {
                 let kind = kind(operation, krate);
@@ -704,7 +697,7 @@ fn expand_expression(
 
     // The values are arguments of the setters, outside the block that
     // declares the types of the operation: they cannot name them.
-    let mut literals = Literals::new(schema.schema(), krate.clone());
+    let mut literals = Literals::new(&schema.schema, krate.clone());
     let mut setters = Vec::new();
     let converting = flavor.converting_setter();
     for (declared, value) in &given {
@@ -728,10 +721,10 @@ fn expand_expression(
 
     let tracking = schema.tracking();
     let file = text.tracking();
-    let warnings = deprecation_warnings(schema.schema(), &operation, &text);
-    let types = flavor.types(schema.schema(), &operation, &krate);
+    let warnings = deprecation_warnings(&schema.schema, &operation, &text);
+    let types = flavor.types(&schema.schema, &operation, &krate);
     let query = &text.query;
-    let constructor = flavor.constructor(schema.schema(), &operation, &quote!(#query), &krate);
+    let constructor = flavor.constructor(&schema.schema, &operation, &quote!(#query), &krate);
     Ok(quote! {
         ({
             #tracking
@@ -761,7 +754,7 @@ fn expand_module(
     let text = Text::read(source)?;
     let (operation, flavor) = Flavor::of(schema, source, &text)?;
     let target = flavor.target(&krate);
-    let constructor = flavor.constructor(schema.schema(), &operation, &quote!(QUERY), &krate);
+    let constructor = flavor.constructor(&schema.schema, &operation, &quote!(QUERY), &krate);
     let variables = if operation.variables.is_empty() {
         let doc = format!(
             " The operation, for {}.",
@@ -773,11 +766,9 @@ fn expand_module(
                 #constructor
             }
         }
-    } else if matches!(flavor, Flavor::Plain) {
-        variables_types(schema.schema(), &operation, &krate, &constructor)
     } else {
-        variables_types_for(
-            schema.schema(),
+        variables_types(
+            &schema.schema,
             &operation,
             &krate,
             &constructor,
@@ -788,14 +779,11 @@ fn expand_module(
 
     let tracking = schema.tracking();
     let file = text.tracking();
-    let warnings = deprecation_warnings(schema.schema(), &operation, &text);
-    let types = flavor.types(schema.schema(), &operation, &krate);
+    let warnings = deprecation_warnings(&schema.schema, &operation, &text);
+    let types = flavor.types(&schema.schema, &operation, &krate);
     let query = &text.query;
-    let api_version = &schema.schema().api_version;
-    let operation_name = match &operation.name {
-        Some(name) => quote!(::core::option::Option::Some(#name)),
-        None => quote!(::core::option::Option::None),
-    };
+    let api_version = &&schema.schema.api_version;
+    let operation_name = operation_name(&operation);
     let kind = kind(&operation, &krate);
     Ok(quote! {
         #(#attributes)*
@@ -845,10 +833,8 @@ fn expand_input(
     schema: Result<LoadedSchema, String>,
 ) -> syn::Result<TokenStream> {
     let schema = schema.map_err(|message| syn::Error::new(Span::call_site(), message))?;
-    let Value::Object(object) = &input.object else {
-        unreachable!("`input!` reads an object");
-    };
-    let mut literals = Literals::new(schema.schema(), input.krate.clone());
+    let object = &input.object;
+    let mut literals = Literals::new(&schema.schema, input.krate.clone());
     let value = literals
         .input_object(&input.name.to_string(), input.name.span(), object)
         .map_err(|error| schema.literal_error(error))?;

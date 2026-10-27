@@ -91,22 +91,6 @@ impl TryFrom<&str> for ShopDomain {
     }
 }
 
-impl TryFrom<String> for ShopDomain {
-    type Error = Error;
-
-    fn try_from(shop: String) -> Result<Self, Self::Error> {
-        Self::new(&shop)
-    }
-}
-
-impl TryFrom<&String> for ShopDomain {
-    type Error = Error;
-
-    fn try_from(shop: &String) -> Result<Self, Self::Error> {
-        Self::new(shop)
-    }
-}
-
 impl serde::Serialize for ShopDomain {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)

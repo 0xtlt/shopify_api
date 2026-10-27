@@ -821,6 +821,14 @@ impl Schema {
         self.types.get(name)
     }
 
+    /// The fields of the object or interface `name`.
+    pub fn fields(&self, name: &str) -> Option<&BTreeMap<String, Field>> {
+        match self.types.get(name)? {
+            TypeDef::Object { fields, .. } | TypeDef::Interface { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
+
     pub fn directive(&self, name: &str) -> Option<&Directive> {
         self.directives.get(name)
     }

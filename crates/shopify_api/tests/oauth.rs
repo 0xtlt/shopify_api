@@ -208,25 +208,9 @@ fn an_issuer_that_only_starts_with_the_shop_is_refused() {
     assert!(app.verify_extension_session_token(&token).is_err());
 }
 
-#[derive(Default, Clone)]
-struct Saved(std::sync::Arc<std::sync::Mutex<Vec<(String, shopify_api::TokenData)>>>);
-
-impl shopify_api::TokenStore for Saved {
-    fn save<'a>(
-        &'a self,
-        shop: &'a shopify_api::ShopDomain,
-        token: &'a shopify_api::TokenData,
-    ) -> shopify_api::transport::BoxFuture<'a, Result<(), Box<dyn std::error::Error + Send + Sync>>>
-    {
-        Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap()
-                .push((shop.to_string(), token.clone()));
-            Ok(())
-        })
-    }
-}
+#[path = "support/saved.rs"]
+mod saved;
+use saved::Saved;
 
 #[tokio::test]
 async fn the_clients_of_an_app_save_their_renewed_tokens() {

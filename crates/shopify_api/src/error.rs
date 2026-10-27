@@ -571,17 +571,6 @@ impl Error {
         }
     }
 
-    /// An error body that did not come with an [`HttpResponse`].
-    pub(crate) fn http_parts(status: u16, url: &str, body: &[u8]) -> Self {
-        Self::Http {
-            status,
-            url: without_query(url),
-            content_type: None,
-            request_id: None,
-            raw_body: RawBody(body.to_vec()),
-        }
-    }
-
     /// An answer that does not fit its type. `message` is this crate's;
     /// `detail` is not shown.
     pub(crate) fn decode(path: impl Into<String>, message: String, detail: Option<String>) -> Self {
@@ -631,30 +620,31 @@ impl Error {
         }
     }
 
-    pub(crate) fn auth_with_detail(message: impl Into<String>, detail: String) -> Self {
-        Self::Auth {
-            message: message.into(),
-            detail: Some(SensitiveDetail(detail)),
-            status: None,
-            oauth_code: None,
-            held: false,
-        }
-    }
-
-    /// The token endpoint refused the request with `status`.
-    pub(crate) fn auth_refused(
+    /// An answer of the token endpoint: a refusal with its `status`, or a
+    /// token that does not read.
+    pub(crate) fn auth_detailed(
         message: String,
         detail: String,
-        status: u16,
+        status: Option<u16>,
         oauth_code: Option<OAuthErrorCode>,
     ) -> Self {
         Self::Auth {
             message,
             detail: Some(SensitiveDetail(detail)),
-            status: Some(status),
+            status,
             oauth_code,
             held: false,
         }
+    }
+}
+
+/// [`Error::UserErrors`] when the payload of `mutation` holds user errors.
+pub(crate) fn refused(mutation: &'static str, errors: &impl serde::Serialize) -> Result<()> {
+    let errors: Vec<UserError> = crate::decode::reserialize(errors)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::UserErrors { mutation, errors })
     }
 }
 

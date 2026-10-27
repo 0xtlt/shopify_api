@@ -23,7 +23,7 @@ toml.workspace = true
 ureq = { workspace = true, optional = true }
 
 [features]
-## `project::download_public_schema`, `project::download_schema_file` and `project::up_to_date_schema`.
+## Downloads: `project::download_introspection`, and `project::project_schema` downloading a missing or outdated file.
 download = ["dep:ureq"]
 
 [package.metadata.docs.rs]

@@ -431,7 +431,8 @@ pub mod reqwest_0_13 {
 }
 
 /// The default [`Transport`], over `reqwest`: no redirections, a 10-second
-/// connection timeout and a 60-second request timeout. A streamed answer
+/// connection timeout, a 60-second request timeout, and answers of at most
+/// 256 MiB through [`Transport::send`]. A streamed answer
 /// with a timeout of its own waits that long for its headers and for each
 /// chunk instead, however long the whole body takes.
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
@@ -451,10 +452,7 @@ impl ReqwestTransport {
                 .timeout(Duration::from_secs(60)),
         )
     }
-}
 
-#[cfg(any(feature = "rustls", feature = "native-tls"))]
-impl ReqwestTransport {
     fn builder(&self, request: HttpRequest) -> reqwest::RequestBuilder {
         let method = match request.method {
             Method::Get => reqwest::Method::GET,
@@ -495,14 +493,25 @@ fn reqwest_headers(response: &reqwest::Response) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The largest answer [`ReqwestTransport`] reads in memory: GraphQL answers
+/// are far smaller, and bulk results stream.
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
+const MAX_BODY: usize = 256 * 1024 * 1024;
+
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 impl Transport for ReqwestTransport {
     fn send(&self, request: HttpRequest) -> BoxFuture<'_, Result<HttpResponse, TransportError>> {
         Box::pin(async move {
-            let response = self.builder(request).send().await.map_err(reqwest_failed)?;
+            let mut response = self.builder(request).send().await.map_err(reqwest_failed)?;
             let status = response.status().as_u16();
             let headers = reqwest_headers(&response);
-            let body = Vec::from(response.bytes().await.map_err(reqwest_failed)?);
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(reqwest_failed)? {
+                if body.len() + chunk.len() > MAX_BODY {
+                    return Err(TransportError::new("the answer is larger than 256 MiB"));
+                }
+                body.extend_from_slice(&chunk);
+            }
             Ok(HttpResponse {
                 status,
                 headers,

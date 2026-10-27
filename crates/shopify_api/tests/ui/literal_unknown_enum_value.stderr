@@ -1,6 +1,0 @@
-error: `ACTIV` is not a value of the enum `ProductStatus` (did you mean `ACTIVE`?): `status` of `ProductUpdateInput` takes `ACTIVE`, `ARCHIVED`, `DRAFT` or `UNLISTED`
-       (checked against the Shopify Admin API 2026-10)
- --> tests/ui/literal_unknown_enum_value.rs:2:93
-  |
-2 |     let _ = shopify_api::input!(ProductUpdateInput { id: "gid://shopify/Product/1", status: ACTIV });
-  |                                                                                             ^^^^^

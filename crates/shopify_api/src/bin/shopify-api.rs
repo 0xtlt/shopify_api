@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use shopify_api_graphql::project::{
-    PORTABLE_PATH, inside_package, package_config, previous_api_version, project_schema,
-    schema_snippet, write_atomically,
+    DownloadError, PORTABLE_PATH, download_introspection, inside_package, package_config,
+    previous_api_version, project_schema, schema_snippet, write_atomically,
 };
 use shopify_api_graphql::{Schema, SchemaSource, analyze, latest_api_version, schema_source};
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "shopify-api",
     version,
@@ -27,7 +27,7 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum Command {
     /// Admin GraphQL schemas.
     Schema {
@@ -38,21 +38,20 @@ enum Command {
     Check(CheckArgs),
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum SchemaCommand {
     /// Downloads the Admin schema of the crate's version again, where
     /// `graphql!` reads it.
     ///
     /// The version is `api-version` in `[package.metadata.shopify_api]` of the
     /// nearest package, else the latest stable one: this moves a crate that
-    /// pins none to the latest version. `graphql!` downloads the file by itself
-    /// only when it is missing, in an older format, or of another version than
-    /// the pinned one; this command refreshes it, or downloads it through a
-    /// shop with --shop.
+    /// pins none to the latest version. With the `schema-download` feature,
+    /// `graphql!` downloads the file by itself when it is missing, in an older
+    /// format, or of another version than the pinned one; this command
+    /// writes or refreshes it, or downloads it through a shop with --shop.
     Download(DownloadArgs),
 }
 
-/// `Debug` hides the access token and the client secret.
 #[derive(Args)]
 struct DownloadArgs {
     /// Where to write it. By default, where `graphql!` reads it for the
@@ -80,23 +79,7 @@ struct DownloadArgs {
     client_secret: Option<String>,
 }
 
-impl std::fmt::Debug for DownloadArgs {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hidden = |secret: &Option<String>| secret.as_ref().map(|_| "[redacted]");
-        formatter
-            .debug_struct("DownloadArgs")
-            .field("out", &self.out)
-            .field("introspection", &self.introspection)
-            .field("only", &self.only)
-            .field("shop", &self.shop)
-            .field("access_token", &hidden(&self.access_token))
-            .field("client_id", &self.client_id)
-            .field("client_secret", &hidden(&self.client_secret))
-            .finish()
-    }
-}
-
-#[derive(Debug, Args)]
+#[derive(Args)]
 struct CheckArgs {
     /// The `.graphql` files, one operation each.
     #[arg(required = true)]
@@ -141,19 +124,10 @@ async fn download(args: DownloadArgs) -> Result<ExitCode, String> {
             root.join("Cargo.toml").display()
         );
     }
-    let mut version = ApiVersion::new(&wanted).map_err(|error| error.to_string())?;
-    let introspection = match fetch(&args, version).await {
-        Ok(introspection) => introspection,
-        // A new version may not be out on its first day.
-        Err(error) if latest && args.shop.is_none() => {
-            let Some(previous) = previous_api_version(&wanted) else {
-                return Err(error);
-            };
-            eprintln!("{error}\nTrying the version before, {previous}.");
-            version = ApiVersion::new(&previous).map_err(|error| error.to_string())?;
-            fetch(&args, version).await?
-        }
-        Err(error) => return Err(error),
+    let version = ApiVersion::new(&wanted).map_err(|error| error.to_string())?;
+    let (version, introspection) = match &args.shop {
+        None => public_introspection(version, latest)?,
+        Some(shop) => (version, through_shop(&args, shop, version).await?),
     };
 
     let (out, project) = match &args.out {
@@ -247,15 +221,35 @@ fn schema_key(root: &Path, out: &Path) -> Option<PathBuf> {
     (named == written).then_some(normal)
 }
 
-/// The introspection result for `version`, from Shopify's public endpoint or
-/// through the shop of `args`.
-async fn fetch(args: &DownloadArgs, version: ApiVersion) -> Result<serde_json::Value, String> {
-    let Some(shop) = &args.shop else {
+/// The introspection result for `version` from Shopify's public endpoint,
+/// and its version: for the `latest` one, the one before when Shopify does
+/// not have it yet, as on the first day of a quarter.
+fn public_introspection(
+    version: ApiVersion,
+    latest: bool,
+) -> Result<(ApiVersion, serde_json::Value), String> {
+    let download = |version: ApiVersion| {
         eprintln!("Downloading the Admin schema {version} from Shopify's public endpoint…");
-        return shopify_api::schema::download_public_admin_schema(version)
-            .await
-            .map_err(|error| error.to_string());
+        download_introspection(&version.to_string()).map(|value| (version, value))
     };
+    match download(version) {
+        Err(error @ DownloadError::UnknownVersion { .. }) if latest => {
+            let previous = previous_api_version(&version.to_string())
+                .and_then(|previous| ApiVersion::new(&previous).ok())
+                .ok_or_else(|| error.to_string())?;
+            eprintln!("{error}\nTrying the version before, {previous}.");
+            download(previous).map_err(|error| error.to_string())
+        }
+        outcome => outcome.map_err(|error| error.to_string()),
+    }
+}
+
+/// The introspection result for `version` through `shop`, with the token of `args`.
+async fn through_shop(
+    args: &DownloadArgs,
+    shop: &str,
+    version: ApiVersion,
+) -> Result<serde_json::Value, String> {
     let auth = match (&args.access_token, &args.client_id, &args.client_secret) {
         (Some(token), _, _) => Auth::access_token(token),
         (None, Some(id), Some(secret)) => Auth::client_credentials(id, secret),
