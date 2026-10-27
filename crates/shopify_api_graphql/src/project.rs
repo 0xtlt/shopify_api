@@ -1674,7 +1674,8 @@ mod tests {
             // Missing: an error that names the file and the command.
             std::fs::remove_file(project.0.join("schemas/admin.json")).unwrap();
             let error = network.obtain(&project, false, now).unwrap_err();
-            let file = project.0.join("schemas/admin.json");
+            // As the platform writes it: `\` before `admin.json` on Windows.
+            let file = project.0.join("schemas").join("admin.json");
             assert!(
                 error.starts_with(&format!("`{}` is missing", file.display())),
                 "{error}"
