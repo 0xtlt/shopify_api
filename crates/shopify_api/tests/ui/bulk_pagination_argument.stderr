@@ -1,0 +1,6 @@
+error: Shopify ignores `first` in a bulk query and returns every object of `products`: remove it (line 1, column 3)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_pagination_argument.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products(first: 10) { edges { node { id } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

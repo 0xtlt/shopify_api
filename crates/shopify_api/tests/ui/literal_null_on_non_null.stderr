@@ -1,0 +1,6 @@
+error: `null` is not allowed for `ownerId` of `MetafieldsSetInput`, of type `ID!`
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_null_on_non_null.rs:2:63
+  |
+2 |     let _ = shopify_api::input!(MetafieldsSetInput { ownerId: null, key: "color", value: "blue" });
+  |                                                               ^^^^

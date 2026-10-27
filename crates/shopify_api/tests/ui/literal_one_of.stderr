@@ -1,0 +1,61 @@
+error: `ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null: `id` is given already
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_one_of.rs:3:88
+  |
+3 |     let _ = shopify_api::input!(ProductSetIdentifiers { id: "gid://shopify/Product/1", handle: "shirt" });
+  |                                                                                        ^^^^^^
+
+error: `ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_one_of.rs:4:55
+  |
+4 |     let _ = shopify_api::input!(ProductSetIdentifiers {});
+  |                                                       ^^
+
+error: `ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null: write `handle: …`, not `handle?:`
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_one_of.rs:5:63
+  |
+5 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle?: handle });
+  |                                                               ^
+
+error: `ProductSetIdentifiers` is a oneOf input: give exactly one of `customId`, `handle` or `id`, not null: `handle: null` is not one
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_one_of.rs:6:65
+  |
+6 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle: null });
+  |                                                                 ^^^^
+
+error[E0277]: `handle` of `ProductSetIdentifiers` expects a `String`, not `Option<&str>`
+ --> tests/ui/literal_one_of.rs:7:65
+  |
+7 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle: handle });
+  |                                                                 ^^^^^^
+  |                                                                 |
+  |                                                                 `Option<&str>` doesn't satisfy the trait bound
+  |                                                                 `String`, `&str`, `&String` or `Cow<str>`
+  |
+  = help: the trait `main::__ShopifyApiExpect1_c23935b5` is not implemented for `Option<&str>`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_one_of.rs:7:13
+  |
+7 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle: handle });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `handle` of `ProductSetIdentifiers` expects a `String`, not `Maybe<&str>`
+ --> tests/ui/literal_one_of.rs:8:65
+  |
+8 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle: shopify_api::Maybe::<&str>::Null });
+  |                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |                                                                 |
+  |                                                                 `Maybe<&str>` doesn't satisfy the trait bound
+  |                                                                 `String`, `&str`, `&String` or `Cow<str>`
+  |
+  = help: the trait `main::__ShopifyApiExpect1_c23935b5` is not implemented for `Maybe<&str>`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_one_of.rs:8:13
+  |
+8 |     let _ = shopify_api::input!(ProductSetIdentifiers { handle: shopify_api::Maybe::<&str>::Null });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)

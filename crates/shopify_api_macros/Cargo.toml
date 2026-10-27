@@ -1,0 +1,27 @@
+[package]
+name = "shopify_api_macros"
+description = "The `graphql!` macro of `shopify_api`: Shopify Admin GraphQL operations checked at compile time, with typed variables and results."
+documentation = "https://docs.rs/shopify_api"
+keywords = ["shopify", "graphql", "macros"]
+categories = ["development-tools::procedural-macro-helpers", "api-bindings"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE.txt"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+shopify_api_graphql = { workspace = true, features = ["download"] }
+
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[lints]
+workspace = true

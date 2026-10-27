@@ -1,0 +1,6 @@
+error: A bulk query selects one top-level field: Shopify runs one per operation (line 1, column 38)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_two_top_level_fields.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { id } } } orders { edges { node { id } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

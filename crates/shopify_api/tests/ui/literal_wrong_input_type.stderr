@@ -1,0 +1,43 @@
+error[E0277]: an item of `$metafields` expects a `MetafieldsSetInput`, built with `input!(MetafieldsSetInput { … })`
+ --> tests/ui/literal_wrong_input_type.rs:5:22
+  |
+3 |       let _ = shopify_api::graphql!(
+  |  _____________-
+4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
+5 | |         metafields = seo,
+  | |                      ^^^ build it with `input!(MetafieldsSetInput { … })`
+6 | |     );
+  | |_____- required by a bound introduced by this call
+  |
+  = help: the trait `__ShopifyApiExpect2_c1d68407` is not implemented for `InputObject<2493993284262097346>`
+help: the following other types implement trait `__ShopifyApiExpect2_c1d68407`
+ --> tests/ui/literal_wrong_input_type.rs:3:13
+  |
+3 |       let _ = shopify_api::graphql!(
+  |  _____________^
+4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
+5 | |         metafields = seo,
+6 | |     );
+  | |     ^
+  | |     |
+  | |_____`&InputObject<960560859991546817>`
+  |       `InputObject<960560859991546817>`
+note: required for `Vec<InputObject<2493993284262097346>>` to implement `__ShopifyApiExpect1_c1d68407`
+ --> tests/ui/literal_wrong_input_type.rs:3:13
+  |
+3 |       let _ = shopify_api::graphql!(
+  |  _____________^
+4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
+5 | |         metafields = seo,
+6 | |     );
+  | |_____^
+note: required by a bound in `Checks::build`
+ --> tests/ui/literal_wrong_input_type.rs:3:13
+  |
+3 |       let _ = shopify_api::graphql!(
+  |  _____________^
+4 | |         "mutation($metafields: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $metafields) { userErrors { message } } }",
+5 | |         metafields = seo,
+6 | |     );
+  | |_____^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::graphql` (in Nightly builds, run with -Z macro-backtrace for more info)

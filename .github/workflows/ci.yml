@@ -7,109 +7,83 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
 env:
+  CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  TEST_SHOP_NAME: "${{ secrets.TEST_SHOP_NAME }}"
-  TEST_KEY: "${{ secrets.TEST_KEY }}"
-  RUST_LOG: "debug"
 
 jobs:
   ci-pass:
     name: CI is green
     runs-on: ubuntu-latest
     needs:
-      - style
-      - test
-      - docs
+      - check
+      - features
+      - msrv
+      - package
+      - audit
+      - windows
     steps:
       - run: exit 0
 
-  style:
-    name: Check Style
-
+  check:
+    name: fmt, clippy, tests, docs
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v1
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check
 
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt
-          profile: minimal
-          override: true
-
-      - name: cargo fmt -- --check
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: -- --check
-
-      - name: temporary workaround - fmt all files under src
-        run: cargo fmt -- --check $(find . -name '*.rs' -print)
-
-  test:
-    name: ${{ matrix.name }}
-    needs: [style]
-
-    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
-
-    strategy:
-      matrix:
-        name:
-          - linux / stable
-          # - macOS / stable
-
-        include:
-          - name: linux / stable
-          # - name: macOS / stable
-          #   os: macOS-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ matrix.rust || 'stable' }}
-          target: ${{ matrix.target }}
-          profile: minimal
-          override: true
-
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: ${{ matrix.features }}
-
-      - name: Test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: ${{ matrix.features }} ${{ matrix.test-features }} -- --test-threads=1
-
-  docs:
-    name: Docs
+  # In its own job, so the build of nothing else can lend the client a
+  # feature it does not declare (`mise run check` runs it too).
+  features:
+    name: no default features, each feature alone
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check:features
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+  msrv:
+    name: Rust 1.88
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-features --locked
 
-      - name: Check documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        uses: actions-rs/cargo@v1
-        with:
-          command: doc
-          args: --no-deps --document-private-items --all-features
+  # What `cargo publish --workspace` uploads: each crate builds from its own
+  # files, with the license, and nothing that needs the network.
+  package:
+    name: cargo package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo package --workspace --locked
+
+  audit:
+    name: advisories, licenses, sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run audit
+
+  # Paths read from `Cargo.toml` follow other rules on Windows (drive
+  # prefixes, `\`): the tests of those rules run there too.
+  windows:
+    name: paths on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p shopify_api_graphql --lib --locked
+      - run: cargo test -p shopify_api --features cli --bin shopify-api --locked

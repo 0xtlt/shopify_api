@@ -1,0 +1,6 @@
+error: Connections nest 2 levels deep at most below the top-level one in a bulk query: `variants` is level 3 (line 1, column 93)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_too_deep.rs:2:40
+  |
+2 | ...lk("{ products { edges { node { id collections { edges { node { id products { edges { node { id variants { edges { node { sku } } } } } } } } } } } } }"));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

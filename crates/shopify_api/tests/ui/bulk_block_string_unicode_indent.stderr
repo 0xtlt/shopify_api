@@ -1,0 +1,6 @@
+error: This block string indents its lines with different Unicode whitespace, which the GraphQL parser this crate uses cannot read. Indent it with spaces or tabs, or write it as a quoted string (line 1, column 19)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_block_string_unicode_indent.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products(query: \"\"\"\n\u{a0}a\n\u{2003}b\"\"\") { edges { node { id } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

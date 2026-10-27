@@ -1,0 +1,21 @@
+error[E0308]: mismatched types
+ --> tests/ui/literal_reserved_prefix_constant.rs:7:13
+  |
+3 | const __shopify_api_value0: &str = "";
+  | -------------------------------- constant defined here
+...
+7 |     let _ = shopify_api::input!(ProductInput { title: title });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |             |
+  |             expected type parameter `V2`, found `&str`
+  |             expected due to this
+  |             `__shopify_api_value0` is interpreted as a constant, not a new binding
+  |
+  = note: expected type parameter `V2`
+                  found reference `&'static str`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: introduce a new binding instead
+  |
+7 -     let _ = shopify_api::input!(ProductInput { title: title });
+7 +     let _ = other___shopify_api_value0;
+  |

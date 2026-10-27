@@ -1,0 +1,6 @@
+error: The connection `variants` is inside a fragment: in a bulk query, a nested connection is written right in the `node { … }` of its parent connection (line 1, column 49)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_connection_in_fragment.rs:2:40
+  |
+2 | ...i::graphql!(bulk("{ products { edges { node { id ... on Product { variants { edges { node { sku } } } } } } } }"));
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

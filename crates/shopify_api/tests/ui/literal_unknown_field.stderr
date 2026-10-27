@@ -1,0 +1,6 @@
+error: Input object `ProductUpdateInput` has no field `titel` (did you mean `title`?)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/literal_unknown_field.rs:4:52
+  |
+4 |         product = { id: "gid://shopify/Product/1", titel: "Shirt" },
+  |                                                    ^^^^^

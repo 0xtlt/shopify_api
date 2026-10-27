@@ -1,0 +1,6 @@
+query BulkOperation($id: ID!) {
+  bulkOperation(id: $id) { ...BulkOperationFields }
+}
+fragment BulkOperationFields on BulkOperation {
+  id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
+}

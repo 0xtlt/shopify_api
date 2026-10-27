@@ -1,0 +1,29 @@
+error[E0277]: `&str` is not a value for a GraphQL variable of Rust type `i64`
+ --> tests/ui/wrong_value_type.rs:2:111
+  |
+2 |     let _ = shopify_api::graphql!("query($first: Int!) { products(first: $first) { nodes { id } } }", first = "ten");
+  |                                                                                                               ^^^^^ the variable expects a value convertible to `i64`
+  |
+  = help: the trait `IntoVariable<i64>` is not implemented for `&str`
+help: `&str` implements trait `IntoVariable<T>`
+ --> src/graphql/operation.rs
+  |
+  |           impl IntoVariable<$target> for $source {
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IntoVariable<String>`
+...
+  |           impl IntoVariable<Option<$target>> for $source {
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IntoVariable<Option<String>>`
+...
+  | / into_variable!(String:
+  | |     String => |value| value,
+  | |     &str => |value| value.to_string(),
+  | |     &String => |value| value.clone(),
+  | |     Cow<'_, str> => |value| value.into_owned(),
+  | | );
+  | |_- in this macro invocation
+note: required by a bound in `Operation::<D>::variable`
+ --> src/graphql/operation.rs
+  |
+  |     pub fn variable<T: VariableType, V: IntoVariable<T>>(self, name: &str, value: V) -> Self {
+  |                                         ^^^^^^^^^^^^^^^ required by this bound in `Operation::<D>::variable`
+  = note: this error originates in the macro `into_variable` (in Nightly builds, run with -Z macro-backtrace for more info)

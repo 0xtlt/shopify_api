@@ -1,0 +1,6 @@
+error: The connection `orders` is under `customer`, which is not a connection: in a bulk query, a nested connection is written right in the `node { … }` of its parent connection (line 1, column 41)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_connection_under_object.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ orders { edges { node { id customer { orders { edges { node { id } } } } } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

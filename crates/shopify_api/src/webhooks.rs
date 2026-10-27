@@ -1,0 +1,804 @@
+//! Webhooks: verify and read what Shopify sends, and manage the webhook
+//! subscriptions of a shop.
+//!
+//! ```
+//! use shopify_api::webhooks::Webhook;
+//!
+//! # fn handle(headers: &[(&str, &str)], body: &[u8]) -> shopify_api::Result<()> {
+//! // In your HTTP handler, with the raw body, before parsing it.
+//! let webhook = Webhook::verify(headers.iter().copied(), body, "the app's client secret")?;
+//! match webhook.topic() {
+//!     "orders/create" => {
+//!         let order: serde_json::Value = webhook.payload()?;
+//!         println!("order {} on {}", order["name"], webhook.shop());
+//!     }
+//!     "app/uninstalled" | "shop/redact" | "customers/redact" => {
+//!         // Destructive: the shop of the headers is not signed, the payload is.
+//!         webhook.verify_payload_shop()?;
+//!         // … delete what the app holds for `webhook.shop()`.
+//!     }
+//!     other => println!("{other} ignored"),
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! With axum, or any framework on the `http` crate, the `HeaderMap` and the
+//! raw body go in as they are:
+//!
+//! ```ignore
+//! use axum::body::Bytes;
+//! use axum::http::{HeaderMap, StatusCode};
+//! use shopify_api::webhooks::Webhook;
+//!
+//! async fn webhooks(headers: HeaderMap, body: Bytes) -> StatusCode {
+//!     let secret = std::env::var("SHOPIFY_API_SECRET").unwrap_or_default();
+//!     let Ok(webhook) = Webhook::verify(&headers, body, &secret) else {
+//!         return StatusCode::UNAUTHORIZED;
+//!     };
+//!     // Answer within 5 seconds: queue the work, then return.
+//!     tracing::info!("{} from {}", webhook.topic(), webhook.shop());
+//!     StatusCode::OK
+//! }
+//! ```
+//!
+//! Shopify may deliver a webhook more than once: [`Webhook::event_id`]
+//! identifies the event across deliveries.
+//!
+//! # What the signature covers
+//!
+//! The signature covers the body only. The headers (the topic, the shop, the
+//! IDs) are what Shopify sent along, unsigned: a captured body could be
+//! replayed with other headers. Before deleting anything on `app/uninstalled`,
+//! `shop/redact` or `customers/redact`, check that the payload names the shop
+//! of the headers, with [`Webhook::verify_payload_shop`].
+//!
+//! The client secret also signs the launch queries of Shopify admin, the app
+//! proxy requests and the session tokens, which an installer of the app can
+//! read. So that none of them passes for a webhook, only JSON webhooks
+//! verify, a body whose first byte is `{`, with nothing before it, not even
+//! whitespace or a byte order mark. None of the other texts starts so: each
+//! starts with a parameter name that sorts before Shopify's own lowercase
+//! names, or with `eyJ` for a session token. A signed query can still be made
+//! to read as XML, or as JSON after some whitespace, which is why both are
+//! refused. The subscriptions this crate creates or syncs are JSON.
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use chrono::{DateTime, Utc};
+use hmac::{Hmac, KeyInit, Mac};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+
+use crate::{Error, Result, ShopDomain, Shopify, UserError};
+use shopify_api_macros::{__graphql_internal as graphql, __input_internal as input};
+
+/// Whether `hmac_header` (`X-Shopify-Hmac-Sha256`) is the signature of
+/// `body` with `secret`, the client secret of the app. Compares in constant time.
+///
+/// `false` for a body whose first byte is not `{`, as
+/// [`Webhook::verify`] refuses it: see [what the signature covers](self#what-the-signature-covers).
+pub fn verify_hmac(secret: &str, body: &[u8], hmac_header: &str) -> bool {
+    // Anyone can sign with an empty key: it verifies nothing.
+    if secret.is_empty() || !is_webhook_body(body) {
+        return false;
+    }
+    let Ok(expected) = STANDARD.decode(hmac_header.trim()) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&expected).is_ok()
+}
+
+/// Whether `body` starts as a JSON webhook does, its first byte `{`. The
+/// other texts the client secret signs start otherwise: a query with a
+/// parameter name, a session token with `eyJ`, and an app proxy request with
+/// a name that sorts before Shopify's lowercase ones, so never `{`, though
+/// `[`, `<` (XML) or whitespace may.
+fn is_webhook_body(body: &[u8]) -> bool {
+    // Exactly `{`, nothing skipped: a signed app proxy query can start with
+    // whitespace then `{`, never with `{`.
+    body.first() == Some(&b'{')
+}
+
+/// The signature Shopify would send for `body`, base64: for tests.
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+pub fn sign(secret: &str, body: &[u8]) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC takes a key of any length");
+    mac.update(body);
+    STANDARD.encode(mac.finalize().into_bytes())
+}
+
+/// A webhook whose signature was verified.
+///
+/// `Debug` shows the length of the body, not the body: it holds the data of
+/// customers.
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Webhook {
+    topic: String,
+    shop: ShopDomain,
+    webhook_id: Option<String>,
+    event_id: Option<String>,
+    api_version: Option<String>,
+    triggered_at: Option<String>,
+    sub_topic: Option<String>,
+    name: Option<String>,
+    body: Vec<u8>,
+}
+
+impl std::fmt::Debug for Webhook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Webhook")
+            .field("topic", &self.topic)
+            .field("shop", &self.shop)
+            .field("webhook_id", &self.webhook_id)
+            .field("event_id", &self.event_id)
+            .field("api_version", &self.api_version)
+            .field("triggered_at", &self.triggered_at)
+            .field("sub_topic", &self.sub_topic)
+            .field("name", &self.name)
+            .field("body", &format_args!("[{} bytes]", self.body.len()))
+            .finish()
+    }
+}
+
+impl Webhook {
+    /// Verifies a webhook from its headers and raw body, and reads its headers.
+    ///
+    /// `headers` are name and value pairs: an `http::HeaderMap` by
+    /// reference, or pairs of strings. Names are read in any case, with or
+    /// without their `X-` (`X-Shopify-Topic` or `shopify-topic`). Fails when
+    /// the signature is missing or does not match, when the first byte of the
+    /// body is not the `{` of a JSON object (XML webhooks are refused), or
+    /// when a header Shopify always sends is missing.
+    ///
+    /// The headers are not signed: see [what the signature covers](self#what-the-signature-covers).
+    pub fn verify<K, V>(
+        headers: impl IntoIterator<Item = (K, V)>,
+        body: impl Into<Vec<u8>>,
+        secret: &str,
+    ) -> Result<Self>
+    where
+        K: AsRef<str>,
+        V: AsRef<[u8]>,
+    {
+        Self::verify_with_secrets(headers, body, &[secret])
+    }
+
+    /// [`Webhook::verify`], accepting the signature of any of `secrets`:
+    /// while the client secret of the app is being rotated.
+    pub fn verify_with_secrets<K, V>(
+        headers: impl IntoIterator<Item = (K, V)>,
+        body: impl Into<Vec<u8>>,
+        secrets: &[&str],
+    ) -> Result<Self>
+    where
+        K: AsRef<str>,
+        V: AsRef<[u8]>,
+    {
+        // Lowercase, without `x-`; a value that is not UTF-8 is not Shopify's.
+        let headers: Vec<(String, String)> = headers
+            .into_iter()
+            .filter_map(|(name, value)| {
+                let name = name.as_ref().to_ascii_lowercase();
+                let name = match name.strip_prefix("x-") {
+                    Some(rest) if rest.starts_with("shopify-") => rest.to_string(),
+                    _ => name,
+                };
+                let value = std::str::from_utf8(value.as_ref()).ok()?.trim().to_string();
+                Some((name, value))
+            })
+            .collect();
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(given, _)| given == name)
+                .map(|(_, value)| value.clone())
+        };
+        let required = |name: &'static str| {
+            header(name)
+                .ok_or_else(|| Error::Verification(format!("the webhook has no `x-{name}` header")))
+        };
+
+        let body = body.into();
+        let signature = required("shopify-hmac-sha256")?;
+        if secrets.iter().all(|secret| secret.is_empty()) {
+            return Err(Error::Verification(
+                "no secret to verify the webhook with: the client secret of the app is empty"
+                    .to_string(),
+            ));
+        }
+        if !is_webhook_body(&body) {
+            return Err(Error::Verification(
+                "the body of the webhook does not start with `{`: only JSON webhooks verify"
+                    .to_string(),
+            ));
+        }
+        if !secrets
+            .iter()
+            .any(|secret| verify_hmac(secret, &body, &signature))
+        {
+            return Err(Error::Verification(
+                "the signature of the webhook does not match".to_string(),
+            ));
+        }
+        let shop = ShopDomain::new(&required("shopify-shop-domain")?).map_err(|error| {
+            Error::Verification(format!("the webhook names an invalid shop: {error}"))
+        })?;
+        Ok(Self {
+            topic: required("shopify-topic")?,
+            shop,
+            webhook_id: header("shopify-webhook-id"),
+            event_id: header("shopify-event-id"),
+            api_version: header("shopify-api-version"),
+            triggered_at: header("shopify-triggered-at"),
+            sub_topic: header("shopify-sub-topic"),
+            name: header("shopify-name"),
+            body,
+        })
+    }
+
+    /// Fails unless the JSON payload names [`Webhook::shop`], the shop of the
+    /// unsigned `X-Shopify-Shop-Domain`, in its `shop_domain` (the compliance
+    /// topics) or its `myshopify_domain` (`app/uninstalled`). Call it before
+    /// acting on a destructive topic: `app/uninstalled`, `shop/redact`,
+    /// `customers/redact`.
+    pub fn verify_payload_shop(&self) -> Result<()> {
+        let payload: serde_json::Value = serde_json::from_slice(&self.body).map_err(|_| {
+            Error::Verification("the payload of the webhook is not JSON".to_string())
+        })?;
+        let named = ["shop_domain", "myshopify_domain"]
+            .iter()
+            .filter_map(|field| payload.get(field)?.as_str())
+            .any(|shop| ShopDomain::new(shop).is_ok_and(|shop| shop == self.shop));
+        if named {
+            Ok(())
+        } else {
+            Err(Error::Verification(
+                "the payload of the webhook does not name the shop of its headers".to_string(),
+            ))
+        }
+    }
+
+    /// `orders/create`.
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    /// The topic as the Admin API writes it: `ORDERS_CREATE`.
+    pub fn topic_enum(&self) -> String {
+        topic_enum(&self.topic)
+    }
+
+    pub fn shop(&self) -> &ShopDomain {
+        &self.shop
+    }
+
+    /// Identifies this delivery.
+    pub fn webhook_id(&self) -> Option<&str> {
+        self.webhook_id.as_deref()
+    }
+
+    /// Identifies the event, the same across deliveries: to ignore a duplicate.
+    pub fn event_id(&self) -> Option<&str> {
+        self.event_id.as_deref()
+    }
+
+    /// The API version of the payload.
+    pub fn api_version(&self) -> Option<&str> {
+        self.api_version.as_deref()
+    }
+
+    /// When the event happened, as Shopify wrote it.
+    pub fn triggered_at(&self) -> Option<&str> {
+        self.triggered_at.as_deref()
+    }
+
+    pub fn sub_topic(&self) -> Option<&str> {
+        self.sub_topic.as_deref()
+    }
+
+    /// The name of the subscription, when it has one.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// The raw body.
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The body read as `T`, the path of the first mismatch in the error.
+    pub fn payload<T: DeserializeOwned>(&self) -> Result<T> {
+        crate::decode::from_slice(&self.body).map_err(|failure| failure.into_error())
+    }
+}
+
+/// `orders/create` → `ORDERS_CREATE`. A topic already in that form is kept.
+pub fn topic_enum(topic: &str) -> String {
+    topic
+        .trim()
+        .replace(['/', '.', '-'], "_")
+        .to_ascii_uppercase()
+}
+
+// ─── Subscriptions ───────────────────────────────────────────────────
+
+graphql! {
+    mod list = file("graphql/operations/webhooks_list.graphql");
+    mod create = file("graphql/operations/webhooks_create.graphql");
+    mod update = file("graphql/operations/webhooks_update.graphql");
+    mod delete = file("graphql/operations/webhooks_delete.graphql");
+}
+
+/// The input of `create` or `update` for a spec. An update sends every
+/// option, empty when the spec has none, so that it replaces the old ones.
+fn subscription_input(
+    spec: &WebhookSubscriptionSpec,
+    replace: bool,
+) -> create::WebhookSubscriptionInput {
+    let list = |values: &Vec<String>| (replace || !values.is_empty()).then(|| values.clone());
+    input!(WebhookSubscriptionInput {
+        uri: &spec.uri,
+        format: raw("JSON"),
+        filter?: spec.filter.as_deref().or(replace.then_some("")),
+        includeFields?: list(&spec.include_fields),
+        metafieldNamespaces?: list(&spec.metafield_namespaces),
+        name?: spec.name.as_deref(),
+    })
+}
+
+/// A webhook subscription of a shop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct WebhookSubscription {
+    pub id: String,
+    /// `ORDERS_CREATE`.
+    pub topic: String,
+    /// An HTTPS address, a `pubsub://` or an Amazon EventBridge `arn:`.
+    pub uri: String,
+    /// `JSON` or `XML`. Only JSON webhooks verify: [`Shopify::sync_webhook_subscriptions`]
+    /// updates an XML one of a desired topic and address to JSON.
+    pub format: String,
+    pub filter: Option<String>,
+    pub include_fields: Vec<String>,
+    pub metafield_namespaces: Vec<String>,
+    pub name: Option<String>,
+    /// The API version of the payloads.
+    pub api_version: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Wire {
+    id: String,
+    topic: String,
+    uri: String,
+    format: String,
+    filter: Option<String>,
+    include_fields: Vec<String>,
+    metafield_namespaces: Vec<String>,
+    name: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    api_version: WireVersion,
+}
+
+#[derive(Deserialize)]
+struct WireVersion {
+    handle: String,
+}
+
+fn subscription_of(selection: &impl Serialize) -> Result<WebhookSubscription> {
+    let wire: Wire = crate::decode::reserialize(selection)?;
+    Ok(WebhookSubscription {
+        id: wire.id,
+        topic: wire.topic,
+        uri: wire.uri,
+        format: wire.format,
+        filter: wire.filter,
+        include_fields: wire.include_fields,
+        metafield_namespaces: wire.metafield_namespaces,
+        name: wire.name,
+        api_version: wire.api_version.handle,
+        created_at: wire.created_at,
+        updated_at: wire.updated_at,
+    })
+}
+
+fn refused(mutation: &'static str, errors: &impl Serialize) -> Result<()> {
+    let errors: Vec<UserError> = crate::decode::reserialize(errors)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::UserErrors { mutation, errors })
+    }
+}
+
+/// A webhook subscription to create, always JSON: only JSON webhooks verify.
+///
+/// ```
+/// use shopify_api::webhooks::WebhookSubscriptionSpec;
+///
+/// let spec = WebhookSubscriptionSpec::new("orders/create", "https://example.com/webhooks")
+///     .include_fields(["id", "name", "total_price"])
+///     .filter("total_price:>100");
+/// assert_eq!(spec.topic(), "ORDERS_CREATE");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookSubscriptionSpec {
+    topic: String,
+    uri: String,
+    filter: Option<String>,
+    include_fields: Vec<String>,
+    metafield_namespaces: Vec<String>,
+    name: Option<String>,
+}
+
+impl WebhookSubscriptionSpec {
+    /// `topic` as `orders/create` or `ORDERS_CREATE`; `uri` an HTTPS address,
+    /// a `pubsub://project:topic` or an Amazon EventBridge `arn:`.
+    pub fn new(topic: impl AsRef<str>, uri: impl Into<String>) -> Self {
+        Self {
+            topic: topic_enum(topic.as_ref()),
+            uri: uri.into(),
+            filter: None,
+            include_fields: Vec::new(),
+            metafield_namespaces: Vec::new(),
+            name: None,
+        }
+    }
+
+    /// Only the events that match this search.
+    pub fn filter(mut self, filter: impl Into<String>) -> Self {
+        self.filter = Some(filter.into());
+        self
+    }
+
+    /// Only these fields of the payload.
+    pub fn include_fields<I: IntoIterator<Item = S>, S: Into<String>>(mut self, fields: I) -> Self {
+        self.include_fields = fields.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The metafields of these namespaces in the payload.
+    pub fn metafield_namespaces<I: IntoIterator<Item = S>, S: Into<String>>(
+        mut self,
+        namespaces: I,
+    ) -> Self {
+        self.metafield_namespaces = namespaces.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// A name, sent in the `X-Shopify-Name` header of each delivery.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    /// Whether `subscription` is this one: same topic, address and options,
+    /// and JSON.
+    pub fn matches(&self, subscription: &WebhookSubscription) -> bool {
+        let sorted = |values: &[String]| {
+            let mut values = values.to_vec();
+            values.sort();
+            values
+        };
+        subscription.topic == self.topic
+            && subscription.uri == self.uri
+            && subscription.format == "JSON"
+            && subscription
+                .filter
+                .as_deref()
+                .filter(|filter| !filter.is_empty())
+                == self.filter.as_deref()
+            && sorted(&subscription.include_fields) == sorted(&self.include_fields)
+            && sorted(&subscription.metafield_namespaces) == sorted(&self.metafield_namespaces)
+            && (self.name.is_none() || subscription.name == self.name)
+    }
+}
+
+/// What [`Shopify::sync_webhook_subscriptions`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SyncReport {
+    pub created: Vec<WebhookSubscription>,
+    /// Subscriptions of a desired topic and address whose options changed.
+    pub updated: Vec<WebhookSubscription>,
+    /// The IDs of the subscriptions deleted.
+    pub deleted: Vec<String>,
+    pub kept: Vec<WebhookSubscription>,
+}
+
+impl Shopify {
+    /// Every webhook subscription the app has on the shop. Those of the
+    /// app's configuration file (`shopify.app.toml`) are not listed by
+    /// Shopify.
+    pub async fn webhook_subscriptions(&self) -> Result<Vec<WebhookSubscription>> {
+        let pages = self
+            .paginate(
+                |after| list::operation(list::Variables { after }).own(),
+                |data| {
+                    let connection = data.webhook_subscriptions;
+                    crate::Page::new(
+                        connection.nodes,
+                        connection.page_info.has_next_page,
+                        connection.page_info.end_cursor,
+                    )
+                },
+            )
+            .await?;
+        pages.iter().map(subscription_of).collect()
+    }
+
+    pub async fn create_webhook_subscription(
+        &self,
+        spec: &WebhookSubscriptionSpec,
+    ) -> Result<WebhookSubscription> {
+        let data = self
+            .execute_own(create::Variables {
+                topic: spec.topic.clone(),
+                webhook_subscription: subscription_input(spec, false),
+            })
+            .await?;
+        let payload = data.webhook_subscription_create.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionCreate".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
+        refused("webhookSubscriptionCreate", &payload.user_errors)?;
+        let subscription = payload.webhook_subscription.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionCreate.webhookSubscription".to_string(),
+                "Shopify returned no subscription".to_string(),
+                None,
+            )
+        })?;
+        subscription_of(&subscription)
+    }
+
+    pub async fn delete_webhook_subscription(&self, id: &str) -> Result<()> {
+        let data = self
+            .execute_own(delete::Variables { id: id.to_string() })
+            .await?;
+        let payload = data.webhook_subscription_delete.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionDelete".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
+        refused("webhookSubscriptionDelete", &payload.user_errors)
+    }
+
+    /// Replaces the options of a subscription with those of `spec`; its
+    /// topic stays.
+    pub async fn update_webhook_subscription(
+        &self,
+        id: &str,
+        spec: &WebhookSubscriptionSpec,
+    ) -> Result<WebhookSubscription> {
+        let data = self
+            .execute_own(update::Variables {
+                id: id.to_string(),
+                webhook_subscription: subscription_input(spec, true),
+            })
+            .await?;
+        let payload = data.webhook_subscription_update.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionUpdate".to_string(),
+                "Shopify returned nothing".to_string(),
+                None,
+            )
+        })?;
+        refused("webhookSubscriptionUpdate", &payload.user_errors)?;
+        let subscription = payload.webhook_subscription.ok_or_else(|| {
+            Error::decode(
+                "webhookSubscriptionUpdate.webhookSubscription".to_string(),
+                "Shopify returned no subscription".to_string(),
+                None,
+            )
+        })?;
+        subscription_of(&subscription)
+    }
+
+    /// Makes the shop's subscriptions exactly `desired`: those that match are
+    /// kept, those of a desired topic and address are updated, the missing
+    /// ones created, then the others deleted. Nothing is deleted before what
+    /// replaces it exists, so no event is missed in between. An XML
+    /// subscription of a desired topic and address is updated to JSON: only
+    /// JSON webhooks verify.
+    ///
+    /// It deletes every subscription of the app on the shop that `desired`
+    /// does not list, including those another part of the app created.
+    pub async fn sync_webhook_subscriptions(
+        &self,
+        desired: &[WebhookSubscriptionSpec],
+    ) -> Result<SyncReport> {
+        let mut report = SyncReport::default();
+        let mut missing: Vec<&WebhookSubscriptionSpec> = desired.iter().collect();
+        let mut extra = Vec::new();
+        for subscription in self.webhook_subscriptions().await? {
+            match missing.iter().position(|spec| spec.matches(&subscription)) {
+                Some(index) => {
+                    missing.remove(index);
+                    report.kept.push(subscription);
+                }
+                None => extra.push(subscription),
+            }
+        }
+        // A desired topic and address that exists with other options.
+        let mut leftover = Vec::new();
+        for subscription in extra {
+            let same_place = missing
+                .iter()
+                .position(|spec| spec.topic == subscription.topic && spec.uri == subscription.uri);
+            match same_place {
+                Some(index) => {
+                    let spec = missing.remove(index);
+                    report.updated.push(
+                        self.update_webhook_subscription(&subscription.id, spec)
+                            .await?,
+                    );
+                }
+                None => leftover.push(subscription),
+            }
+        }
+        for spec in missing {
+            report
+                .created
+                .push(self.create_webhook_subscription(spec).await?);
+        }
+        for subscription in leftover {
+            self.delete_webhook_subscription(&subscription.id).await?;
+            report.deleted.push(subscription.id);
+        }
+        Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_the_signature_of_shopify() {
+        let body = br#"{"id":1}"#;
+        let signature = sign("secret", body);
+        assert!(verify_hmac("secret", body, &signature));
+        assert!(!verify_hmac("other", body, &signature));
+        assert!(!verify_hmac("secret", b"{\"id\":2}", &signature));
+        assert!(!verify_hmac("secret", body, "not base64!"));
+        assert!(!verify_hmac("secret", body, ""));
+    }
+
+    fn headers(signature: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("X-Shopify-Topic", "orders/create".to_string()),
+            ("X-Shopify-Hmac-SHA256", signature.to_string()),
+            ("x-shopify-shop-domain", "my-shop.myshopify.com".to_string()),
+            ("X-Shopify-Webhook-Id", "b54557e4".to_string()),
+            ("X-Shopify-Event-Id", "98880550".to_string()),
+            ("X-Shopify-API-Version", "2026-10".to_string()),
+            ("X-Shopify-Triggered-At", "2026-10-22T10:00:00Z".to_string()),
+        ]
+    }
+
+    #[test]
+    fn reads_a_verified_webhook() {
+        let body = br##"{"id":1,"name":"#1001"}"##.to_vec();
+        let webhook =
+            Webhook::verify(headers(&sign("secret", &body)), body.clone(), "secret").unwrap();
+        assert_eq!(webhook.topic(), "orders/create");
+        assert_eq!(webhook.topic_enum(), "ORDERS_CREATE");
+        assert_eq!(webhook.shop().as_str(), "my-shop.myshopify.com");
+        assert_eq!(webhook.webhook_id(), Some("b54557e4"));
+        assert_eq!(webhook.event_id(), Some("98880550"));
+        assert_eq!(webhook.api_version(), Some("2026-10"));
+        assert_eq!(webhook.triggered_at(), Some("2026-10-22T10:00:00Z"));
+        assert_eq!(webhook.sub_topic(), None);
+        assert_eq!(webhook.body(), body);
+
+        #[derive(Deserialize)]
+        struct Order {
+            name: String,
+        }
+        assert_eq!(webhook.payload::<Order>().unwrap().name, "#1001");
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code, reason = "only decoded: the test checks the decoding")]
+        struct Wrong {
+            name: u32,
+        }
+        assert_eq!(
+            webhook.payload::<Wrong>().unwrap_err().to_string(),
+            "Shopify's answer does not match the operation at `name`: invalid type: string, expected u32 at line 1 column 22"
+        );
+    }
+
+    #[test]
+    fn refuses_what_does_not_verify() {
+        let body = b"{}".to_vec();
+        let error =
+            Webhook::verify(headers(&sign("other", &body)), body.clone(), "secret").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "verification failed: the signature of the webhook does not match"
+        );
+
+        let unsigned: Vec<_> = headers("")
+            .into_iter()
+            .filter(|(name, _)| !name.contains("Hmac"))
+            .collect();
+        let error = Webhook::verify(unsigned, body.clone(), "secret").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "verification failed: the webhook has no `x-shopify-hmac-sha256` header"
+        );
+
+        // An empty secret, as from an unset variable, verifies nothing.
+        let error = Webhook::verify(headers(&sign("", &body)), body.clone(), "").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("the client secret of the app is empty"),
+            "{error}"
+        );
+        assert!(!verify_hmac("", &body, &sign("", &body)));
+
+        // A rotated secret: either verifies.
+        let webhook = Webhook::verify_with_secrets(
+            headers(&sign("old", &body)),
+            body.clone(),
+            &["new", "old"],
+        );
+        assert!(webhook.is_ok());
+
+        let mut wrong_shop = headers(&sign("secret", &body));
+        wrong_shop[2].1 = "evil.example.com".to_string();
+        assert!(Webhook::verify(wrong_shop, body, "secret").is_err());
+    }
+
+    #[test]
+    fn specs_match_subscriptions_whatever_the_order_of_their_fields() {
+        let spec = WebhookSubscriptionSpec::new("orders/create", "https://example.com/hooks")
+            .include_fields(["b", "a"]);
+        let mut subscription = WebhookSubscription {
+            id: "gid://shopify/WebhookSubscription/1".to_string(),
+            topic: "ORDERS_CREATE".to_string(),
+            uri: "https://example.com/hooks".to_string(),
+            format: "JSON".to_string(),
+            filter: Some(String::new()),
+            include_fields: vec!["a".to_string(), "b".to_string()],
+            metafield_namespaces: Vec::new(),
+            name: None,
+            api_version: "2026-10".to_string(),
+            created_at: DateTime::default(),
+            updated_at: DateTime::default(),
+        };
+        assert!(spec.matches(&subscription));
+        subscription.uri = "https://example.com/other".to_string();
+        assert!(!spec.matches(&subscription));
+        assert_eq!(topic_enum("app/uninstalled"), "APP_UNINSTALLED");
+        assert_eq!(topic_enum("ORDERS_PAID"), "ORDERS_PAID");
+    }
+}

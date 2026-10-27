@@ -1,0 +1,9 @@
+mutation BulkOperationCancel($id: ID!) {
+  bulkOperationCancel(id: $id) {
+    bulkOperation { ...BulkOperationFields }
+    userErrors { field message }
+  }
+}
+fragment BulkOperationFields on BulkOperation {
+  id type status errorCode createdAt completedAt objectCount rootObjectCount fileSize url partialDataUrl query
+}

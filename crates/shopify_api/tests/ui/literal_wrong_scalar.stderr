@@ -1,0 +1,70 @@
+error[E0277]: `quantity` of `DraftOrderLineItemInput` expects an `Int`, not `&str`
+ --> tests/ui/literal_wrong_scalar.rs:3:69
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |                                                                     ^^^
+  |                                                                     |
+  |                                                                     `&'static str` doesn't satisfy the trait bound
+  |                                                                     any integer type
+  |
+  = help: the trait `main::__ShopifyApiExpect1_c1d69cb4` is not implemented for `&str`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_wrong_scalar.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `title` of `DraftOrderLineItemInput` expects a `String`, not `u8`
+ --> tests/ui/literal_wrong_scalar.rs:3:81
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |                                                                                 ^^^^^
+  |                                                                                 |
+  |                                                                                 `u8` doesn't satisfy the trait bound
+  |                                                                                 `String`, `&str`, `&String` or `Cow<str>`
+  |
+  = help: the trait `__ShopifyApiExpect3_c1d69cb4` is not implemented for `u8`
+  = note: `title?: value` takes an `Option`, `None` leaving the field out; `title: null` sends `null`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_wrong_scalar.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `requiresShipping` of `DraftOrderLineItemInput` expects a `Boolean`, not `{integer}`
+ --> tests/ui/literal_wrong_scalar.rs:3:106
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |                                                                                                          ^
+  |                                                                                                          |
+  |                                                                                                          `{integer}` doesn't satisfy the trait bound
+  |                                                                                                          `bool`
+  |
+  = help: the trait `__ShopifyApiExpect5_c1d69cb4` is not implemented for `{integer}`
+  = note: `requiresShipping?: value` takes an `Option`, `None` leaving the field out; `requiresShipping: null` sends `null`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_wrong_scalar.rs:3:13
+  |
+3 |     let _ = shopify_api::input!(DraftOrderLineItemInput { quantity: "2", title: count, requiresShipping: 1 });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `value` of `WeightInput` expects a `Float`, not `u64`
+ --> tests/ui/literal_wrong_scalar.rs:4:67
+  |
+4 |     let _ = shopify_api::input!(WeightInput { unit: GRAMS, value: 2_u64 });
+  |                                                                   ^^^^^
+  |                                                                   |
+  |                                                                   `u64` doesn't satisfy the trait bound
+  |                                                                   `f64`, `f32`, `i32` or `u32`
+  |
+  = help: the trait `main::__ShopifyApiExpect1_c1d69cb4` is not implemented for `u64`
+  = note: `u64` implements similarly named trait `main::__ShopifyApiExpect1_c1d69cb4`, but not `main::__ShopifyApiExpect1_c1d69cb4`
+note: required by a bound in `main::Checks::build`
+ --> tests/ui/literal_wrong_scalar.rs:4:13
+  |
+4 |     let _ = shopify_api::input!(WeightInput { unit: GRAMS, value: 2_u64 });
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Checks::build`
+  = note: this error originates in the macro `shopify_api::input` (in Nightly builds, run with -Z macro-backtrace for more info)

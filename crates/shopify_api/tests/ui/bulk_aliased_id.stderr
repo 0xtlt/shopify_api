@@ -1,0 +1,6 @@
+error: The nodes of `products` have the nested connection `variants`: select their `id`, without an alias or a directive, in this `node { … }`. Shopify refuses the query otherwise, and places each nested line under its parent by that `id` (line 1, column 22)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_aliased_id.rs:2:40
+  |
+2 |     let _ = shopify_api::graphql!(bulk("{ products { edges { node { productId: id variants { edges { node { sku } } } } } } }"));
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

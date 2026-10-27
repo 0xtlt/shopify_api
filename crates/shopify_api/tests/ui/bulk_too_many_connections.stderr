@@ -1,0 +1,6 @@
+error: A bulk query has 5 connections at most: `sellingPlanGroups` is connection number 6 (line 1, column 180)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_too_many_connections.rs:2:40
+  |
+2 | ...lk("{ products { edges { node { id variants { edges { node { sku } } } media { edges { node { alt } } } collections { edges { node { title } } } metafields { edges { node { key } } } sellingPlanGroups { edges { node { name } } } } } } }"));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

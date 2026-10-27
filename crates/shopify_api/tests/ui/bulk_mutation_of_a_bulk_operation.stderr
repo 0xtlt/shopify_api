@@ -1,0 +1,6 @@
+error: Shopify does not run `bulkOperationRunQuery` in a bulk mutation (line 1, column 12)
+       (checked against the Shopify Admin API 2026-10)
+ --> tests/ui/bulk_mutation_of_a_bulk_operation.rs:2:40
+  |
+2 | ...l!(bulk("mutation { bulkOperationRunQuery(query: \"{ shop { name } }\", groupObjects: false) { userErrors { message } } }"));
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

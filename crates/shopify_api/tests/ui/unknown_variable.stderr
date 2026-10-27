@@ -1,0 +1,5 @@
+error: The operation has no variable `$first`: it declares $id
+ --> tests/ui/unknown_variable.rs:2:95
+  |
+2 |     let _ = shopify_api::graphql!("query($id: ID!) { product(id: $id) { title } }", id = "1", first = 2);
+  |                                                                                               ^^^^^

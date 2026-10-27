@@ -1,0 +1,104 @@
+[package]
+name = "shopify_api"
+description = "Shopify Admin GraphQL client: operations checked against Shopify's schema at compile time, typed results, automatic tokens and throttling, bulk operations, webhooks and OAuth."
+documentation = "https://docs.rs/shopify_api"
+readme = "../../README.md"
+keywords = ["shopify", "graphql", "api", "client", "ecommerce"]
+categories = ["api-bindings", "web-programming::http-client"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# What `cargo test` of the published crate needs, offline: the sources and
+# their doctests, which read the Admin schema of `graphql/`. The tests and the
+# examples stay in the repository: they need its other files and toolchain.
+include = [
+  "src/**",
+  "docs/**",
+  "graphql/admin.schema.json",
+  "graphql/internal.schema.json",
+  "graphql/operations/**",
+  "Cargo.toml",
+  "LICENSE.txt",
+]
+
+# The version of the tests, the examples and `graphql/internal.schema.json`.
+# To move to another: change it, `shopify-api schema download` in this
+# directory, then `mise run schema:internal` and `mise run ui:bless`.
+[package.metadata.shopify_api]
+api-version = "2026-10"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+shopify_api_macros.workspace = true
+
+chrono.workspace = true
+# `Stream`, which the bulk downloads implement: the trait the async ecosystem shares.
+futures-core.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_urlencoded.workspace = true
+# `rt`: a token renewal runs in its own task, so a caller that gives up does not cancel it.
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+base64 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+clap = { workspace = true, optional = true }
+shopify_api_graphql = { workspace = true, optional = true }
+
+[dev-dependencies]
+graphql-parser.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util", "net", "io-util"] }
+trybuild.workspace = true
+
+[features]
+default = ["rustls"]
+## The default transport, `ReqwestTransport`, with rustls.
+rustls = ["dep:reqwest", "reqwest/rustls"]
+## The default transport, `ReqwestTransport`, with the platform's TLS.
+native-tls = ["dep:reqwest", "reqwest/native-tls"]
+## Webhook verification and parsing, webhook subscriptions.
+webhooks = ["dep:hmac", "dep:sha2", "dep:base64"]
+## OAuth: install links, callbacks, token exchange, session tokens, app proxies.
+oauth = ["dep:hmac", "dep:sha2", "dep:base64", "dep:hex"]
+## `MockTransport`, to test code that calls Shopify without the network.
+testing = []
+## The `shopify-api` command: downloads Admin schemas, checks `.graphql` files.
+cli = ["dep:clap", "dep:shopify_api_graphql", "shopify_api_graphql/download", "rustls", "tokio/macros", "tokio/rt-multi-thread", "tokio/fs"]
+full = ["webhooks", "oauth", "testing", "cli"]
+
+[[bin]]
+name = "shopify-api"
+path = "src/bin/shopify-api.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "products"
+required-features = ["rustls"]
+
+[[example]]
+name = "bulk_export"
+required-features = ["rustls"]
+
+[[example]]
+name = "metafields"
+required-features = ["rustls"]
+
+# With one feature set only: `mise run check` runs the tests of two at once,
+# in two processes, and this test's cargo projects are in one directory.
+[[test]]
+name = "schema_override"
+required-features = ["testing"]
+
+[lints]
+workspace = true
