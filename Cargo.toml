@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -17,9 +17,9 @@ authors = ["Thomas Tastet"]
 [workspace.dependencies]
 # The three crates are released together: each one requires the exact
 # version of the others, since the macro emits code for that runtime.
-shopify_api = { path = "crates/shopify_api", version = "=1.0.0-rc.1" }
-shopify_api_graphql = { path = "crates/shopify_api_graphql", version = "=1.0.0-rc.1" }
-shopify_api_macros = { path = "crates/shopify_api_macros", version = "=1.0.0-rc.1" }
+shopify_api = { path = "crates/shopify_api", version = "=1.0.0-rc.2" }
+shopify_api_graphql = { path = "crates/shopify_api_graphql", version = "=1.0.0-rc.2" }
+shopify_api_macros = { path = "crates/shopify_api_macros", version = "=1.0.0-rc.2" }
 
 base64 = "0.23"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
