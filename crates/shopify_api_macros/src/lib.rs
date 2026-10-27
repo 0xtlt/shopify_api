@@ -93,8 +93,81 @@ impl Parse for Source {
     }
 }
 
+/// `crate = path` before the rest of a macro's input: where the generated
+/// code finds `shopify_api`, `::shopify_api` when it is not given.
+struct Krate(TokenStream);
+
+impl Krate {
+    /// Reads `crate = path` and its separator, `,` or `;`, when the input starts with it.
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if !input.peek(Token![crate]) || !input.peek2(Token![=]) {
+            return Ok(Self(quote!(::shopify_api)));
+        }
+        input.parse::<Token![crate]>()?;
+        input.parse::<Token![=]>()?;
+        let path: syn::Path = input.parse().map_err(|error| {
+            syn::Error::new(
+                error.span(),
+                "expected the path of `shopify_api` after `crate =`: `crate = ::my_framework::shopify_api`",
+            )
+        })?;
+        let first = &path.segments[0].ident;
+        if path.leading_colon.is_none() && first != "crate" && first != "$crate" {
+            // The generated code sits in modules of its own, where a relative
+            // path, or a name brought in by `use`, does not resolve.
+            return Err(syn::Error::new(
+                first.span(),
+                "the path of `crate =` must be absolute: `crate = ::my_framework::shopify_api` or `crate = crate::shopify_api`",
+            ));
+        }
+        if let Some(segment) = path.segments.first()
+            && segment.ident == "$crate"
+        {
+            // serde's derive takes the path as text, where `$crate` means nothing.
+            return Err(syn::Error::new(
+                segment.ident.span(),
+                "`crate = $crate::…` cannot reach serde's derive: write the absolute path, `crate = ::my_framework::shopify_api`",
+            ));
+        }
+        if let Some(arguments) = path
+            .segments
+            .iter()
+            .find(|segment| !segment.arguments.is_none())
+        {
+            return Err(syn::Error::new(
+                arguments.arguments.span(),
+                "the path of `crate =` takes no generic arguments",
+            ));
+        }
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        } else if input.peek(Token![;]) {
+            input.parse::<Token![;]>()?;
+        } else {
+            return Err(input.error("expected `,` or `;` after `crate = path`"));
+        }
+        Ok(Self(quote!(#path)))
+    }
+}
+
 /// `graphql!(SOURCE, name = value, …)`, or modules:
-/// `graphql! { pub mod name = SOURCE; mod other = SOURCE }`.
+/// `graphql! { pub mod name = SOURCE; mod other = SOURCE }`, after an
+/// optional `crate = path`.
+struct Invocation {
+    krate: TokenStream,
+    input: Input,
+}
+
+impl Parse for Invocation {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let Krate(krate) = Krate::parse(input)?;
+        Ok(Self {
+            krate,
+            input: input.parse()?,
+        })
+    }
+}
+
 enum Input {
     Expression {
         source: Source,
@@ -177,14 +250,16 @@ impl Parse for Input {
     }
 }
 
-/// `input!(TypeName { field: value, … })`.
+/// `input!(TypeName { field: value, … })`, after an optional `crate = path`.
 struct InputObject {
+    krate: TokenStream,
     name: Ident,
     object: Value,
 }
 
 impl Parse for InputObject {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let Krate(krate) = Krate::parse(input)?;
         const FORM: &str =
             "expected an input object of the schema: `input!(TypeName { field: value, … })`";
         let name: Ident = input
@@ -199,7 +274,11 @@ impl Parse for InputObject {
         if !input.is_empty() {
             return Err(input.error("expected the end of `input!`"));
         }
-        Ok(Self { name, object })
+        Ok(Self {
+            krate,
+            name,
+            object,
+        })
     }
 }
 
@@ -558,21 +637,19 @@ impl Flavor {
     }
 }
 
-/// The path of the runtime crate in the generated code, its only one: every
-/// item is reached through `#krate::__private`, so that a crate re-exporting
-/// `shopify_api` (`extern crate it as shopify_api`, or a future `crate = …`)
-/// needs nothing but that module.
-fn krate() -> TokenStream {
-    quote!(::shopify_api)
-}
-
 /// `graphql!("…", name = value)`: the operation as a value.
+///
+/// `krate` is the path of the runtime crate in the generated code, its only
+/// one: every item is reached through `#krate::__private`, so that a crate
+/// re-exporting `shopify_api` (`extern crate it as shopify_api`, or
+/// `crate = …`) needs nothing but that module.
 fn expand_expression(
     schema: &LoadedSchema,
     source: &Source,
     variables: &[(Ident, Value)],
+    krate: &TokenStream,
 ) -> syn::Result<TokenStream> {
-    let krate = krate();
+    let krate = krate.clone();
     let text = Text::read(source)?;
     let (operation, flavor) = Flavor::of(schema, source, &text)?;
 
@@ -669,14 +746,18 @@ fn expand_expression(
 }
 
 /// `graphql! { mod name = "…"; }`: the operation as a module that names its types.
-fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStream> {
+fn expand_module(
+    schema: &LoadedSchema,
+    module: &Module,
+    krate: &TokenStream,
+) -> syn::Result<TokenStream> {
     let Module {
         attributes,
         visibility,
         name,
         source,
     } = module;
-    let krate = krate();
+    let krate = krate.clone();
     let text = Text::read(source)?;
     let (operation, flavor) = Flavor::of(schema, source, &text)?;
     let target = flavor.target(&krate);
@@ -738,14 +819,20 @@ fn expand_module(schema: &LoadedSchema, module: &Module) -> syn::Result<TokenStr
     })
 }
 
-fn expand(input: Input, schema: Result<LoadedSchema, String>) -> syn::Result<TokenStream> {
+fn expand(
+    invocation: Invocation,
+    schema: Result<LoadedSchema, String>,
+) -> syn::Result<TokenStream> {
     let schema = schema.map_err(|message| syn::Error::new(Span::call_site(), message))?;
+    let Invocation { krate, input } = invocation;
     match input {
-        Input::Expression { source, variables } => expand_expression(&schema, &source, &variables),
+        Input::Expression { source, variables } => {
+            expand_expression(&schema, &source, &variables, &krate)
+        }
         Input::Modules(modules) => {
             let mut expanded = TokenStream::new();
             for module in &modules {
-                expanded.extend(expand_module(&schema, module)?);
+                expanded.extend(expand_module(&schema, module, &krate)?);
             }
             Ok(expanded)
         }
@@ -761,7 +848,7 @@ fn expand_input(
     let Value::Object(object) = &input.object else {
         unreachable!("`input!` reads an object");
     };
-    let mut literals = Literals::new(schema.schema(), krate());
+    let mut literals = Literals::new(schema.schema(), input.krate.clone());
     let value = literals
         .input_object(&input.name.to_string(), input.name.span(), object)
         .map_err(|error| schema.literal_error(error))?;
@@ -777,7 +864,7 @@ fn expand_input(
 /// See `shopify_api::graphql!`.
 #[proc_macro]
 pub fn graphql(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = syn::parse_macro_input!(input as Input);
+    let input = syn::parse_macro_input!(input as Invocation);
     expand(input, LoadedSchema::load())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -797,7 +884,7 @@ pub fn input(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __graphql_internal(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = syn::parse_macro_input!(input as Input);
+    let input = syn::parse_macro_input!(input as Invocation);
     expand(input, LoadedSchema::internal())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -882,6 +969,54 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_path_of_the_runtime_crate() {
+        let krate = |text: &str| {
+            syn::parse_str::<Invocation>(text)
+                .unwrap()
+                .krate
+                .to_string()
+                .replace(' ', "")
+        };
+        assert_eq!(krate(r#""{ shop { id } }", first = 1"#), "::shopify_api");
+        assert_eq!(
+            krate(r#"crate = ::openshop::shopify_api, "{ shop { id } }", first = 1"#),
+            "::openshop::shopify_api"
+        );
+        assert_eq!(
+            krate(r#"crate = crate::shopify_api; pub mod a = "{ shop { id } }";"#),
+            "crate::shopify_api"
+        );
+        let Invocation { input, .. } = syn::parse_str(
+            r#"crate = ::openshop::shopify_api; #[doc = "A."] pub mod a = "{ shop { id } }"; mod b = "{ shop { name } }""#,
+        )
+        .unwrap();
+        let Input::Modules(modules) = input else {
+            panic!("modules");
+        };
+        assert_eq!(modules.len(), 2);
+        let Invocation { input, .. } =
+            syn::parse_str(r#"crate = ::openshop::shopify_api, bulk("{ shop { id } }")"#).unwrap();
+        assert!(matches!(
+            input,
+            Input::Expression {
+                source: Source::Bulk(_),
+                ..
+            }
+        ));
+
+        let object: InputObject =
+            syn::parse_str("crate = ::openshop::shopify_api, MetafieldsSetInput { key: k }")
+                .unwrap();
+        assert_eq!(
+            object.krate.to_string().replace(' ', ""),
+            "::openshop::shopify_api"
+        );
+        assert_eq!(object.name, "MetafieldsSetInput");
+        let object: InputObject = syn::parse_str("MetafieldsSetInput { key: k }").unwrap();
+        assert_eq!(object.krate.to_string().replace(' ', ""), "::shopify_api");
+    }
+
+    #[test]
     fn parses_both_forms_and_both_sources() {
         let expression: Input =
             syn::parse_str(r#""{ shop { name } }", first = 1, after = cursor,"#).unwrap();
@@ -960,6 +1095,31 @@ mod tests {
         assert!(
             matches!(&modules[1].source, Source::Bulk(inner) if matches!(**inner, Source::Literal(_)))
         );
+
+        for (source, message) in [
+            (
+                "crate = shopify_api, \"{ shop { id } }\"",
+                "the path of `crate =` must be absolute: `crate = ::my_framework::shopify_api` or `crate = crate::shopify_api`",
+            ),
+            (
+                "crate = ::a::b<T>, \"{ shop { id } }\"",
+                "the path of `crate =` takes no generic arguments",
+            ),
+            (
+                "crate = ::a::b \"{ shop { id } }\"",
+                "expected `,` or `;` after `crate = path`",
+            ),
+            (
+                "crate = , \"{ shop { id } }\"",
+                "expected the path of `shopify_api` after `crate =`: `crate = ::my_framework::shopify_api`",
+            ),
+        ] {
+            let error = syn::parse_str::<Invocation>(source)
+                .err()
+                .expect(source)
+                .to_string();
+            assert_eq!(error, message, "{source}");
+        }
 
         for (source, message) in [
             ("first = 1", SOURCE_FORM),

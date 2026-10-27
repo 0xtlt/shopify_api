@@ -35,7 +35,7 @@ error[E0277]: `handle` of `ProductSetIdentifiers` expects a `String`, not `Optio
   |                                                                 `Option<&str>` doesn't satisfy the trait bound
   |                                                                 `String`, `&str`, `&String` or `Cow<str>`
   |
-  = help: the trait `main::__ShopifyApiExpect1_c2393afa` is not implemented for `Option<&str>`
+  = help: the trait `main::__ShopifyApiExpect1_c23935b5` is not implemented for `Option<&str>`
 note: required by a bound in `main::Checks::build`
  --> tests/ui/literal_one_of.rs:7:13
   |
@@ -52,7 +52,7 @@ error[E0277]: `handle` of `ProductSetIdentifiers` expects a `String`, not `Maybe
   |                                                                 `Maybe<&str>` doesn't satisfy the trait bound
   |                                                                 `String`, `&str`, `&String` or `Cow<str>`
   |
-  = help: the trait `main::__ShopifyApiExpect1_c2393afa` is not implemented for `Maybe<&str>`
+  = help: the trait `main::__ShopifyApiExpect1_c23935b5` is not implemented for `Maybe<&str>`
 note: required by a bound in `main::Checks::build`
  --> tests/ui/literal_one_of.rs:8:13
   |

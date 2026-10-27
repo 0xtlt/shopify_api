@@ -192,6 +192,18 @@ graphql! {
 }
 ```
 
+### Through a framework
+
+A crate that reaches `shopify_api` through a crate re-exporting it, and does
+not list it in its own `Cargo.toml`, gives the path with `crate =`; the schema
+is still that crate's `graphql/admin.schema.json`:
+
+```rust,ignore
+let op = my_framework::graphql!(crate = ::my_framework::shopify_api, "{ shop { name } }");
+my_framework::graphql! { crate = ::my_framework::shopify_api; pub mod shop = "{ shop { name } }"; }
+let m = my_framework::input!(crate = ::my_framework::shopify_api, SEOInput { title: title });
+```
+
 ### Untyped
 
 For an operation built at run time, `shopify.graphql(query, variables)`

@@ -62,3 +62,8 @@ refused: the operation that holds it fails with
 The fields are checked against the schema of the crate where `input!` is
 written. A value built in another crate, against another schema or version,
 has the same Rust type as long as the GraphQL name is the same.
+
+Through a framework that re-exports `shopify_api`, without it in the crate's
+own `Cargo.toml`, the path comes first:
+`input!(crate = ::my_framework::shopify_api, MetafieldsSetInput { … })` (see
+[`graphql!`](crate::graphql!#through-a-crate-that-re-exports-shopify_api)).

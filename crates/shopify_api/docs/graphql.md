@@ -624,6 +624,45 @@ first mismatch: `` Shopify's answer does not match the operation at `orders.node
 That happens when a shop runs another version than the schema, or when a test
 scripts an answer that leaves out a non-null field.
 
+# Through a crate that re-exports `shopify_api`
+
+The generated code reaches `shopify_api` through `::shopify_api`. A crate
+that uses `graphql!` and `input!` through a framework that re-exports them,
+without `shopify_api` in its own `Cargo.toml`, names the path with `crate =`,
+before anything else:
+
+```rust,ignore
+use my_framework::{graphql, input};
+
+// Inline, `,` after the path.
+let operation = graphql!(crate = ::my_framework::shopify_api, "query($first: Int!) { products(first: $first) { nodes { id } } }", first = 10);
+let bulk = graphql!(crate = ::my_framework::shopify_api, bulk("{ orders { edges { node { id } } } }"));
+
+// Modules, `;` after the path: it applies to every module of the block.
+graphql! {
+    crate = ::my_framework::shopify_api;
+    pub mod products = "query($first: Int!) { products(first: $first) { nodes { id } } }";
+    pub mod shop = "{ shop { name } }";
+}
+
+let metafield = input!(crate = ::my_framework::shopify_api, MetafieldsSetInput {
+    ownerId: product_id, namespace: "custom", key: "color", type: "single_line_text_field", value: color,
+});
+```
+
+The path is absolute, `::my_framework::shopify_api` or
+`crate::path::to::shopify_api`: the generated code sits in modules of its
+own, where a relative path or a name brought in by `use` does not resolve. It
+cannot start with `$crate`, since serde's derive reads it as text: a
+framework's `macro_rules!` wrapper writes `::my_framework::shopify_api`.
+`extern crate my_framework as shopify_api;` at the root of the crate works
+too, without `crate =`.
+
+The schema and the API version are those of the crate that writes the
+operation, as always: its `graphql/admin.schema.json` and its
+`[package.metadata.shopify_api]`, downloaded on the same terms, whether or not
+it depends on `shopify_api` itself.
+
 # Limits
 
 - Subscriptions are refused, and one inline `graphql!` takes one operation.

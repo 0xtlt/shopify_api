@@ -1,0 +1,10 @@
+error: `crate = $crate::…` cannot reach serde's derive: write the absolute path, `crate = ::my_framework::shopify_api`
+  --> tests/ui/crate_path_dollar_crate.rs:6:39
+   |
+ 6 |         shopify_api::graphql!(crate = $crate::runtime, "{ shop { id } }")
+   |                                       ^^^^^^
+...
+11 |     let _ = shop_id!();
+   |             ---------- in this macro invocation
+   |
+   = note: this error originates in the macro `shop_id` (in Nightly builds, run with -Z macro-backtrace for more info)
