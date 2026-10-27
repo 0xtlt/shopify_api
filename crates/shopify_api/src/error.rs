@@ -160,12 +160,42 @@ pub enum Error {
     },
 
     /// A token could not be obtained or renewed.
+    ///
+    /// When the token endpoint refused the request, `status` and
+    /// `oauth_code` say how, so that a caller can tell a refusal that will
+    /// last (a `4xx` with an OAuth error code, `invalid_client`,
+    /// `shop_not_permitted`…) from one that passes (a `5xx`, `408`, `429`, or
+    /// no code) without reading the message:
+    ///
+    /// ```
+    /// # use shopify_api::Error;
+    /// fn lasts(error: &Error) -> bool {
+    ///     matches!(
+    ///         (error.token_endpoint_status(), error.oauth_code()),
+    ///         (Some(status @ 400..=499), Some(_)) if status != 408 && status != 429
+    ///     )
+    /// }
+    /// ```
     #[non_exhaustive]
     Auth {
         message: String,
         /// What the token endpoint said, or serde's message about its
         /// answer. See [`Error::sensitive_detail`].
         detail: Option<SensitiveDetail>,
+        /// The HTTP status of the token endpoint's refusal. `None` when the
+        /// error is not a refusal: an answer that does not read as a token,
+        /// a network failure, no refresh token, a renewal that panicked.
+        status: Option<u16>,
+        /// The OAuth `error` code of the token endpoint's refusal, when its
+        /// body has one. `None` when the body has none (a `5xx` page, text)
+        /// or the error is not a refusal.
+        oauth_code: Option<OAuthErrorCode>,
+        /// `true` when the renewal that failed was another request's: this
+        /// request waited for it, or came within the few seconds a failure
+        /// is the answer of every request instead of asking Shopify again.
+        /// `status` and `oauth_code` are those of that renewal; `detail` is
+        /// `None`.
+        held: bool,
     },
 
     /// A mutation that this crate runs for you returned `userErrors`.
@@ -344,10 +374,19 @@ impl fmt::Debug for Error {
                 .field("reason", reason)
                 .field("detail", detail)
                 .finish(),
-            Self::Auth { message, detail } => formatter
+            Self::Auth {
+                message,
+                detail,
+                status,
+                oauth_code,
+                held,
+            } => formatter
                 .debug_struct("Auth")
                 .field("message", message)
                 .field("detail", detail)
+                .field("status", status)
+                .field("oauth_code", oauth_code)
+                .field("held", held)
                 .finish(),
             Self::UserErrors { mutation, errors } => formatter
                 .debug_struct("UserErrors")
@@ -481,6 +520,31 @@ impl Error {
         }
     }
 
+    /// The HTTP status of the token endpoint's refusal, for [`Error::Auth`].
+    /// `None` for an [`Error::Auth`] that is not a refusal, and for any
+    /// other variant (the status of [`Error::Http`] is its `status` field).
+    pub fn token_endpoint_status(&self) -> Option<u16> {
+        match self {
+            Self::Auth { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    /// The OAuth `error` code of the token endpoint's refusal, for
+    /// [`Error::Auth`], when its body has one.
+    pub fn oauth_code(&self) -> Option<OAuthErrorCode> {
+        match self {
+            Self::Auth { oauth_code, .. } => *oauth_code,
+            _ => None,
+        }
+    }
+
+    /// Whether this [`Error::Auth`] is the failure of a renewal another
+    /// request ran, handed to this one (see the `held` field).
+    pub fn is_held_auth_failure(&self) -> bool {
+        matches!(self, Self::Auth { held: true, .. })
+    }
+
     /// The errors Shopify returned, for [`Error::Graphql`].
     pub fn graphql_errors(&self) -> &[GraphqlError] {
         match self {
@@ -561,6 +625,9 @@ impl Error {
         Self::Auth {
             message: message.into(),
             detail: None,
+            status: None,
+            oauth_code: None,
+            held: false,
         }
     }
 
@@ -568,7 +635,92 @@ impl Error {
         Self::Auth {
             message: message.into(),
             detail: Some(SensitiveDetail(detail)),
+            status: None,
+            oauth_code: None,
+            held: false,
         }
+    }
+
+    /// The token endpoint refused the request with `status`.
+    pub(crate) fn auth_refused(
+        message: String,
+        detail: String,
+        status: u16,
+        oauth_code: Option<OAuthErrorCode>,
+    ) -> Self {
+        Self::Auth {
+            message,
+            detail: Some(SensitiveDetail(detail)),
+            status: Some(status),
+            oauth_code,
+            held: false,
+        }
+    }
+}
+
+/// The OAuth `error` code of a token endpoint's refusal: those of RFC 6749
+/// (5.2) and Shopify's, in [`Error::Auth`].
+///
+/// A code this crate does not know is [`Other`](Self::Other), without its
+/// text: the endpoint wrote it, and it is in [`Error::sensitive_detail`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OAuthErrorCode {
+    /// `shop_not_permitted`: the app may not ask this shop for a token
+    /// (client credentials on a shop of another organization).
+    ShopNotPermitted,
+    /// `invalid_request`
+    InvalidRequest,
+    /// `invalid_client`: the client ID or secret is wrong.
+    InvalidClient,
+    /// `invalid_grant`: the code, refresh token or credentials do not hold.
+    InvalidGrant,
+    /// `unauthorized_client`
+    UnauthorizedClient,
+    /// `unsupported_grant_type`
+    UnsupportedGrantType,
+    /// `invalid_scope`
+    InvalidScope,
+    /// `invalid_subject_token`: the session token of a token exchange.
+    InvalidSubjectToken,
+    /// A code this crate does not know.
+    Other,
+}
+
+impl OAuthErrorCode {
+    const KNOWN: [(&'static str, Self); 8] = [
+        ("shop_not_permitted", Self::ShopNotPermitted),
+        ("invalid_request", Self::InvalidRequest),
+        ("invalid_client", Self::InvalidClient),
+        ("invalid_grant", Self::InvalidGrant),
+        ("unauthorized_client", Self::UnauthorizedClient),
+        ("unsupported_grant_type", Self::UnsupportedGrantType),
+        ("invalid_scope", Self::InvalidScope),
+        ("invalid_subject_token", Self::InvalidSubjectToken),
+    ];
+
+    /// The code as the endpoint writes it; `None` for [`Other`](Self::Other).
+    pub fn as_str(self) -> Option<&'static str> {
+        Self::KNOWN
+            .iter()
+            .find(|(_, code)| *code == self)
+            .map(|(text, _)| *text)
+    }
+
+    pub(crate) fn parse(text: &str) -> Self {
+        Self::KNOWN
+            .iter()
+            .find(|(known, _)| *known == text)
+            .map_or(Self::Other, |(_, code)| *code)
+    }
+}
+
+impl fmt::Display for OAuthErrorCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            self.as_str()
+                .unwrap_or("an error code this crate does not know"),
+        )
     }
 }
 

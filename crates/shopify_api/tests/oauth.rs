@@ -5,6 +5,7 @@ use serde_json::json;
 use shopify_api::oauth::{RequestedToken, ShopifyApp};
 use shopify_api::testing::MockTransport;
 use shopify_api::transport::HttpResponse;
+use shopify_api::{Error, OAuthErrorCode};
 
 fn app(mock: &MockTransport) -> ShopifyApp {
     ShopifyApp::new("client-id", "client-secret").with_transport(mock.clone())
@@ -248,4 +249,71 @@ async fn the_clients_of_an_app_save_their_renewed_tokens() {
     assert_eq!(saved.len(), 1);
     assert_eq!(saved[0].0, "my-shop.myshopify.com");
     assert_eq!(saved[0].1.refresh_token.as_deref(), Some("shprt_2"));
+}
+
+#[tokio::test]
+async fn a_refused_code_exchange_has_its_status_and_code() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::json(
+        400,
+        &json!({ "error": "invalid_request", "error_description": "The authorization code was not found or was already used" }),
+    ));
+    let app = app(&mock);
+    let query = format!(
+        "code=abc&shop=my-shop.myshopify.com&state=s1&timestamp={}",
+        now()
+    );
+    let signature = app.sign_query(&query).unwrap();
+    let callback = app
+        .verify_query(&format!("{query}&hmac={signature}"))
+        .unwrap();
+
+    let error = app.exchange_code(&callback).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "authentication failed: the token endpoint of my-shop.myshopify.com answered 400 (invalid_request)"
+    );
+    assert!(matches!(
+        error,
+        Error::Auth {
+            status: Some(400),
+            oauth_code: Some(OAuthErrorCode::InvalidRequest),
+            held: false,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_refused_token_exchange_has_its_status_and_code() {
+    for (status, body, code) in [
+        (
+            400,
+            r#"{"error": "invalid_subject_token"}"#,
+            Some(OAuthErrorCode::InvalidSubjectToken),
+        ),
+        (502, "Bad Gateway", None),
+    ] {
+        let mock = MockTransport::new();
+        mock.push(HttpResponse::new(status, body.to_string()));
+        let app = app(&mock);
+        let now = now();
+        let bearer = app.sign_session_token(&json!({
+            "iss": "https://my-shop.myshopify.com/admin",
+            "dest": "https://my-shop.myshopify.com",
+            "aud": "client-id",
+            "sub": "42",
+            "exp": now + 60,
+            "nbf": now,
+        }));
+        let session = app.verify_session_token(&bearer).unwrap();
+
+        let error = app
+            .exchange_session_token(&session, RequestedToken::Offline)
+            .await
+            .unwrap_err();
+        assert_eq!(error.token_endpoint_status(), Some(status), "{error:?}");
+        assert_eq!(error.oauth_code(), code);
+        assert!(!error.is_held_auth_failure());
+    }
 }

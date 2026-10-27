@@ -268,6 +268,13 @@ let shopify = Shopify::builder("my-shop")
 Clones of a client share its token: one renewal serves them all, however many
 requests wait for it.
 
+When Shopify refuses a token, `Error::Auth` says how, without a message to
+parse: `error.token_endpoint_status()` (`Some(400)`), `error.oauth_code()`
+(`Some(OAuthErrorCode::InvalidClient)`, `None` when the body has no code) and
+`error.is_held_auth_failure()` (the failure of a renewal another request ran).
+A `4xx` other than `408` and `429` with a code will not pass by itself; a
+`5xx`, `408`, `429` or no code may.
+
 ## Rate limits and retries
 
 A request Shopify throttles is sent again when the bucket holds its cost again,

@@ -12,6 +12,7 @@ A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATIO
 ### Since 1.0.0-rc.1
 
 - Fixed: `verify_app_proxy` and `sign_app_proxy` sort the `name=value` strings, as Shopify does, not the names. A request with a parameter whose name extends another one by a byte that sorts before `=` (`page` and `page2`, `filter` and `filter.v.price.gte`) was refused though Shopify signed it.
+- Added: `Error::Auth` has `status` and `oauth_code` (`OAuthErrorCode`), the HTTP status and OAuth `error` code of the token endpoint's refusal, and `held`, set when the failure is that of a renewal another request ran; `Error::token_endpoint_status`, `Error::oauth_code` and `Error::is_held_auth_failure` read them. They are filled for client credentials, refresh, code exchange and token exchange, and `None` for an Auth error that is not a refusal (an answer that does not read as a token, no refresh token). The text of the errors does not change.
 
 ### Added
 

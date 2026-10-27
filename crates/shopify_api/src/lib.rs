@@ -85,7 +85,7 @@ pub mod webhooks;
 
 pub use auth::{AssociatedUser, Auth, TokenData, TokenStore};
 pub use client::{RetryPolicy, Shopify, ShopifyBuilder, USER_AGENT};
-pub use error::{Error, GraphqlErrors, RawBody, Result, SensitiveDetail};
+pub use error::{Error, GraphqlErrors, OAuthErrorCode, RawBody, Result, SensitiveDetail};
 pub use graphql::{
     Cost, GraphqlError, InputObject, IntoVariable, InvalidValueReason, Location, Maybe, Operation,
     OperationKind, RawResponse, Response, ThrottleStatus, UserError, VariableType,

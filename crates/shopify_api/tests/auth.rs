@@ -7,7 +7,9 @@ use std::time::Duration;
 use serde_json::json;
 use shopify_api::testing::MockTransport;
 use shopify_api::transport::{BoxFuture, HttpRequest, HttpResponse};
-use shopify_api::{Auth, Error, RetryPolicy, ShopDomain, Shopify, TokenData, TokenStore};
+use shopify_api::{
+    Auth, Error, OAuthErrorCode, RetryPolicy, ShopDomain, Shopify, TokenData, TokenStore,
+};
 
 const TOKEN_URL: &str = "https://test-shop.myshopify.com/admin/oauth/access_token";
 
@@ -258,6 +260,9 @@ async fn an_expired_refresh_token_says_what_to_do() {
             .contains("refresh token is missing or expired"),
         "{error}"
     );
+    // Not a refusal of the token endpoint: nothing was asked.
+    assert_eq!(error.token_endpoint_status(), None);
+    assert_eq!(error.oauth_code(), None);
     assert!(mock.requests().is_empty());
 }
 
@@ -284,7 +289,104 @@ async fn a_refused_grant_says_what_shopify_answered_and_never_the_secret() {
         error.sensitive_detail(),
         Some("shop_not_permitted: Client credentials cannot be performed on this shop.")
     );
+    // And how it refused, without reading the message.
+    assert_eq!(error.token_endpoint_status(), Some(400));
+    assert_eq!(error.oauth_code(), Some(OAuthErrorCode::ShopNotPermitted));
+    assert!(!error.is_held_auth_failure());
+    assert!(matches!(
+        error,
+        Error::Auth {
+            status: Some(400),
+            oauth_code: Some(OAuthErrorCode::ShopNotPermitted),
+            held: false,
+            ..
+        }
+    ));
     assert!(!format!("{error:?}").contains("top-secret"));
+}
+
+/// The client credentials grant of a client that answers `status` and `body`.
+async fn grant_refused_with(status: u16, body: &str) -> Error {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::new(status, body.to_string()));
+    let shopify = builder(&mock)
+        .client_credentials("id", "secret")
+        .build()
+        .unwrap();
+    shopify.graphql("{ shop { name } }", ()).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn a_refusal_without_an_oauth_code_has_its_status_only() {
+    for (status, body) in [
+        (503, "Service Unavailable"),
+        (429, "{\"errors\": \"Too many requests\"}"),
+        (500, ""),
+    ] {
+        let error = grant_refused_with(status, body).await;
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "authentication failed: the token endpoint of test-shop.myshopify.com answered {status}"
+            )
+        );
+        assert_eq!(error.token_endpoint_status(), Some(status));
+        assert_eq!(error.oauth_code(), None);
+        assert!(!error.is_held_auth_failure());
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_oauth_code_is_a_code_without_its_text() {
+    let error = grant_refused_with(400, r#"{"error": "shpat_LOOKS_LIKE_A_TOKEN"}"#).await;
+    assert_eq!(
+        error.to_string(),
+        "authentication failed: the token endpoint of test-shop.myshopify.com answered 400 \
+         (an error code this crate does not know)"
+    );
+    assert_eq!(error.token_endpoint_status(), Some(400));
+    assert_eq!(error.oauth_code(), Some(OAuthErrorCode::Other));
+    assert_eq!(OAuthErrorCode::Other.as_str(), None);
+    assert!(!format!("{error:?}").contains("LOOKS_LIKE"));
+}
+
+#[tokio::test]
+async fn a_token_answer_that_does_not_read_is_not_a_refusal() {
+    let mock = MockTransport::new();
+    mock.push_json(json!({ "access_token": 1 }));
+    let shopify = builder(&mock)
+        .client_credentials("id", "secret")
+        .build()
+        .unwrap();
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert!(error.to_string().contains("invalid token"), "{error}");
+    assert_eq!(error.token_endpoint_status(), None);
+    assert_eq!(error.oauth_code(), None);
+}
+
+#[tokio::test]
+async fn a_refused_refresh_has_its_status_and_code() {
+    let mock = MockTransport::new();
+    mock.push(HttpResponse::json(
+        400,
+        &json!({ "error": "invalid_grant", "error_description": "The refresh token is revoked." }),
+    ));
+    let mut stored = TokenData::new("shpat_old");
+    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.refresh_token = Some("shprt_old".to_string());
+    let shopify = builder(&mock)
+        .auth(Auth::expiring_token("id", "secret", stored))
+        .build()
+        .unwrap();
+
+    let error = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "authentication failed: the token endpoint of test-shop.myshopify.com answered 400 (invalid_grant)"
+    );
+    assert_eq!(error.token_endpoint_status(), Some(400));
+    assert_eq!(error.oauth_code(), Some(OAuthErrorCode::InvalidGrant));
+    assert_eq!(OAuthErrorCode::InvalidGrant.as_str(), Some("invalid_grant"));
 }
 
 #[tokio::test]
@@ -446,6 +548,90 @@ async fn a_failed_grant_answers_the_requests_that_wait_for_it() {
         assert!(matches!(error, Error::Auth { .. }), "{error:?}");
     }
     // One request to the token endpoint; the others got its failure.
+    assert_eq!(token_requests(&mock).len(), 1);
+}
+
+#[tokio::test]
+async fn the_requests_that_wait_for_a_refused_grant_get_its_status_and_code() {
+    let mock = MockTransport::new();
+    mock.respond_with(|request: &HttpRequest| {
+        if request.url == TOKEN_URL {
+            return Ok(HttpResponse::json(
+                401,
+                &json!({ "error": "invalid_client", "error_description": "Client authentication failed" }),
+            ));
+        }
+        Ok(HttpResponse::json(
+            200,
+            &json!({ "data": { "shop": { "name": "x" } } }),
+        ))
+    });
+    let shopify = builder(&mock)
+        .client_credentials("id", "secret")
+        .build()
+        .unwrap();
+
+    let calls: Vec<_> = (0..5)
+        .map(|_| {
+            let shopify = shopify.clone();
+            tokio::spawn(async move { shopify.graphql("{ shop { name } }", ()).await })
+        })
+        .collect();
+    let mut held = 0;
+    for call in calls {
+        let error = call.await.unwrap().unwrap_err();
+        assert_eq!(error.token_endpoint_status(), Some(401), "{error:?}");
+        assert_eq!(error.oauth_code(), Some(OAuthErrorCode::InvalidClient));
+        let refusal = "the token endpoint of test-shop.myshopify.com answered 401 (invalid_client)";
+        if error.is_held_auth_failure() {
+            held += 1;
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "authentication failed: authentication failed: {refusal} (asked again in a few seconds)"
+                )
+            );
+            assert_eq!(error.sensitive_detail(), None);
+        } else {
+            assert_eq!(
+                error.to_string(),
+                format!("authentication failed: {refusal}")
+            );
+        }
+    }
+    // One request asked Shopify; the four others were handed its failure.
+    assert_eq!(token_requests(&mock).len(), 1);
+    assert_eq!(held, 4);
+}
+
+#[tokio::test]
+async fn a_held_failure_that_is_not_a_refusal_has_no_status() {
+    let mock = MockTransport::new();
+    mock.respond_with(|request: &HttpRequest| {
+        if request.url == TOKEN_URL {
+            return Ok(HttpResponse::json(
+                200,
+                &json!({ "scope": "read_products" }),
+            ));
+        }
+        Ok(HttpResponse::json(
+            200,
+            &json!({ "data": { "shop": { "name": "x" } } }),
+        ))
+    });
+    let shopify = builder(&mock)
+        .client_credentials("id", "secret")
+        .build()
+        .unwrap();
+
+    let first = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    let second = shopify.graphql("{ shop { name } }", ()).await.unwrap_err();
+    assert!(!first.is_held_auth_failure());
+    assert!(second.is_held_auth_failure());
+    for error in [first, second] {
+        assert_eq!(error.token_endpoint_status(), None);
+        assert_eq!(error.oauth_code(), None);
+    }
     assert_eq!(token_requests(&mock).len(), 1);
 }
 

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::transport::{BoxFuture, HttpRequest, Method, Transport};
-use crate::{Error, Result, ShopDomain};
+use crate::{Error, OAuthErrorCode, Result, ShopDomain};
 
 /// How a [`Shopify`](crate::Shopify) client gets its access token.
 ///
@@ -362,7 +362,7 @@ pub(crate) async fn request_token(
         // What the endpoint wrote is kept apart: it may echo what it was sent.
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
         let error = body.get("error").and_then(serde_json::Value::as_str);
-        let code = error.map(oauth_error_code);
+        let code = error.map(OAuthErrorCode::parse);
         let description = body
             .get("error_description")
             .and_then(serde_json::Value::as_str);
@@ -378,7 +378,7 @@ pub(crate) async fn request_token(
             ),
             None => format!("the token endpoint of {shop} answered {}", response.status),
         };
-        return Err(Error::auth_with_detail(message, detail));
+        return Err(Error::auth_refused(message, detail, response.status, code));
     }
     let parsed: TokenResponse = crate::decode::from_slice(&response.body).map_err(|failure| {
         Error::auth_with_detail(
@@ -426,7 +426,7 @@ pub(crate) struct Tokens {
 struct State {
     token: Option<TokenData>,
     /// When the last renewal failed, and why.
-    failure: Option<(Instant, String)>,
+    failure: Option<(Instant, Failure)>,
     /// The token was renewed, and the store has not saved it yet.
     unsaved: bool,
 }
@@ -442,9 +442,32 @@ impl State {
 
     /// The last failure, if it is recent enough to be the answer.
     fn held_failure(&self) -> Option<Error> {
-        let (at, message) = self.failure.as_ref()?;
-        (at.elapsed() < FAILURE_HOLD)
-            .then(|| Error::auth(format!("{message} (asked again in a few seconds)")))
+        let (at, failure) = self.failure.as_ref()?;
+        (at.elapsed() < FAILURE_HOLD).then(|| Error::Auth {
+            message: format!("{} (asked again in a few seconds)", failure.message),
+            detail: None,
+            status: failure.status,
+            oauth_code: failure.oauth_code,
+            held: true,
+        })
+    }
+}
+
+/// What a failed renewal hands to the requests that come while it is held.
+struct Failure {
+    /// The `Display` of the error.
+    message: String,
+    status: Option<u16>,
+    oauth_code: Option<OAuthErrorCode>,
+}
+
+impl Failure {
+    fn of(error: &Error) -> Self {
+        Self {
+            message: error.to_string(),
+            status: error.token_endpoint_status(),
+            oauth_code: error.oauth_code(),
+        }
     }
 }
 
@@ -567,7 +590,7 @@ impl Tokens {
             let token = match obtain(&kind, &state, &endpoint).await {
                 Ok(token) => token,
                 Err(error) => {
-                    state.failure = Some((Instant::now(), error.to_string()));
+                    state.failure = Some((Instant::now(), Failure::of(&error)));
                     return Err(error);
                 }
             };
@@ -601,25 +624,6 @@ fn stopped(error: tokio::task::JoinError) -> Error {
     } else {
         "the renewal of the token was cancelled"
     })
-}
-
-/// An OAuth error code (RFC 6749, 5.2, and Shopify's) as an error shows it.
-fn oauth_error_code(code: &str) -> &'static str {
-    const CODES: [&str; 8] = [
-        "shop_not_permitted",
-        "invalid_request",
-        "invalid_client",
-        "invalid_grant",
-        "unauthorized_client",
-        "unsupported_grant_type",
-        "invalid_scope",
-        "invalid_subject_token",
-    ];
-    CODES
-        .iter()
-        .find(|known| **known == code)
-        .copied()
-        .unwrap_or("an error code this crate does not know")
 }
 
 /// Asks Shopify for a new token, as `kind` does.
