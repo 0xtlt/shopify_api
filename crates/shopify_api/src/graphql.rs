@@ -142,6 +142,8 @@ impl Shopify {
                 .with_header("User-Agent", &self.shared.endpoint.user_agent)
                 .with_header("X-Shopify-Access-Token", &token)
                 .with_body(body.clone());
+            let request =
+                crate::auth::for_shop(request, &endpoint.shop, endpoint.admin_origin.as_ref());
             let may_retry = retries < self.retry.max_retries();
             let response = match self.shared.endpoint.transport.send(request).await {
                 Ok(response) => response,

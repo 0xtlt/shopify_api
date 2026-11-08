@@ -19,6 +19,10 @@ takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
 
 A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
 
+### Since 1.0.0-rc.3
+
+- Added: an admin origin, for a local stand-in of Shopify (local-storefront's `http://localhost:9292`), a mock server or a proxy: `ShopifyBuilder::admin_origin` and `ShopifyApp::with_admin_origin` send the requests built from the shop's domain (GraphQL, the client credentials grant, refresh tokens, the code and token exchanges) and the install link of `authorization_url` to that origin instead of `https://{shop}`. Only the scheme, the host and the port change: the paths are Shopify's, and the shop stays the identity of the session tokens, the tokens and the errors. The requests sent there name the shop in `X-Forwarded-Host`, and the install link in a last `shop` parameter. `ShopifyApp::builder` and `ShopifyApp::client` pass the origin on to their clients; `Shopify::admin_origin` and `ShopifyApp::admin_origin` read it. `AdminOrigin` checks it: an absolute `https://` URL, or `http://` to `localhost`, `127.0.0.1` or `[::1]` only, with no path (a trailing `/` aside), query string, fragment or user; anything else is an `Error::Config` that does not show what was given. Without it, nothing changes.
+
 ### Since 1.0.0-rc.2
 
 - Changed: `graphql!` downloads a schema file only with the new `schema-download` feature (in `full` too), off by default. Without it the macro has no HTTP client (28 crates in its build instead of 55) and a build never uses the network: a file of the version the crate asks for is read as it is, and a missing or outdated one is a compile error that names `shopify-api schema download`. With it, `CARGO_NET_OFFLINE=true` also keeps the build offline.

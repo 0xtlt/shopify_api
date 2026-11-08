@@ -951,8 +951,14 @@ mod tests {
     fn token_endpoint(status: u16, body: String) -> Error {
         let shop = crate::ShopDomain::new("a-shop").unwrap();
         let transport = Answer(status, body);
-        let future =
-            crate::auth::request_token(&transport, &shop, "test", crate::auth::Encoding::Form, &[]);
+        let future = crate::auth::request_token(
+            &transport,
+            &shop,
+            None,
+            "test",
+            crate::auth::Encoding::Form,
+            &[],
+        );
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
@@ -1172,6 +1178,15 @@ mod tests {
             "Config",
             Error::Config("the HTTP client does not start".to_string()),
         ));
+        for origin in [
+            format!("http://me:{TOKEN}@localhost:9292"),
+            format!("http://localhost:9292/?token={TOKEN}"),
+            format!("http://{TOKEN}.example.com"),
+            TOKEN.to_string(),
+            SIGNED_URL.to_string(),
+        ] {
+            errors.push(("Config", crate::AdminOrigin::new(&origin).unwrap_err()));
+        }
         #[cfg(feature = "webhooks")]
         {
             use base64::Engine;

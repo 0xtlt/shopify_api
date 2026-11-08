@@ -9,8 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+use crate::origin::admin_url;
 use crate::transport::{BoxFuture, HttpRequest, Method, Transport};
-use crate::{Error, OAuthErrorCode, Result, ShopDomain};
+use crate::{AdminOrigin, Error, OAuthErrorCode, Result, ShopDomain};
 
 /// How a [`Shopify`](crate::Shopify) client gets its access token.
 ///
@@ -317,8 +318,22 @@ impl TokenResponse {
     }
 }
 
-fn token_url(shop: &ShopDomain) -> String {
-    format!("https://{shop}/admin/oauth/access_token")
+/// The token endpoint of `shop`, at `origin` when there is one.
+fn token_url(shop: &ShopDomain, origin: Option<&AdminOrigin>) -> String {
+    admin_url(shop, origin, "/admin/oauth/access_token")
+}
+
+/// `request`, saying which shop it is for when it goes to an admin origin
+/// instead of the shop's own host: one origin may serve several shops.
+pub(crate) fn for_shop(
+    request: HttpRequest,
+    shop: &ShopDomain,
+    origin: Option<&AdminOrigin>,
+) -> HttpRequest {
+    match origin {
+        Some(_) => request.with_header("X-Forwarded-Host", shop.as_str()),
+        None => request,
+    }
 }
 
 /// How the fields of a token request travel.
@@ -330,20 +345,22 @@ pub(crate) enum Encoding {
     Json,
 }
 
-/// Asks the token endpoint of `shop` for a token. A refusal says what
-/// Shopify answered, never what was sent.
+/// Asks the token endpoint of `shop` for a token, at `origin` when there is
+/// one. A refusal says what Shopify answered, never what was sent.
 pub(crate) async fn request_token(
     transport: &dyn Transport,
     shop: &ShopDomain,
+    origin: Option<&AdminOrigin>,
     user_agent: &str,
     encoding: Encoding,
     fields: &[(&str, &str)],
 ) -> Result<TokenData> {
-    let url = token_url(shop);
+    let url = token_url(shop, origin);
     let request = HttpRequest::new(Method::Post, &url)
         .with_header("Accept", "application/json")
         .with_header("User-Agent", user_agent)
         .with_timeout(Duration::from_secs(30));
+    let request = for_shop(request, shop, origin);
     let request = match encoding {
         Encoding::Form => request.with_form(fields),
         Encoding::Json => {
@@ -413,6 +430,8 @@ const FAILURE_HOLD: Duration = Duration::from_secs(5);
 pub(crate) struct Endpoint {
     pub transport: Arc<dyn Transport>,
     pub shop: ShopDomain,
+    /// Where the requests built from `shop` go instead of `https://{shop}`.
+    pub admin_origin: Option<AdminOrigin>,
     pub user_agent: String,
 }
 
@@ -643,6 +662,7 @@ async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<Token
             request_token(
                 transport,
                 &endpoint.shop,
+                endpoint.admin_origin.as_ref(),
                 &endpoint.user_agent,
                 Encoding::Form,
                 &fields,
@@ -672,6 +692,7 @@ async fn obtain(kind: &Kind, state: &State, endpoint: &Endpoint) -> Result<Token
             let mut token = request_token(
                 transport,
                 &endpoint.shop,
+                endpoint.admin_origin.as_ref(),
                 &endpoint.user_agent,
                 Encoding::Json,
                 &fields,

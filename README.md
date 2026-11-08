@@ -376,6 +376,43 @@ assert_eq!(my_code_under_test(&shopify).await?, "Test shop");
 assert_eq!(mock.graphql_requests()[0].operation_name.as_deref(), Some("Shop"));
 ```
 
+## A local Shopify: `admin_origin`
+
+`admin_origin` sends the requests built from the shop's domain to another
+origin than `https://{shop}`: a local stand-in of Shopify such as
+[local-storefront](https://github.com/0xtlt/local-storefront), a mock server,
+or a proxy. Only the scheme, the host and the port change: the paths are
+Shopify's, and the shop stays the shop (the session tokens verified, the
+tokens obtained, the errors).
+
+```rust,ignore
+use shopify_api::Shopify;
+use shopify_api::oauth::ShopifyApp;
+
+// A client: its GraphQL requests, and those of its client credentials or refresh token.
+let shopify = Shopify::builder("local-supply-co.myshopify.com")
+    .admin_origin("http://localhost:9292")
+    .access_token(token)
+    .build()?;
+
+// An app (feature `oauth`): its code and token exchanges, its install links,
+// and every client its `builder` and `client` make.
+let mut app = ShopifyApp::new(client_id, client_secret);
+if let Ok(origin) = std::env::var("LSF_URL") {
+    app = app.with_admin_origin(origin)?;
+}
+```
+
+The origin is `https://host[:port]`, or `http://` to `localhost`, `127.0.0.1`
+or `[::1]` only, so that an access token never leaves the machine in clear
+text; it has no path (a trailing `/` aside), query string, fragment or user.
+`build` and `with_admin_origin` refuse anything else with `Error::Config`,
+which does not show what was given. The requests sent to the origin name the
+shop in `X-Forwarded-Host`, and the install link in a last `shop` parameter,
+so that one origin can serve several shops. The addresses an answer gives (a
+bulk operation's results, a staged upload's target) are used as they come.
+Without `admin_origin`, nothing changes.
+
 ## Features
 
 | Feature | |
