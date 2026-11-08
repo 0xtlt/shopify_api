@@ -59,9 +59,11 @@ use serde_json::Value;
 use sha2::Sha256;
 
 use crate::auth::{Encoding, request_token};
+use crate::origin::admin_url;
 use crate::transport::{Transport, default_transport};
 use crate::{
-    Auth, Error, Result, ShopDomain, Shopify, ShopifyBuilder, TokenData, TokenStore, USER_AGENT,
+    AdminOrigin, Auth, Error, Result, ShopDomain, Shopify, ShopifyBuilder, TokenData, TokenStore,
+    USER_AGENT,
 };
 
 /// How far the `timestamp` of a signed query may be from now, as Shopify's libraries allow.
@@ -98,6 +100,7 @@ pub struct ShopifyApp {
     transport: Option<Arc<dyn Transport>>,
     token_store: Option<Arc<dyn TokenStore>>,
     user_agent: String,
+    admin_origin: Option<AdminOrigin>,
 }
 
 impl std::fmt::Debug for ShopifyApp {
@@ -106,6 +109,7 @@ impl std::fmt::Debug for ShopifyApp {
             .debug_struct("ShopifyApp")
             .field("client_id", &self.client_id)
             .field("token_store", &self.token_store.is_some())
+            .field("admin_origin", &self.admin_origin)
             .finish_non_exhaustive()
     }
 }
@@ -365,6 +369,7 @@ impl ShopifyApp {
             transport: default_transport().ok(),
             token_store: None,
             user_agent: USER_AGENT.to_string(),
+            admin_origin: None,
         }
     }
 
@@ -388,6 +393,43 @@ impl ShopifyApp {
         self
     }
 
+    /// Sends the requests built from a shop's domain to `origin` instead of
+    /// `https://{shop}`: the token requests of the code and token exchanges,
+    /// the install link of [`authorization_url`](Self::authorization_url), and
+    /// every request of the clients it [builds](Self::builder) (see
+    /// [`ShopifyBuilder::admin_origin`]). The shop stays the shop: the session
+    /// tokens it verifies are still those of `https://{shop}`.
+    ///
+    /// Fails with [`Error::Config`] when `origin` is not an [`AdminOrigin`]:
+    /// `https://host[:port]`, or `http://` to `localhost`, `127.0.0.1` or
+    /// `[::1]` only.
+    ///
+    /// ```
+    /// use shopify_api::ShopDomain;
+    /// use shopify_api::oauth::{AuthorizationRequest, ShopifyApp};
+    ///
+    /// // local-storefront's admin, OAuth and token exchange.
+    /// let app = ShopifyApp::new("client-id", "client-secret")
+    ///     .with_admin_origin("http://localhost:9292")?;
+    /// let shop = ShopDomain::new("local-supply-co")?;
+    /// let link = app.authorization_url(
+    ///     &shop,
+    ///     &AuthorizationRequest::new("http://localhost:3000/auth/callback", "state"),
+    /// );
+    /// assert!(link.starts_with("http://localhost:9292/admin/oauth/authorize?client_id=client-id&"));
+    /// assert!(link.ends_with("&shop=local-supply-co.myshopify.com"));
+    /// # Ok::<(), shopify_api::Error>(())
+    /// ```
+    pub fn with_admin_origin(mut self, origin: impl AsRef<str>) -> Result<Self> {
+        self.admin_origin = Some(AdminOrigin::new(origin.as_ref())?);
+        Ok(self)
+    }
+
+    /// The origin set with [`with_admin_origin`](Self::with_admin_origin), if any.
+    pub fn admin_origin(&self) -> Option<&AdminOrigin> {
+        self.admin_origin.as_ref()
+    }
+
     pub fn client_id(&self) -> &str {
         &self.client_id
     }
@@ -408,12 +450,13 @@ impl ShopifyApp {
 
     // ─── Clients ─────────────────────────────────────────────────────
 
-    /// A builder of a client of `shop` that uses the app's transport and
-    /// token store.
+    /// A builder of a client of `shop` that uses the app's transport, token
+    /// store and admin origin.
     pub fn builder(&self, shop: &ShopDomain) -> ShopifyBuilder {
         let mut builder = Shopify::builder(shop).user_agent(&self.user_agent);
         builder.transport.clone_from(&self.transport);
         builder.token_store.clone_from(&self.token_store);
+        builder.admin_origin = self.admin_origin.clone().map(Ok);
         builder
     }
 
@@ -432,6 +475,10 @@ impl ShopifyApp {
     // ─── Install link and callback ───────────────────────────────────
 
     /// The address that asks the merchant to install the app.
+    ///
+    /// With an [admin origin](Self::with_admin_origin), it is at that origin,
+    /// the browser's way to the stand-in of Shopify, and names the shop in a
+    /// last `shop` parameter, which the host no longer says.
     pub fn authorization_url(&self, shop: &ShopDomain, request: &AuthorizationRequest) -> String {
         let scope = request.scopes.join(",");
         let mut params = vec![
@@ -443,10 +490,14 @@ impl ShopifyApp {
         if request.online {
             params.push(("grant_options[]", "per-user"));
         }
+        if self.admin_origin.is_some() {
+            params.push(("shop", shop.as_str()));
+        }
         let query = serde_urlencoded::to_string(&params)
             .unwrap_or_default()
             .replace('+', "%20");
-        format!("https://{shop}/admin/oauth/authorize?{query}")
+        let path = format!("/admin/oauth/authorize?{query}");
+        admin_url(shop, self.admin_origin.as_ref(), &path)
     }
 
     /// Exchanges the `code` of a verified callback for a token.
@@ -483,6 +534,7 @@ impl ShopifyApp {
         request_token(
             self.transport()?,
             shop,
+            self.admin_origin.as_ref(),
             &self.user_agent,
             Encoding::Json,
             &fields,
@@ -766,6 +818,7 @@ impl ShopifyApp {
         request_token(
             self.transport()?,
             session.shop(),
+            self.admin_origin.as_ref(),
             &self.user_agent,
             Encoding::Json,
             &fields,
@@ -1302,5 +1355,66 @@ mod tests {
             "https://my-shop.myshopify.com/admin/oauth/authorize?client_id=client-id&scope=read_products%2Cwrite_orders\
              &redirect_uri=https%3A%2F%2Fexample.com%2Fauth%2Fcallback&state=nonce%201&grant_options%5B%5D=per-user"
         );
+    }
+
+    #[test]
+    fn an_admin_origin_moves_the_install_link_and_names_the_shop() {
+        let shop = ShopDomain::new("my-shop").unwrap();
+        let app = app().with_admin_origin("http://localhost:9292/").unwrap();
+        assert_eq!(
+            app.admin_origin().map(AdminOrigin::as_str),
+            Some("http://localhost:9292")
+        );
+        let link = app.authorization_url(
+            &shop,
+            &AuthorizationRequest::new("http://localhost:3000/auth/callback", "s")
+                .scopes(["read_products"])
+                .online(),
+        );
+        assert_eq!(
+            link,
+            "http://localhost:9292/admin/oauth/authorize?client_id=client-id&scope=read_products\
+             &redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fcallback&state=s&grant_options%5B%5D=per-user\
+             &shop=my-shop.myshopify.com"
+        );
+        // The clients it builds go there too, for the same shop.
+        struct Unused;
+        impl Transport for Unused {
+            fn send(
+                &self,
+                _: crate::transport::HttpRequest,
+            ) -> crate::transport::BoxFuture<
+                '_,
+                std::result::Result<
+                    crate::transport::HttpResponse,
+                    crate::transport::TransportError,
+                >,
+            > {
+                Box::pin(async { Err(crate::transport::TransportError::new("not sent")) })
+            }
+        }
+        let client = app
+            .clone()
+            .with_transport(Unused)
+            .builder(&shop)
+            .access_token("t")
+            .build()
+            .unwrap();
+        assert_eq!(client.admin_origin(), app.admin_origin());
+        assert_eq!(client.shop(), &shop);
+        // A session token is still that of the shop's own admin.
+        let now = 1_800_000_000;
+        let token = app.sign_session_token(&claims(now));
+        assert_eq!(
+            app.verify_session_token_at(&token, at(now)).unwrap().shop(),
+            &shop
+        );
+
+        for invalid in ["http://lsf.example.com", "http://localhost:9292/admin"] {
+            assert!(matches!(
+                ShopifyApp::new("client-id", "client-secret").with_admin_origin(invalid),
+                Err(Error::Config(_))
+            ));
+        }
     }
 }

@@ -67,6 +67,7 @@ mod client;
 mod decode;
 mod error;
 mod graphql;
+mod origin;
 mod pagination;
 pub mod schema;
 mod shop;
@@ -90,6 +91,7 @@ pub use graphql::{
     Cost, GraphqlError, InputObject, IntoVariable, InvalidValueReason, Location, Maybe, Operation,
     OperationKind, RawResponse, Response, ThrottleStatus, UserError, VariableType,
 };
+pub use origin::AdminOrigin;
 pub use pagination::Page;
 pub use shop::ShopDomain;
 pub use version::ApiVersion;

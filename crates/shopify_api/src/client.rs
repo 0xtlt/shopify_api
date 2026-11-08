@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::auth::{Endpoint, Tokens};
+use crate::origin::admin_url;
 use crate::transport::{Transport, default_transport};
-use crate::{ApiVersion, Auth, Error, Result, ShopDomain, TokenData, TokenStore};
+use crate::{AdminOrigin, ApiVersion, Auth, Error, Result, ShopDomain, TokenData, TokenStore};
 
 /// The `User-Agent` of every request, unless [`ShopifyBuilder::user_agent`] sets another.
 pub const USER_AGENT: &str = concat!("shopify_api/", env!("CARGO_PKG_VERSION"), " (Rust)");
@@ -46,6 +47,7 @@ impl std::fmt::Debug for Shopify {
         formatter
             .debug_struct("Shopify")
             .field("shop", &self.shared.endpoint.shop)
+            .field("admin_origin", &self.shared.endpoint.admin_origin)
             .field("api_version", &self.pinned)
             .field("retry", &self.retry)
             .finish_non_exhaustive()
@@ -62,6 +64,7 @@ impl Shopify {
     pub fn builder(shop: impl AsRef<str>) -> ShopifyBuilder {
         ShopifyBuilder {
             shop: shop.as_ref().to_string(),
+            admin_origin: None,
             auth: None,
             api_version: None,
             transport: None,
@@ -74,6 +77,12 @@ impl Shopify {
 
     pub fn shop(&self) -> &ShopDomain {
         &self.shared.endpoint.shop
+    }
+
+    /// The origin requests go to instead of `https://{shop}`, when
+    /// [`ShopifyBuilder::admin_origin`] set one.
+    pub fn admin_origin(&self) -> Option<&AdminOrigin> {
+        self.shared.endpoint.admin_origin.as_ref()
     }
 
     /// The version requests go to: the one pinned with
@@ -106,11 +115,14 @@ impl Shopify {
         }
     }
 
-    /// `https://{shop}/admin/api/{version}/graphql.json`.
+    /// `https://{shop}/admin/api/{version}/graphql.json`, or the same path at
+    /// the [admin origin](ShopifyBuilder::admin_origin) when there is one.
     pub fn graphql_url(&self, version: ApiVersion) -> String {
-        format!(
-            "https://{}/admin/api/{version}/graphql.json",
-            self.shared.endpoint.shop
+        let endpoint = &self.shared.endpoint;
+        admin_url(
+            &endpoint.shop,
+            endpoint.admin_origin.as_ref(),
+            &format!("/admin/api/{version}/graphql.json"),
         )
     }
 
@@ -320,6 +332,9 @@ fn jitter_fraction() -> f64 {
 #[must_use]
 pub struct ShopifyBuilder {
     shop: String,
+    /// Checked when it is given, refused by `build`. Set by
+    /// `ShopifyApp::builder` too, with the app's.
+    pub(crate) admin_origin: Option<Result<AdminOrigin>>,
     auth: Option<Auth>,
     api_version: Option<ApiVersion>,
     /// Set by `ShopifyApp::builder` too, with the app's.
@@ -335,6 +350,7 @@ impl std::fmt::Debug for ShopifyBuilder {
         formatter
             .debug_struct("ShopifyBuilder")
             .field("shop", &self.shop)
+            .field("admin_origin", &self.admin_origin)
             .field("auth", &self.auth)
             .field("api_version", &self.api_version)
             .field("retry", &self.retry)
@@ -376,6 +392,51 @@ impl ShopifyBuilder {
         self
     }
 
+    /// Sends the requests built from the shop's domain to `origin` instead of
+    /// `https://{shop}`: the GraphQL requests, and the token requests of the
+    /// client credentials grant and of refresh tokens. Only the scheme, the
+    /// host and the port change; the shop stays the shop, and each request
+    /// names it in `X-Forwarded-Host`. For a local stand-in of Shopify, such
+    /// as [local-storefront](https://github.com/0xtlt/local-storefront), or a
+    /// proxy.
+    ///
+    /// `origin` is an [`AdminOrigin`]: `https://host[:port]`, or `http://`
+    /// to `localhost`, `127.0.0.1` or `[::1]` only. [`build`](Self::build)
+    /// fails with [`Error::Config`] when it is not one. Without it, the
+    /// requests go to `https://{shop}`.
+    ///
+    /// ```
+    /// # #[cfg(any(feature = "rustls", feature = "native-tls"))]
+    /// # {
+    /// use shopify_api::{ApiVersion, Shopify};
+    ///
+    /// // The Admin API of local-storefront: the token picks the shop.
+    /// let shopify = Shopify::builder("local-supply-co.myshopify.com")
+    ///     .admin_origin("http://localhost:9292")
+    ///     .access_token("shpat_…")
+    ///     .build()?;
+    /// assert_eq!(
+    ///     shopify.graphql_url(ApiVersion::V2026_10),
+    ///     "http://localhost:9292/admin/api/2026-10/graphql.json"
+    /// );
+    /// assert_eq!(shopify.shop().as_str(), "local-supply-co.myshopify.com");
+    ///
+    /// // Not in clear text off this machine.
+    /// assert!(
+    ///     Shopify::builder("my-shop")
+    ///         .admin_origin("http://lsf.example.com")
+    ///         .access_token("shpat_…")
+    ///         .build()
+    ///         .is_err()
+    /// );
+    /// # }
+    /// # Ok::<(), shopify_api::Error>(())
+    /// ```
+    pub fn admin_origin(mut self, origin: impl AsRef<str>) -> Self {
+        self.admin_origin = Some(AdminOrigin::new(origin.as_ref()));
+        self
+    }
+
     pub fn retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
@@ -401,6 +462,7 @@ impl ShopifyBuilder {
 
     pub fn build(self) -> Result<Shopify> {
         let shop = ShopDomain::new(&self.shop)?;
+        let admin_origin = self.admin_origin.transpose()?;
         let auth = self.auth.ok_or_else(|| {
             Error::auth("no credentials: call `access_token`, `client_credentials` or `auth`")
         })?;
@@ -413,6 +475,7 @@ impl ShopifyBuilder {
                 endpoint: Arc::new(Endpoint {
                     transport,
                     shop,
+                    admin_origin,
                     user_agent: self.user_agent,
                 }),
                 tokens: Tokens::new(auth, self.token_store, self.refresh_leeway),
@@ -510,6 +573,58 @@ mod tests {
             shopify.graphql_url(ApiVersion::V2026_10),
             "https://shop.myshopify.com/admin/api/2026-10/graphql.json"
         );
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn an_admin_origin_moves_the_graphql_url_only() {
+        let shopify = Shopify::builder("my-shop")
+            .admin_origin("http://localhost:9292/")
+            .access_token("t")
+            .transport(crate::testing::MockTransport::new())
+            .build()
+            .unwrap();
+        assert_eq!(
+            shopify.graphql_url(ApiVersion::V2026_10),
+            "http://localhost:9292/admin/api/2026-10/graphql.json"
+        );
+        assert_eq!(shopify.shop().as_str(), "my-shop.myshopify.com");
+        assert_eq!(
+            shopify.admin_origin().map(AdminOrigin::as_str),
+            Some("http://localhost:9292")
+        );
+        assert!(format!("{shopify:?}").contains("http://localhost:9292"));
+
+        let without = Shopify::builder("my-shop")
+            .access_token("t")
+            .transport(crate::testing::MockTransport::new())
+            .build()
+            .unwrap();
+        assert_eq!(without.admin_origin(), None);
+        assert_eq!(
+            without.graphql_url(ApiVersion::V2026_10),
+            "https://my-shop.myshopify.com/admin/api/2026-10/graphql.json"
+        );
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn building_refuses_an_invalid_admin_origin() {
+        for origin in [
+            "http://lsf.example.com",
+            "http://localhost:9292/admin",
+            "localhost:9292",
+            "http://user:shpat_secret@localhost:9292",
+        ] {
+            let builder = Shopify::builder("my-shop")
+                .admin_origin(origin)
+                .access_token("t")
+                .transport(crate::testing::MockTransport::new());
+            assert!(!format!("{builder:?}").contains("shpat_secret"));
+            let error = builder.build().unwrap_err();
+            assert!(matches!(error, Error::Config(_)), "{origin}: {error:?}");
+            assert!(!error.to_string().contains("shpat_secret"));
+        }
     }
 
     #[test]
