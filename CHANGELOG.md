@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-rc.4 (2026-11-08)
+
+The fourth release candidate: rc.3 and the changes under "Since 1.0.0-rc.3"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.4"`.
+
 ## 1.0.0-rc.3 (2026-10-27)
 
 The third release candidate: rc.2 and the changes under "Since 1.0.0-rc.2"
