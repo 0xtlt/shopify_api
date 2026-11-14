@@ -360,6 +360,22 @@ fn check_admin_issuer(issuer: &str, shop: &ShopDomain) -> Result<()> {
     }
 }
 
+/// Checks that `iss` is a page of `shop`: its origin, then `/` and a path.
+/// Comparing the origin and the `/` together leaves no room for another host
+/// (`https://{shop}.evil.example/…`), a port, a user or `http://`.
+fn check_shop_issuer(issuer: &str, shop: &ShopDomain) -> Result<()> {
+    let path = issuer
+        .strip_prefix(shop.origin().as_str())
+        .and_then(|rest| rest.strip_prefix('/'));
+    if path.is_some_and(|path| !path.is_empty()) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "the `iss` of the session token is not on its `dest`",
+        ))
+    }
+}
+
 impl ShopifyApp {
     pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
@@ -674,7 +690,12 @@ impl ShopifyApp {
     /// extension (`shopify.sessionToken.get()`): signed by the app's secret with
     /// HS256, issued for the app, within its dates, with a `dest` that is a
     /// `*.myshopify.com` domain (Shopify writes it without `https://`). An
-    /// `iss`, when there is one, must be exactly `https://{shop}.myshopify.com/admin`.
+    /// `iss`, when there is one, must be a path on that same shop:
+    /// `https://{shop}.myshopify.com/` followed by a path, such as `/admin`.
+    /// Checkout extension tokens have no `iss`; customer account extension
+    /// tokens were seen with `https://{shop}.myshopify.com/checkouts`, a value
+    /// Shopify's documentation does not list. Only the shop of `iss` is
+    /// checked, not its path.
     ///
     /// Any buyer of the shop can get such a token: it proves the shop and,
     /// when one is logged in, the customer, never a staff member. It is a type
@@ -694,7 +715,7 @@ impl ShopifyApp {
             .ok_or_else(|| invalid("the session token has no `dest`"))?;
         let shop = shop_of_host(destination.strip_prefix("https://").unwrap_or(destination))?;
         if let Some(issuer) = verified.claim("iss") {
-            check_admin_issuer(issuer, &shop)?;
+            check_shop_issuer(issuer, &shop)?;
         }
         Ok(ExtensionSessionToken {
             // Only a customer's GID: the `sub` of an admin token is a staff member.
@@ -1170,6 +1191,8 @@ mod tests {
             "https://my-shop.myshopify.com/admin/",
             "https://my-shop.myshopify.com/adminx",
             "http://my-shop.myshopify.com/admin",
+            // The `iss` of a customer account extension: not the admin.
+            "https://my-shop.myshopify.com/checkouts",
         ] {
             let mut token = claims(now);
             token["iss"] = json!(issuer);
@@ -1248,13 +1271,27 @@ mod tests {
         assert_eq!(admin.customer(), None);
         assert_eq!(admin.claims()["sub"], claims(now)["sub"]);
 
-        // An `iss` is compared whole here as well.
-        let mut prefixed = extension_claims(now);
-        prefixed["iss"] = json!("https://store-name.myshopify.com.evil.example/admin");
-        assert_eq!(
-            verify(&prefixed).unwrap_err().to_string(),
-            "verification failed: the `iss` of the session token is not the admin of its `dest`"
-        );
+        // The `iss` of a customer account extension: a path on the same shop.
+        let mut customer_account = extension_claims(now);
+        customer_account["iss"] = json!("https://store-name.myshopify.com/checkouts");
+        assert!(verify(&customer_account).is_ok());
+        // Another shop, a host that only starts with the shop's, `http://`, or
+        // the shop with no path.
+        for issuer in [
+            "https://other-shop.myshopify.com/checkouts",
+            "https://store-name.myshopify.com.evil.example/checkouts",
+            "http://store-name.myshopify.com/checkouts",
+            "https://store-name.myshopify.com",
+            "https://store-name.myshopify.com/",
+        ] {
+            let mut token = extension_claims(now);
+            token["iss"] = json!(issuer);
+            assert_eq!(
+                verify(&token).unwrap_err().to_string(),
+                "verification failed: the `iss` of the session token is not on its `dest`",
+                "{issuer}"
+            );
+        }
         // A bare handle, or another host, is still not a shop.
         for destination in ["store-name", "store-name.example.com", "https://store-name"] {
             let mut token = extension_claims(now);
