@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-rc.5 (2026-11-14)
 
-- Fixed: `verify_extension_session_token` refused the tokens of customer account UI extensions, whose `iss` is `https://{shop}.myshopify.com/checkouts` (seen on a development store; Shopify's documentation does not list it). An `iss`, when there is one, now passes when it is `https://{shop}.myshopify.com/` followed by a path, on the shop of `dest`: another shop, a host that only starts with the shop's, `http://` or the shop with no path are still refused. `verify_session_token` still takes only an `iss` of exactly `https://{shop}.myshopify.com/admin`. ([openshop-rust#83](https://github.com/0xtlt/openshop-rust/issues/83))
+The fifth release candidate: rc.4 and the changes under "Since 1.0.0-rc.4"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.5"`.
 
 ## 1.0.0-rc.4 (2026-11-08)
 
@@ -27,6 +28,10 @@ takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
 ## 1.0.0 (Unreleased)
 
 A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
+
+### Since 1.0.0-rc.4
+
+- Fixed: `verify_extension_session_token` refused the tokens of customer account UI extensions, whose `iss` is `https://{shop}.myshopify.com/checkouts` (seen on a development store; Shopify's documentation does not list it). An `iss`, when there is one, now passes when it is `https://{shop}.myshopify.com/` followed by a path, on the shop of `dest`: another shop, a host that only starts with the shop's, `http://` or the shop with no path are still refused. `verify_session_token` still takes only an `iss` of exactly `https://{shop}.myshopify.com/admin`. ([openshop-rust#83](https://github.com/0xtlt/openshop-rust/issues/83))
 
 ### Since 1.0.0-rc.3
 
