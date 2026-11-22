@@ -151,7 +151,7 @@ fn respond(request: &Received) -> (&'static str, Vec<u8>) {
 }
 
 fn session_claims() -> Value {
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     json!({
         "iss": "https://my-shop.myshopify.com/admin",
         "dest": "https://my-shop.myshopify.com",

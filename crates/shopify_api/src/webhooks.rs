@@ -65,8 +65,8 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
+use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -373,8 +373,8 @@ pub struct WebhookSubscription {
     pub name: Option<String>,
     /// The API version of the payloads.
     pub api_version: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 #[derive(Deserialize)]
@@ -388,8 +388,8 @@ struct Wire {
     include_fields: Vec<String>,
     metafield_namespaces: Vec<String>,
     name: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    created_at: Timestamp,
+    updated_at: Timestamp,
     api_version: WireVersion,
 }
 
@@ -773,8 +773,8 @@ mod tests {
             metafield_namespaces: Vec::new(),
             name: None,
             api_version: "2026-10".to_string(),
-            created_at: DateTime::default(),
-            updated_at: DateTime::default(),
+            created_at: Timestamp::default(),
+            updated_at: Timestamp::default(),
         };
         assert!(spec.matches(&subscription));
         subscription.uri = "https://example.com/other".to_string();

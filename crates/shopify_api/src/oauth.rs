@@ -53,8 +53,8 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::alphabet::URL_SAFE;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-use chrono::{DateTime, TimeZone, Utc};
 use hmac::{Hmac, KeyInit, Mac};
+use jiff::Timestamp;
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -216,7 +216,7 @@ pub struct SessionToken {
     shop: ShopDomain,
     user_id: Option<String>,
     session_id: Option<String>,
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
     claims: Value,
     token: String,
 }
@@ -249,7 +249,7 @@ impl SessionToken {
         self.session_id.as_deref()
     }
 
-    pub fn expires_at(&self) -> DateTime<Utc> {
+    pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
 
@@ -277,7 +277,7 @@ impl SessionToken {
 pub struct ExtensionSessionToken {
     shop: ShopDomain,
     customer: Option<String>,
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
     claims: Value,
     token: String,
 }
@@ -308,7 +308,7 @@ impl ExtensionSessionToken {
         self.customer.as_deref()
     }
 
-    pub fn expires_at(&self) -> DateTime<Utc> {
+    pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
 
@@ -326,7 +326,7 @@ impl ExtensionSessionToken {
 /// The claims of a session token whose signature, dates and audience were verified.
 struct Verified {
     claims: Value,
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
     token: String,
 }
 
@@ -569,10 +569,10 @@ impl ShopifyApp {
     /// parameters but `hmac` and `signature`, sorted by name, form-encoded,
     /// the values of a repeated one (`ids[]`) joined with commas.
     pub fn verify_query(&self, query: &str) -> Result<SignedQuery> {
-        self.verify_query_at(query, Utc::now())
+        self.verify_query_at(query, Timestamp::now())
     }
 
-    fn verify_query_at(&self, query: &str, now: DateTime<Utc>) -> Result<SignedQuery> {
+    fn verify_query_at(&self, query: &str, now: Timestamp) -> Result<SignedQuery> {
         let params = parse_query(query)?;
         self.verify_signed(params, "hmac", admin_message, "query", now)
     }
@@ -585,7 +585,7 @@ impl ShopifyApp {
         key: &str,
         message: fn(&[(String, String)]) -> String,
         what: &str,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<SignedQuery> {
         let signature =
             single(&params, key)?.ok_or_else(|| invalid(format!("the query has no `{key}`")))?;
@@ -625,10 +625,10 @@ impl ShopifyApp {
     /// The whole strings are sorted, not the names: `page2=x` comes before
     /// `page=1`.
     pub fn verify_app_proxy(&self, query: &str) -> Result<SignedQuery> {
-        self.verify_app_proxy_at(query, Utc::now())
+        self.verify_app_proxy_at(query, Timestamp::now())
     }
 
-    fn verify_app_proxy_at(&self, query: &str, now: DateTime<Utc>) -> Result<SignedQuery> {
+    fn verify_app_proxy_at(&self, query: &str, now: Timestamp) -> Result<SignedQuery> {
         let params = parse_query(query)?;
         for name in PROXY_SINGLE_VALUES {
             single(&params, name)?;
@@ -657,10 +657,10 @@ impl ShopifyApp {
     /// extensions, which any buyer gets, are refused here: verify them with
     /// [`verify_extension_session_token`](Self::verify_extension_session_token).
     pub fn verify_session_token(&self, token: &str) -> Result<SessionToken> {
-        self.verify_session_token_at(token, Utc::now())
+        self.verify_session_token_at(token, Timestamp::now())
     }
 
-    fn verify_session_token_at(&self, token: &str, now: DateTime<Utc>) -> Result<SessionToken> {
+    fn verify_session_token_at(&self, token: &str, now: Timestamp) -> Result<SessionToken> {
         let verified = self.verify_jwt(token, now)?;
         let destination = verified
             .claim("dest")
@@ -701,13 +701,13 @@ impl ShopifyApp {
     /// when one is logged in, the customer, never a staff member. It is a type
     /// of its own so that it cannot reach what a [`SessionToken`] opens.
     pub fn verify_extension_session_token(&self, token: &str) -> Result<ExtensionSessionToken> {
-        self.verify_extension_session_token_at(token, Utc::now())
+        self.verify_extension_session_token_at(token, Timestamp::now())
     }
 
     fn verify_extension_session_token_at(
         &self,
         token: &str,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<ExtensionSessionToken> {
         let verified = self.verify_jwt(token, now)?;
         let destination = verified
@@ -730,7 +730,7 @@ impl ShopifyApp {
     }
 
     /// The signature, dates and audience of a session token, the same for every kind.
-    fn verify_jwt(&self, token: &str, now: DateTime<Utc>) -> Result<Verified> {
+    fn verify_jwt(&self, token: &str, now: Timestamp) -> Result<Verified> {
         let token = token.trim();
         let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let mut parts = token.split('.');
@@ -758,7 +758,7 @@ impl ShopifyApp {
         let claims: Value = serde_json::from_slice(&decode(payload)?)
             .map_err(|_| invalid("the session token has invalid claims"))?;
         let time = |name: &str| claims.get(name).and_then(Value::as_i64);
-        let now = now.timestamp();
+        let now = now.as_second();
         let expires = time("exp").ok_or_else(|| invalid("the session token has no `exp`"))?;
         if now > expires.saturating_add(JWT_TOLERANCE_SECONDS) {
             return Err(invalid("the session token has expired"));
@@ -779,10 +779,8 @@ impl ShopifyApp {
             return Err(invalid("the session token was issued for another app"));
         }
         Ok(Verified {
-            expires_at: Utc
-                .timestamp_opt(expires, 0)
-                .single()
-                .ok_or_else(|| invalid("the `exp` of the session token is out of range"))?,
+            expires_at: Timestamp::from_second(expires)
+                .map_err(|_| invalid("the `exp` of the session token is out of range"))?,
             claims,
             token: token.to_string(),
         })
@@ -864,12 +862,12 @@ fn single<'a>(params: &'a [(String, String)], name: &str) -> Result<Option<&'a s
     Ok(first)
 }
 
-fn check_timestamp(params: &[(String, String)], now: DateTime<Utc>) -> Result<()> {
+fn check_timestamp(params: &[(String, String)], now: Timestamp) -> Result<()> {
     let timestamp: i64 = single(params, "timestamp")?
         .and_then(|timestamp| timestamp.parse().ok())
         .ok_or_else(|| invalid("the query has no valid `timestamp`"))?;
     // `abs_diff`: any `i64` timestamp, however far, is a distance, not an overflow.
-    if now.timestamp().abs_diff(timestamp) > QUERY_TOLERANCE_SECONDS.unsigned_abs() {
+    if now.as_second().abs_diff(timestamp) > QUERY_TOLERANCE_SECONDS.unsigned_abs() {
         return Err(invalid(
             "the `timestamp` of the query is more than 90 seconds away",
         ));
@@ -937,8 +935,8 @@ mod tests {
         ShopifyApp::new("client-id", "hush")
     }
 
-    fn at(timestamp: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(timestamp, 0).unwrap()
+    fn at(timestamp: i64) -> Timestamp {
+        Timestamp::from_second(timestamp).unwrap()
     }
 
     #[test]
@@ -1024,7 +1022,7 @@ mod tests {
         );
         let query = format!(
             "timestamp={}&shop=a.myshopify.com&host=YWRtaW4",
-            Utc::now().timestamp()
+            Timestamp::now().as_second()
         );
         let signature = app().sign_query(&query).unwrap();
         assert!(
@@ -1040,7 +1038,7 @@ mod tests {
 
     #[test]
     fn verifies_app_proxy_requests() {
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         let query =
             format!("shop=a.myshopify.com&path_prefix=%2Fapps%2Fx&timestamp={now}&extra=1&extra=2");
         assert_eq!(
@@ -1338,7 +1336,7 @@ mod tests {
     #[test]
     fn an_empty_secret_verifies_nothing() {
         let unset = ShopifyApp::new("client-id", "");
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         let query = format!("shop=a.myshopify.com&timestamp={now}");
         let signature = unset.sign_query(&query).unwrap();
         assert_eq!(
@@ -1360,7 +1358,7 @@ mod tests {
 
     #[test]
     fn debug_hides_codes_and_tokens() {
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         let query = format!("code=secret-code&shop=a.myshopify.com&timestamp={now}");
         let signature = app().sign_query(&query).unwrap();
         let callback = app()

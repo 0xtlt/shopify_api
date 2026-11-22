@@ -37,7 +37,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 shopify_api_macros.workspace = true
 
-chrono.workspace = true
+jiff.workspace = true
 # `Stream`, which the bulk downloads implement: the trait the async ecosystem shares.
 futures-core.workspace = true
 reqwest = { workspace = true, optional = true }

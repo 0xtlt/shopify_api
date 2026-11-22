@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -139,11 +139,11 @@ pub struct TokenData {
     pub scope: Option<String>,
     /// When the access token expires; `None` when it does not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refresh_token_expires_at: Option<DateTime<Utc>>,
+    pub refresh_token_expires_at: Option<Timestamp>,
     /// For an online token: the staff member it acts for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub associated_user: Option<AssociatedUser>,
@@ -168,9 +168,7 @@ impl TokenData {
 
     /// The access token expires within `leeway`, or has expired.
     pub fn expires_within(&self, leeway: Duration) -> bool {
-        let limit = chrono::Duration::from_std(leeway)
-            .ok()
-            .and_then(|leeway| Utc::now().checked_add_signed(leeway));
+        let limit = Timestamp::now().checked_add(leeway).ok();
         self.expires_at.is_some_and(|expires_at| match limit {
             Some(limit) => expires_at <= limit,
             // A leeway beyond the calendar: everything expires within it.
@@ -183,7 +181,7 @@ impl TokenData {
         self.refresh_token.is_some()
             && self
                 .refresh_token_expires_at
-                .is_none_or(|expires_at| Utc::now() < expires_at)
+                .is_none_or(|expires_at| Timestamp::now() < expires_at)
     }
 
     /// The granted scopes.
@@ -302,9 +300,9 @@ impl TokenResponse {
     fn into_token(self) -> TokenData {
         // Whatever Shopify says, a date that exists: never in the past, at most the last one.
         let at = |seconds: i64| {
-            chrono::Duration::try_seconds(seconds.max(0))
-                .and_then(|duration| Utc::now().checked_add_signed(duration))
-                .unwrap_or(DateTime::<Utc>::MAX_UTC)
+            Timestamp::now()
+                .checked_add(SignedDuration::from_secs(seconds.max(0)))
+                .unwrap_or(Timestamp::MAX)
         };
         TokenData {
             access_token: self.access_token,
@@ -717,7 +715,7 @@ mod tests {
     fn expiry_uses_the_leeway() {
         let mut token = TokenData::new("token");
         assert!(!token.expires_within(Duration::from_secs(365 * 86_400)));
-        token.expires_at = Some(Utc::now() + chrono::Duration::minutes(1));
+        token.expires_at = Some(Timestamp::now() + SignedDuration::from_mins(1));
         assert!(token.expires_within(Duration::from_secs(5 * 60)));
         assert!(!token.expires_within(Duration::from_secs(1)));
         assert!(token.expires_within(Duration::MAX));
@@ -729,7 +727,7 @@ mod tests {
         assert!(!token.can_refresh());
         token.refresh_token = Some("refresh".to_string());
         assert!(token.can_refresh());
-        token.refresh_token_expires_at = Some(Utc::now() - chrono::Duration::seconds(1));
+        token.refresh_token_expires_at = Some(Timestamp::now() - SignedDuration::from_secs(1));
         assert!(!token.can_refresh());
     }
 
@@ -748,12 +746,21 @@ mod tests {
     fn tokens_round_trip_through_json() {
         let mut token = TokenData::new("shpat");
         token.scope = Some("read_products, write_orders".to_string());
-        token.expires_at = Some(Utc::now());
+        token.expires_at = Some(Timestamp::now());
         let json = serde_json::to_string(&token).unwrap();
         assert_eq!(serde_json::from_str::<TokenData>(&json).unwrap(), token);
         assert_eq!(token.scopes(), ["read_products", "write_orders"]);
         // Fields left out of a stored token are read as absent.
         let minimal: TokenData = serde_json::from_str(r#"{"access_token":"shpat"}"#).unwrap();
         assert_eq!(minimal, TokenData::new("shpat"));
+        // A token stored by the releases on chrono, before 1.0.0, still reads.
+        let stored: TokenData = serde_json::from_str(
+            r#"{"access_token":"shpat","expires_at":"2026-11-14T10:01:47.123456789Z","refresh_token_expires_at":"2026-12-14T10:01:47+00:00"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stored.expires_at,
+            Some("2026-11-14T10:01:47.123456789Z".parse().unwrap())
+        );
     }
 }

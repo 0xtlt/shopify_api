@@ -55,7 +55,8 @@ one wherever it is held (its clones keep the old token).
 error of yours; `TokenStoreFuture` is `transport::BoxFuture`. While a save
 fails, the client sends nothing: each call tries the save again first, and
 fails with `Error::TokenStore`. `TokenData` has the same fields, two more for
-online tokens, and reads the JSON 0.10 stored. It is `#[non_exhaustive]`: build
+online tokens, and reads the JSON 0.10 stored; its dates are
+`jiff::Timestamp` (see [Dates](#dates)). It is `#[non_exhaustive]`: build
 it with `TokenData::new(token)` (0.10's `TokenData::never_expiring`), then set
 its fields, instead of a struct literal. `expires_within` takes a
 `std::time::Duration`.
@@ -76,6 +77,22 @@ one of the schema file, else the latest on the first build), and an untyped
 call to 2026-10: `ApiVersion::default()` and `ApiVersion::DEFAULT` move from
 2026-04 to 2026-10. 0.10 sent everything to 2026-04 by default: pin it with
 `.api_version(ApiVersion::V2026_04)` to keep that.
+
+## Dates
+
+The dates are `jiff::Timestamp`, an instant in UTC, where 0.10 had
+`chrono::DateTime<Utc>`: chrono is no longer maintained
+([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)).
+They serialize as before, an RFC 3339 string, so a stored token still reads.
+Where the rest of your code keeps chrono, convert from the seconds and
+nanoseconds:
+
+```rust
+// jiff → chrono
+let expires = chrono::DateTime::from_timestamp(at.as_second(), at.subsec_nanosecond() as u32);
+// chrono → jiff
+let at = jiff::Timestamp::new(date.timestamp(), date.timestamp_subsec_nanos() as i32)?;
+```
 
 ## Errors
 
@@ -183,7 +200,7 @@ its results as generated types, in place of a hand-written struct and
 `bulk_query_rows`.
 
 `object_count`, `root_object_count` and `file_size` are numbers, and
-`created_at` and `completed_at` are `chrono::DateTime<Utc>`.
+`created_at` and `completed_at` are `jiff::Timestamp`.
 `wait_for_bulk_operation` returns the operation once it ends, as 0.10's
 `wait_for_bulk` did: `Ok` with `status = Failed` (or `Canceled`) for one that
 did not complete, so keep checking `status`. The calls that start, wait and

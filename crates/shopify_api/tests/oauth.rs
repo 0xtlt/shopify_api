@@ -12,7 +12,7 @@ fn app(mock: &MockTransport) -> ShopifyApp {
 }
 
 fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    jiff::Timestamp::now().as_second()
 }
 
 #[tokio::test]
@@ -223,7 +223,7 @@ async fn the_clients_of_an_app_save_their_renewed_tokens() {
     let app = app(&mock).with_token_store(saved.clone());
 
     let mut token = shopify_api::TokenData::new("shpat_1");
-    token.expires_at = Some(chrono::Utc::now());
+    token.expires_at = Some(jiff::Timestamp::now());
     token.refresh_token = Some("shprt_1".to_string());
     let shop = shopify_api::ShopDomain::new("my-shop").unwrap();
     let shopify = app.client(&shop, token).unwrap();

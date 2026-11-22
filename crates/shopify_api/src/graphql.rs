@@ -229,13 +229,10 @@ impl Shopify {
 /// value that is neither. A date already past is no wait; a wait too long
 /// for a `Duration` is the longest one.
 fn retry_after(response: &crate::transport::HttpResponse) -> Option<std::time::Duration> {
-    retry_after_from(response.header("Retry-After")?, chrono::Utc::now())
+    retry_after_from(response.header("Retry-After")?, jiff::Timestamp::now())
 }
 
-fn retry_after_from(
-    value: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<std::time::Duration> {
+fn retry_after_from(value: &str, now: jiff::Timestamp) -> Option<std::time::Duration> {
     let value = value.trim();
     if let Ok(seconds) = value.parse::<f64>() {
         if seconds.is_nan() || seconds < 0.0 {
@@ -245,8 +242,10 @@ fn retry_after_from(
             std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX),
         );
     }
-    let date = chrono::DateTime::parse_from_rfc2822(value).ok()?;
-    Some((date.to_utc() - now).to_std().unwrap_or_default())
+    let date = jiff::fmt::rfc2822::DateTimeParser::new()
+        .parse_timestamp(value)
+        .ok()?;
+    Some(std::time::Duration::try_from(date.duration_since(now)).unwrap_or_default())
 }
 
 /// The `data` and `extensions` of an answer without errors.
@@ -268,9 +267,7 @@ mod tests {
 
     #[test]
     fn retry_after_reads_seconds_and_http_dates() {
-        let now = chrono::DateTime::parse_from_rfc3339("1994-11-06T08:47:37Z")
-            .unwrap()
-            .to_utc();
+        let now: jiff::Timestamp = "1994-11-06T08:47:37Z".parse().unwrap();
         let read = |value| retry_after_from(value, now);
         assert_eq!(read("120"), Some(Duration::from_secs(120)));
         assert_eq!(read(" 2.5 "), Some(Duration::from_millis(2500)));

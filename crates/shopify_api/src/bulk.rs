@@ -60,7 +60,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
@@ -112,9 +112,9 @@ pub struct BulkOperation {
     pub status: BulkOperationStatus,
     /// Why it failed: `ACCESS_DENIED`, `INTERNAL_SERVER_ERROR`, `TIMEOUT`.
     pub error_code: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// When it completed, failed or was canceled.
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<Timestamp>,
     /// The objects written so far, nested ones included.
     pub object_count: u64,
     /// The top-level objects written so far.
@@ -276,8 +276,8 @@ struct Wire {
     kind: String,
     status: String,
     error_code: Option<String>,
-    created_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
+    created_at: Timestamp,
+    completed_at: Option<Timestamp>,
     object_count: String,
     root_object_count: String,
     file_size: Option<String>,

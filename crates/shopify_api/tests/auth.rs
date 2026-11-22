@@ -197,7 +197,7 @@ async fn an_expiring_token_is_refreshed_and_saved() {
     shopify_like(&mock, 3600, vec![]);
     let saved = Saved::default();
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
     let shopify = builder(&mock)
         .auth(Auth::expiring_token("id", "secret", stored))
@@ -229,9 +229,10 @@ async fn an_expired_refresh_token_says_what_to_do() {
     let mock = MockTransport::new();
     shopify_like(&mock, 3600, vec![]);
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
-    stored.refresh_token_expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.refresh_token_expires_at =
+        Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     let shopify = builder(&mock)
         .auth(Auth::expiring_token("id", "secret", stored))
         .build()
@@ -357,7 +358,7 @@ async fn a_refused_refresh_has_its_status_and_code() {
         &json!({ "error": "invalid_grant", "error_description": "The refresh token is revoked." }),
     ));
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
     let shopify = builder(&mock)
         .auth(Auth::expiring_token("id", "secret", stored))
@@ -422,7 +423,7 @@ async fn a_failed_renewal_ahead_of_expiry_keeps_the_token_that_still_works() {
     });
     // A token that expires in a minute: within the five minutes of leeway.
     let mut stored = TokenData::new("shpat_soon");
-    stored.expires_at = Some(chrono::Utc::now() + chrono::Duration::seconds(60));
+    stored.expires_at = Some(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(60));
     let shopify = builder(&mock)
         .auth(Auth::client_credentials("id", "secret").with_token(stored))
         .build()
@@ -480,7 +481,7 @@ async fn a_cancelled_request_does_not_lose_the_rotated_refresh_token() {
     let asked = Arc::new(Mutex::new(0));
     let saved = Saved::default();
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
     let shopify = Shopify::builder("test-shop")
         .auth(Auth::expiring_token("id", "secret", stored))
@@ -632,10 +633,7 @@ async fn a_token_that_never_expires_in_practice_is_read() {
 
     shopify.graphql("{ shop { name } }", ()).await.unwrap();
     let token = shopify.token().await.unwrap();
-    assert_eq!(
-        token.expires_at,
-        Some(chrono::DateTime::<chrono::Utc>::MAX_UTC)
-    );
+    assert_eq!(token.expires_at, Some(jiff::Timestamp::MAX));
     assert!(!token.expires_within(std::time::Duration::from_secs(365 * 86_400)));
 }
 
@@ -670,7 +668,7 @@ async fn nothing_is_sent_until_a_renewed_token_is_saved() {
         saved: Saved::default(),
     };
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
     let shopify = builder(&mock)
         .auth(Auth::expiring_token("id", "secret", stored))
@@ -711,9 +709,9 @@ async fn a_refresh_without_a_new_refresh_token_keeps_the_current_one() {
             &json!({ "data": { "shop": { "name": "x" } } }),
         ))
     });
-    let refresh_expires = chrono::Utc::now() + chrono::Duration::days(30);
+    let refresh_expires = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(720);
     let mut stored = TokenData::new("shpat_old");
-    stored.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    stored.expires_at = Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1));
     stored.refresh_token = Some("shprt_old".to_string());
     stored.refresh_token_expires_at = Some(refresh_expires);
     let shopify = builder(&mock)

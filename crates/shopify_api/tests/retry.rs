@@ -248,8 +248,8 @@ async fn the_test_client_does_not_wait_for_a_retry_after() {
 }
 
 fn http_date_in(seconds: i64) -> String {
-    (chrono::Utc::now() + chrono::Duration::seconds(seconds))
-        .format("%a, %d %b %Y %H:%M:%S GMT")
+    (jiff::Timestamp::now() + jiff::SignedDuration::from_secs(seconds))
+        .strftime("%a, %d %b %Y %H:%M:%S GMT")
         .to_string()
 }
 
