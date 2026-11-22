@@ -1,10 +1,43 @@
 # Changelog
 
-## 1.0.0 (2026-11-22)
+## 1.0.0-rc.6 (2026-11-22)
+
+The sixth release candidate: rc.5 and the changes under "Since 1.0.0-rc.5"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.6"`.
+
+## 1.0.0-rc.5 (2026-11-14)
+
+The fifth release candidate: rc.4 and the changes under "Since 1.0.0-rc.4"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.5"`.
+
+## 1.0.0-rc.4 (2026-11-08)
+
+The fourth release candidate: rc.3 and the changes under "Since 1.0.0-rc.3"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.4"`.
+
+## 1.0.0-rc.3 (2026-10-27)
+
+The third release candidate: rc.2 and the changes under "Since 1.0.0-rc.2"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.3"`.
+
+## 1.0.0-rc.2 (2026-10-27)
+
+The second release candidate: rc.1 and the changes under "Since 1.0.0-rc.1"
+below. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.2"`.
+
+## 1.0.0-rc.1 (2026-10-26)
+
+The release candidate of 1.0.0: everything under 1.0.0 below. Cargo only
+takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
+
+## 1.0.0 (Unreleased)
 
 A rewrite around operations checked at compile time. See [MIGRATION.md](MIGRATION.md).
-The same code as 1.0.0-rc.5: the changes from one release candidate to the
-next are under "Since 1.0.0-rc.N".
+
+### Since 1.0.0-rc.5
+
+- Changed: the dates are `jiff::Timestamp` instead of `chrono::DateTime<Utc>`, chrono being no longer maintained ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)): `TokenData::expires_at` and `refresh_token_expires_at`, `BulkOperation::created_at` and `completed_at`, `WebhookSubscription::created_at` and `updated_at`, `SessionToken::expires_at()` and `ExtensionSessionToken::expires_at()`. They serialize as before, an RFC 3339 string: a `TokenData` stored by an earlier release still reads. Dates are within the years -9999 to 9999: an `expires_in` past the year 9999 expires then, and a session token whose `exp` is past it is refused. MIGRATION.md shows the conversion from and to chrono.
+- Security: `url` 2.5.9 in `Cargo.lock` ([RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592), a stack overflow in `Url::origin()`).
 
 ### Since 1.0.0-rc.4
 
@@ -89,31 +122,6 @@ next are under "Since 1.0.0-rc.N".
 
 - The three crates are released together, each requiring the exact version of the others, and published at once (`cargo publish --workspace`). Each package includes the license. `cargo test` of the published `shopify_api` runs offline.
 - Security: `Cargo.lock` picks up `ctutils` 0.4.6 for RUSTSEC-2026-0385. chrono 0.4.39 or newer.
-
-## 1.0.0-rc.5 (2026-11-14)
-
-The fifth release candidate: rc.4 and the changes under "Since 1.0.0-rc.4"
-above. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.5"`.
-
-## 1.0.0-rc.4 (2026-11-08)
-
-The fourth release candidate: rc.3 and the changes under "Since 1.0.0-rc.3"
-above. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.4"`.
-
-## 1.0.0-rc.3 (2026-10-27)
-
-The third release candidate: rc.2 and the changes under "Since 1.0.0-rc.2"
-above. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.3"`.
-
-## 1.0.0-rc.2 (2026-10-27)
-
-The second release candidate: rc.1 and the changes under "Since 1.0.0-rc.1"
-above. Cargo only takes it when asked for: `shopify_api = "=1.0.0-rc.2"`.
-
-## 1.0.0-rc.1 (2026-10-26)
-
-The release candidate of 1.0.0: everything under 1.0.0 above. Cargo only
-takes it when asked for: `shopify_api = "=1.0.0-rc.1"`.
 
 ## 0.10.1
 
